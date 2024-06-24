@@ -1,0 +1,292 @@
+"""CTRNN implementation."""
+
+from functools import partial
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import jax.random as jrand
+
+from chex import PRNGKey
+from flax.linen import nowrap
+
+
+from typing import Tuple
+
+
+class FADense(nn.Dense):
+    """Dense Layer with feedback alignment."""
+    f_align: bool = True
+    kernel_init: nn.initializers.Initializer = nn.initializers.glorot_normal(in_axis=-1, out_axis=-2)
+
+    @nn.compact
+    def __call__(self, x):
+        """Custom gradient makes use of randomly initialized Feedback Matrix B."""
+        if self.f_align:
+            B = self.variable('falign', 'B',
+                              self.kernel_init,
+                              self.make_rng() if self.has_rng('params') else None,
+                              (jnp.shape(x)[-1], self.features),
+                              self.param_dtype,
+                              ).value
+        else:
+            B = self.param('kernel',
+                           self.kernel_init,
+                           (jnp.shape(x)[-1], self.features),
+                           self.param_dtype,
+                           )
+
+        def f(mdl, x, B):
+            return nn.Dense.__call__(mdl, x)
+
+        def fwd(mdl, x, B):
+            """Forward pass with tmp for backward pass."""
+            return nn.Dense.__call__(mdl, x), (x, B)
+
+        # f_bwd :: (c, CT b) -> CT a
+        def bwd(tmp, y_bar):
+            """Backward pass that may use feedback alignment."""
+            _x, _B = tmp
+            grads = {'params': {'kernel': jnp.einsum('...X,...Y->YX', y_bar, _x)}}
+            if self.use_bias:
+                grads['params']['bias'] = jnp.einsum('...X->X', y_bar)
+            # if self.f_align:
+            #     grads['params']['B'] = jnp.zeros_like(B)
+            x_grad = jnp.einsum('YX,...X->...Y', _B, y_bar)
+            return (grads, x_grad, jnp.zeros_like(_B))
+
+        fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
+
+        return fa_grad(self, x, B)
+
+
+def ctrnn_ode(params, h, x):
+    """Compute euler integration step or CTRNN ODE."""
+    W, tau = params
+    # Concatenate input and hidden state
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))], axis=-1)
+    # This way we only need one FC layer for recurrent and input connections
+    u = y @ W.T
+    act = jnp.tanh(u)
+    # Subtract decay and divide by tau
+    return (act - h) / tau
+
+
+class CTRNNCell(nn.RNNCellBase):
+    """Simple CTRNN cell."""
+    num_units: int
+    dt: float = 1.0
+
+    @nn.compact
+    def __call__(self, h, x):  # noqa
+        """Compute euler integration step or CTRNN ODE."""
+        # Define params
+        W = self.param('W', nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), (self.num_units, x.shape[-1] + self.num_units + 1))
+        tau = self.param('tau', partial(jrand.uniform, minval=1, maxval=10), (self.num_units,))
+        # Compute updates
+        df_dt = ctrnn_ode((W, tau), h, x)
+        # Euler integration step with dt
+        out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
+        return out, out
+
+    @nowrap
+    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+        """Initialize neuron states."""
+        return jnp.zeros(input_shape[:-1] + (self.num_units,))
+
+    @property
+    def num_feature_axes(self) -> int:
+        """Returns the number of feature axes of the RNN cell."""
+        return 1
+
+    @staticmethod
+    @nn.nowrap
+    def clip_tau(params):
+        """Clip the tau of the given params dict to stay above 1."""
+        return jnp.clip(params['tau'], min=1)
+
+
+def rtrl_ctrnn(cell, carry, params, x):
+    """Comput jacobian trace update for RTRL."""
+    h, jp, jx = carry
+
+    # immediate jacobian (this step)
+    df_dw, df_dh, df_dx = jax.jacrev(ctrnn_ode, argnums=[0, 1, 2])(params, h, x)
+    df_dw = {"params": {"W": df_dw[0], "tau": df_dw[1]}}  # , "b": df_dw[1]
+
+    # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
+    dh_dh = df_dh * cell.dt  # + jnp.identity(num_units)
+
+    # jacobian trace (previous step * dh_h)
+    comm = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), jp)
+
+    def rtrl_step(p, rec, dh):
+        return p + rec + dh * cell.dt
+
+    # Update dh_dw approximation
+    dh_dw = jax.tree.map(rtrl_step, jp, comm, df_dw)
+
+    # Update dh_dx approximation
+    dh_dx = df_dx + jx
+
+    return dh_dw, dh_dx
+
+
+def rflo_ctrnn(cell: CTRNNCell, carry, params, x):
+    """Compute jacobian trace for RFLO."""
+    h, jp, jx = carry
+    W, tau = params
+
+    jw = jp['params']['W']
+    jtau = jp['params']['tau']
+
+    # immediate jacobian (this step)
+    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
+    u = W @ v
+    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
+    # df_dh = jax.jacrev(jax.nn.tanh)(u)
+    df_dh = jnp.eye(u.shape[-1]) * (1-jnp.tanh(u)**2)
+
+    # Outer product the get Immediate Jacobian
+    # M_immediate = jnp.einsum('ij,k', df_dh, v)
+    M_immediate = df_dh[..., None] * v[None, None]
+
+    # Update eligibility traces
+    jw += (1 / tau)[:, None, None] * (M_immediate - jw)
+    dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
+    jtau += (1 / tau)[:, None] * dh_dtau
+
+    df_dw = {"params": {"W": jw, "tau": jtau}}
+    dh_dx = jx
+    return df_dw, dh_dx
+
+
+class OnlineCTRNNCell(CTRNNCell):
+    """Simple LSTM module."""
+    plasticity: str = 'rflo'
+
+    @nn.compact
+    def __call__(self, carry, x):  # noqa
+
+        def f(mdl, h, x):
+            h, *traces = h
+            carry, out = CTRNNCell.__call__(mdl, h, x)
+            return (carry, *traces), out
+
+        def fwd(mdl, carry, x):
+            """Forward pass with tmp for backward pass."""
+            out, _ = CTRNNCell.__call__(mdl, carry[0], x)
+
+            _p = mdl.variables['params']
+            params = (_p['W'], _p['tau'])
+
+            if self.plasticity == 'rtrl':
+                traces = rtrl_ctrnn(self, carry, params, x)
+            elif self.plasticity == 'rflo':
+                traces = rflo_ctrnn(self, carry, params, x)
+            else:
+                raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
+            return ((out, *traces), out), (out, *traces)
+
+        @jax.jit
+        def bwd(tmp, y_bar):
+            """Backward pass that may use feedback alignment."""
+            carry, jp, jx = tmp
+            df_dy = y_bar[-1]
+            grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
+            grads_x = df_dy @ jx
+            carry = jax.tree.map(jnp.zeros_like, tmp)
+            return (grads_p, carry, grads_x)
+
+        f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
+        return f_grad(self, carry, x)
+
+    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+        """Initialize the carry with jacobian traces."""
+        h = super().initialize_carry(rng, input_shape)
+        # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
+        jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
+        params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
+        jp = jax.tree.map(lambda x: jnp.zeros(h.shape + x.shape), params)
+        return h, jp, jx
+
+
+if __name__ == '__main__':
+    import numpy as np
+    import optax
+
+    import matplotlib.pyplot as plt
+
+    key = jrand.PRNGKey(0)
+    key, key_model, key_data, key_train = jrand.split(key, 4)
+    x = jnp.linspace(0, 5*np.pi, 100)[:, None]
+    y = jnp.sin(x) + 2
+
+    cell = CTRNNCell(32)
+    carry = cell.initialize_carry(jrand.PRNGKey(0), (1,))
+    params = cell.init(jrand.PRNGKey(0), carry, x[0])
+
+    def loss_mse(y_hat, _y):
+        """MSE loss function."""
+        return jax.numpy.mean((y_hat - _y)**2)
+
+    def loss_rnn(p, c, __x, __y):
+        """RNN loss."""
+        c, y_hat = cell.apply(p, c, __x)
+        return loss_mse(y_hat, __y)
+
+    jax.grad(loss_rnn)(params, carry, x[0], y[0])
+
+    model = nn.Sequential([
+        nn.RNN(cell),
+        FADense(1),
+    ])
+
+    params = model.init(key_model, x, mutable=True)
+
+    def loss_mlp(p, __x, __y):
+        """MLP loss function."""
+        y_hat = model.apply(p, __x)
+        return loss_mse(y_hat, __y)
+
+    loss_mlp(params, x, y)
+
+    def print_progress(i, loss):
+        """Callback for printing inside jit."""
+        if i % 1000 == 0:
+            print(f'Iteration {i} | Loss: {loss:.3f}')
+
+    def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-4, batch_size=64):
+        """Train network. We use Stochastic Gradient Descent with a constant learning rate."""
+        _x, _y = data
+        optimizer = optax.lion(lr)
+        opt_state = optimizer.init(_params)
+
+        def step(carry, n):
+            __params, _opt_state, _key = carry
+            _key, key_batch = jrand.split(_key)
+            # batch = jrand.choice(key_batch, jnp.hstack([_x, _y]), (batch_size,))
+            current_loss, grads = jax.value_and_grad(_loss_fn)(__params, _x, _y)
+            updates, _opt_state = optimizer.update(grads, _opt_state, __params)
+            __params = optax.apply_updates(__params, updates)
+            jax.debug.callback(print_progress, n, current_loss)
+            return (__params, _opt_state, _key), current_loss
+        (_params, *_), _losses = jax.lax.scan(step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32))
+        print(f'Final loss: {_losses[-1]:.3f}')
+        return _params, _losses
+
+    key, key_train = jrand.split(key_data)
+    params, losses = train(loss_mlp, params, (x, y), key_train)
+
+    plt.figure(figsize=(10, 5))
+
+    # Plot the training loss
+    plt.subplot(1, 2, 1)
+    plt.plot(losses)
+
+    # Plot the trained model output
+    plt.subplot(1, 2, 2)
+    y_hat = model.apply(params, x)
+    plt.plot(x, y, label='target')
+    plt.plot(x, y_hat, label='trained')
+    plt.legend()
+    plt.show()
