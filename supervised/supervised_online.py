@@ -19,9 +19,9 @@ class Model(nn.Module):
     outsize: int
     out_dist: str = None  # 'Normal'
     hidden_size: int = 32
-    num_modules: int = 4
+    num_modules: int = 1
     dt: float = 1
-    plasticity: str = 'rflo'
+    plasticity: str = 'rtrl'
     dropout_rate: float = 0
 
     @nn.nowrap
@@ -56,7 +56,7 @@ def make_model(initial_input, key, kwargs={}):
     return model, params, h0
 
 
-def train(_loss_fn, _params, data, _key, h0, num_steps=3_000, lr=1e-2):
+def train(_loss_fn, _params, data, _key, h0, num_steps=1_000, lr=1e-2):
     # We use Stochastic Gradient Descent with a constant learning rate
     _x, _y = data
     # mask = jax.tree.map(lambda x: True, _params)
@@ -82,9 +82,9 @@ def train(_loss_fn, _params, data, _key, h0, num_steps=3_000, lr=1e-2):
             __params = optax.apply_updates(__params, updates)
 
             # HACK: Clip params to ensure damping tau
-            for s in __params['params']['rnn']:
-                if 'tau' in s:
-                    __params['params']['rnn'][s]['tau'] = jnp.clip(__params['params']['rnn'][s]['tau'], min=1)
+            # for s in __params['params']['rnn']:
+            #     if 'tau' in s:
+            #         __params['params']['rnn'][s]['tau'] = jnp.clip(__params['params']['rnn'][s]['tau'], min=1)
 
             # Grad clipping for the Jacobian traces
             # h = (h[0], *jax.tree.map(lambda x: optax.clip_by_global_norm(.1).update(x, None)[0], h[1:]))

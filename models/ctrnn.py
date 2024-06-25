@@ -71,19 +71,39 @@ def ctrnn_ode(params, h, x):
     return (act - h) / tau
 
 
+def ctrnn_tg(params, h, x):
+    """Compute euler integration step or CTRNN ODE."""
+    W, W_tau = params
+    # Concatenate input and hidden state
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))], axis=-1)
+    # This way we only need one FC layer for recurrent and input connections
+    act = jnp.tanh(y @ W.T)
+    # tau = jax.nn.softplus(y @ W_tau.T) + 1
+    # tau = jax.nn.softmax(y @ W_tau.T)
+    tau = jax.nn.sigmoid(y @ W_tau.T)
+    # Subtract decay and divide by tau
+    return (act - h) * tau
+
+
 class CTRNNCell(nn.RNNCellBase):
     """Simple CTRNN cell."""
+
     num_units: int
     dt: float = 1.0
+    ode_type: str = 'murray'
 
     @nn.compact
     def __call__(self, h, x):  # noqa
         """Compute euler integration step or CTRNN ODE."""
         # Define params
         W = self.param('W', nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), (self.num_units, x.shape[-1] + self.num_units + 1))
-        tau = self.param('tau', partial(jrand.uniform, minval=1, maxval=10), (self.num_units,))
         # Compute updates
-        df_dt = ctrnn_ode((W, tau), h, x)
+        if self.ode_type == 'murray':
+            tau = self.param('tau', partial(jrand.uniform, minval=1, maxval=10), (self.num_units,))
+            df_dt = ctrnn_ode((W, tau), h, x)
+        elif self.ode_type == 'tg':
+            W_tau = self.param('W_tau', nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), (self.num_units, x.shape[-1] + self.num_units + 1))
+            df_dt = ctrnn_tg((W, W_tau), h, x)
         # Euler integration step with dt
         out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
         return out, out
@@ -98,19 +118,13 @@ class CTRNNCell(nn.RNNCellBase):
         """Returns the number of feature axes of the RNN cell."""
         return 1
 
-    @staticmethod
-    @nn.nowrap
-    def clip_tau(params):
-        """Clip the tau of the given params dict to stay above 1."""
-        return jnp.clip(params['tau'], min=1)
 
-
-def rtrl_ctrnn(cell, carry, params, x):
-    """Comput jacobian trace update for RTRL."""
+def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
+    """Compute jacobian trace update for RTRL."""
     h, jp, jx = carry
 
     # immediate jacobian (this step)
-    df_dw, df_dh, df_dx = jax.jacrev(ctrnn_ode, argnums=[0, 1, 2])(params, h, x)
+    df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
     df_dw = {"params": {"W": df_dw[0], "tau": df_dw[1]}}  # , "b": df_dw[1]
 
     # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
@@ -131,13 +145,42 @@ def rtrl_ctrnn(cell, carry, params, x):
     return dh_dw, dh_dx
 
 
-def rflo_ctrnn(cell: CTRNNCell, carry, params, x):
+def rflo_murray(cell: CTRNNCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
     W, tau = params
 
     jw = jp['params']['W']
     jtau = jp['params']['tau']
+
+    # immediate jacobian (this step)
+    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
+    u = W @ v
+    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
+    # df_dh = jax.jacrev(jax.nn.tanh)(u)
+    df_dh = jnp.eye(u.shape[-1]) * (1-jnp.tanh(u)**2)
+
+    # Outer product the get Immediate Jacobian
+    # M_immediate = jnp.einsum('ij,k', df_dh, v)
+    M_immediate = df_dh[..., None] * v[None, None]
+
+    # Update eligibility traces
+    jw += (1 / tau)[:, None, None] * (M_immediate - jw)
+    dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
+    jtau += (1 / tau)[:, None] * dh_dtau
+
+    df_dw = {"params": {"W": jw, "tau": jtau}}
+    dh_dx = jx
+    return df_dw, dh_dx
+
+
+def rflo_tg(cell: CTRNNCell, carry, params, x):
+    """Compute jacobian trace for RFLO."""
+    h, jp, jx = carry
+    W, tau = params
+
+    jw = jp['params']['W']
+    jtau = jp['params']['W_tau']
 
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
@@ -182,7 +225,7 @@ class OnlineCTRNNCell(CTRNNCell):
             if self.plasticity == 'rtrl':
                 traces = rtrl_ctrnn(self, carry, params, x)
             elif self.plasticity == 'rflo':
-                traces = rflo_ctrnn(self, carry, params, x)
+                traces = rflo_murray(self, carry, params, x)
             else:
                 raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
             return ((out, *traces), out), (out, *traces)
