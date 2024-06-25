@@ -29,6 +29,16 @@ def preprocess_img(img):
     return pix.rgb_to_grayscale(jnp.array(img/255.0, dtype=jnp.float32))
 
 
+def symlog(x):
+    """Symmetric log."""
+    return jnp.sign(x) * jnp.log(jnp.abs(x) + 1)
+
+
+def sigmoid_between(x, lower, upper):
+    """Map input to sigmoid that goes from lower to upper."""
+    return (upper-lower) * jax.nn.sigmoid(x) + lower
+
+
 def tree_norm(tree):
     """Sum of the norm of all elements in the tree."""
     return tree_reduce(lambda x, y: x + jnp.linalg.norm(y), tree, initializer=0)
@@ -49,6 +59,26 @@ def zeros_like_tree(tree, batch_size=None):
         return tree_map(lambda x: jnp.zeros((batch_size,) + x.shape), tree)
     else:
         return tree_map(lambda x: jnp.zeros_like(x), tree)
+
+
+def tree_stack(trees):
+    """Take a list of trees and stack every corresponding leaf.
+
+    For example, given two trees ((a, b), c) and ((a', b'), c'), returns
+    ((stack(a, a'), stack(b, b')), stack(c, c')).
+    Useful for turning a list of objects into something you can feed to a
+    vmapped function. Taken from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
+    """
+    leaves_list = []
+    treedef_list = []
+    for tree in trees:
+        leaves, treedef = jax.tree_flatten(tree)
+        leaves_list.append(leaves)
+        treedef_list.append(treedef)
+
+    grouped_leaves = zip(*leaves_list)
+    result_leaves = [jnp.stack(leaf) for leaf in grouped_leaves]
+    return treedef_list[0].unflatten(result_leaves)
 
 
 def checkpointing(path, fresh=False):

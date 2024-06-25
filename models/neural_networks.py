@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 
-from models.ctrnn import CTRNNCell, FADense, OnlineCTRNNCell
+from .ctrnn import CTRNNCell, FADense, OnlineCTRNNCell
 
 
 """
@@ -33,6 +33,7 @@ class MLP(nn.Module):
 
 class RBFLayer(nn.Module):
     """Gaussian Radial Basis Function Layer."""
+
     output_size: int
     c_initializer: nn.initializers.Initializer = nn.initializers.normal(1)
 
@@ -48,9 +49,10 @@ class RBFLayer(nn.Module):
 
 class Ensemble(nn.RNNCellBase):
     """Ensemble of CTRNN cells."""
-    out_size: int
-    num_modules: int
-    model = OnlineCTRNNCell
+
+    out_size: int | None = None
+    num_modules: int = 1
+    model: type[nn.Module] = OnlineCTRNNCell
     out_dist: str | None = None
     kwargs: dict = field(default_factory=dict)
 
@@ -62,9 +64,9 @@ class Ensemble(nn.RNNCellBase):
 
         Parameters
         ----------
-        h : List 
+        h : List
             of rnn submodule states
-        x : Array 
+        x : Array
             input
         training : bool, optional, by default False
             If true, returns one value per submodule in order to train them independently,
@@ -82,9 +84,8 @@ class Ensemble(nn.RNNCellBase):
             carry, out = self.model(**self.kwargs)(h[i], x)
             carry_out.append(carry)
             # Make distribution for each submodule
-            out = DistributionLayer(self.out_size, self.out_dist)(out)
             outs.append(out)
-        
+
         outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
         if not training:
             if not self.out_dist:
@@ -106,6 +107,8 @@ class Ensemble(nn.RNNCellBase):
 
 
 class DistributionLayer(nn.Module):
+    """Parameterized distribution output layer."""
+
     out_size: int
     distribution: str = 'Normal'
     eps: float = 0.01
@@ -113,6 +116,7 @@ class DistributionLayer(nn.Module):
 
     @nn.compact
     def __call__(self, x):
+        """Make the distribution from given vector."""
         if self.distribution == 'Normal':
             x = FADense(2*self.out_size, f_align=self.f_align)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
@@ -127,6 +131,7 @@ class DistributionLayer(nn.Module):
 
 class ConvEncoder(nn.Module):
     """2D-Convolutional Encoder."""
+
     c_hid: int = 8
     latent_size: int = 128
 
@@ -146,6 +151,7 @@ class ConvEncoder(nn.Module):
 
 class ConvDecoder(nn.Module):
     """2D-Convolutional Decoder."""
+
     c_out: int = 1
     c_hid: int = 32
 
@@ -166,6 +172,7 @@ class ConvDecoder(nn.Module):
 
 class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
+
     latent_size: int = 128
 
     def setup(self) -> None:
@@ -191,13 +198,14 @@ class Autoencoder(nn.Module):
 
 class Autoencoder_RNN(nn.Module):
     """Deterministic 2D-Autoencoder that also contains an RNN."""
+
     latent_size: int = 128
     num_units: int = 32
     use_cnn: bool = True
 
     @nn.compact
     def __call__(self, x, a, carry=None):
-        """Takes in an image, action and hidden state to predict next image."""
+        """Take in an image, action and hidden state to predict next image."""
         # Encode observation using CNN
         obs_size = x.shape[-1]
 

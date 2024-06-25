@@ -1,8 +1,10 @@
 """CTRNN implementation."""
 
+from dataclasses import field
 from functools import partial
 import flax.linen as nn
 import jax
+import jax.interpreters
 import jax.numpy as jnp
 import jax.random as jrand
 
@@ -12,15 +14,18 @@ from flax.linen import nowrap
 
 from typing import Tuple
 
+from jax_ctrnn.models.wirings import make_mask_initializer
+
 
 class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""
+
     f_align: bool = True
     kernel_init: nn.initializers.Initializer = nn.initializers.glorot_normal(in_axis=-1, out_axis=-2)
 
     @nn.compact
     def __call__(self, x):
-        """Custom gradient makes use of randomly initialized Feedback Matrix B."""
+        """Make use of randomly initialized Feedback Matrix B when f_align is True."""
         if self.f_align:
             B = self.variable('falign', 'B',
                               self.kernel_init,
@@ -59,6 +64,42 @@ class FADense(nn.Dense):
         return fa_grad(self, x, B)
 
 
+class FAAffine(nn.Module):
+    """Affine Layer with feedback alignment."""
+
+    features: int
+    f_align: bool = True
+    offset: int = 0
+
+    @nn.compact
+    def __call__(self, x):
+        """Make use of randomly initialized Feedback Matrix B when f_align is True."""
+        a = self.param('a', nn.initializers.normal(), (self.features,))
+        b = self.param('b', nn.initializers.zeros, (self.features,))
+
+        def s(x):
+            return x[..., self.offset:self.features+self.offset]
+
+        def f(mdl, x, a, b):
+            return a * s(x) + b
+
+        def fwd(mdl, x, a, b):
+            """Forward pass with tmp for backward pass."""
+            return a*s(x) + b, (x, a)
+
+        # f_bwd :: (c, CT b) -> CT a
+        def bwd(res, y_bar):
+            """Backward pass that may use feedback alignment."""
+            _x, _a = res
+            grads = {'params': {'a': s(_x) * y_bar, 'b': y_bar}}
+            x_bar = jnp.zeros_like(_x)
+            x_bar = x_bar.at[..., self.offset:self.features+self.offset].set(y_bar if not self.f_align else y_bar * _a)
+            return (grads, x_bar, jnp.zeros_like(a), jnp.zeros_like(b))
+
+        fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
+        return fa_grad(self, x, a, b)
+
+
 def ctrnn_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
     W, tau = params
@@ -91,12 +132,24 @@ class CTRNNCell(nn.RNNCellBase):
     num_units: int
     dt: float = 1.0
     ode_type: str = 'murray'
+    wiring: str | None = 'random'
+    wiring_kwargs: dict = field(default_factory=dict)
 
     @nn.compact
     def __call__(self, h, x):  # noqa
         """Compute euler integration step or CTRNN ODE."""
         # Define params
-        W = self.param('W', nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), (self.num_units, x.shape[-1] + self.num_units + 1))
+        w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
+        W = self.param('W', nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
+
+        if self.wiring is not None:
+            mask = self.variable('wiring', 'mask',
+                                 make_mask_initializer(self.wiring, **self.wiring_kwargs),
+                                 self.make_rng() if self.has_rng('params') else None,
+                                 w_shape,
+                                 int,
+                                 ).value
+            W = jax.lax.stop_gradient(mask) * W
         # Compute updates
         if self.ode_type == 'murray':
             tau = self.param('tau', partial(jrand.uniform, minval=1, maxval=10), (self.num_units,))
@@ -148,10 +201,10 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
 def rflo_murray(cell: CTRNNCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
-    W, tau = params
+    W, tau = params.values()
 
-    jw = jp['params']['W']
-    jtau = jp['params']['tau']
+    jw = jp['W']
+    jtau = jp['tau']
 
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
@@ -169,7 +222,7 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
     jtau += (1 / tau)[:, None] * dh_dtau
 
-    df_dw = {"params": {"W": jw, "tau": jtau}}
+    df_dw = {"W": jw, "tau": jtau}
     dh_dx = jx
     return df_dw, dh_dx
 
@@ -204,7 +257,8 @@ def rflo_tg(cell: CTRNNCell, carry, params, x):
 
 
 class OnlineCTRNNCell(CTRNNCell):
-    """Simple LSTM module."""
+    """Online CTRNN module."""
+
     plasticity: str = 'rflo'
 
     @nn.compact
@@ -220,12 +274,10 @@ class OnlineCTRNNCell(CTRNNCell):
             out, _ = CTRNNCell.__call__(mdl, carry[0], x)
 
             _p = mdl.variables['params']
-            params = (_p['W'], _p['tau'])
-
             if self.plasticity == 'rtrl':
-                traces = rtrl_ctrnn(self, carry, params, x)
+                traces = rtrl_ctrnn(self, carry, _p, x)
             elif self.plasticity == 'rflo':
-                traces = rflo_murray(self, carry, params, x)
+                traces = rflo_murray(self, carry, _p, x)
             else:
                 raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
             return ((out, *traces), out), (out, *traces)
@@ -238,7 +290,7 @@ class OnlineCTRNNCell(CTRNNCell):
             grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
             grads_x = df_dy @ jx
             carry = jax.tree.map(jnp.zeros_like, tmp)
-            return (grads_p, carry, grads_x)
+            return ({'params': grads_p}, carry, grads_x)
 
         f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
         return f_grad(self, carry, x)
@@ -249,7 +301,7 @@ class OnlineCTRNNCell(CTRNNCell):
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
         params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
-        jp = jax.tree.map(lambda x: jnp.zeros(h.shape + x.shape), params)
+        jp = jax.tree.map(lambda x: jnp.zeros(h.shape + x.shape), params['params'])
         return h, jp, jx
 
 
@@ -294,7 +346,7 @@ if __name__ == '__main__':
     loss_mlp(params, x, y)
 
     def print_progress(i, loss):
-        """Callback for printing inside jit."""
+        """Print inside jit."""
         if i % 1000 == 0:
             print(f'Iteration {i} | Loss: {loss:.3f}')
 
