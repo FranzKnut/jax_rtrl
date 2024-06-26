@@ -59,23 +59,23 @@ def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax
     else:
         weight_decay = -weight_decay
 
-    # def decay_mask(tree):
-    #     mask = jax.tree.map(lambda _: False, tree)  # Initialize all False
-
-    #     # Only set some leaves to true for RNNs
-    #     if isinstance(tree, BaseRNNCell):
-    #         mask = eqx.tree_at(lambda x: x.w,  # HERE the leaves for decay are selected
-    #                            mask, True)
-    #     # elif isinstance(tree, Linear):
-    #     #     mask = eqx.tree_at(lambda x: x.W,  # HERE the leaves for decay are selected,
-    #     #                        mask, True)
-    #     return mask
-
-    decay_type = optimizer_params.decay_type
-    if decay_type == 'cosine_warmup':
-        # Exponentially decaying learning rate, 100k transition steps since we update at each env step
+    if optimizer_params.decay_type == 'cosine_warmup':
+        """Args:
+            init_value: Initial value for the scalar to be annealed.
+            peak_value: Peak value for scalar to be annealed at end of warmup.
+            warmup_steps: Positive integer, the length of the linear warmup.
+            decay_steps: Positive integer, the total length of the schedule. Note that
+                this includes the warmup time, so the number of steps during which cosine
+                annealing is applied is ``decay_steps - warmup_steps``.
+            end_value: End value of the scalar to be annealed.
+            exponent: Float. The default decay is ``0.5 * (1 + cos(pi t/T))``,
+                where ``t`` is the current timestep and ``T`` is ``decay_steps``.
+                The exponent modifies this to be ``(0.5 * (1 + cos(pi * t/T)))
+                ** exponent``.
+                Defaults to 1.0.
+      """
         learning_rate = optax.warmup_cosine_decay_schedule(learning_rate, **optimizer_params.lr_kwargs)
-    elif decay_type == 'exponential':
+    elif optimizer_params.decay_type == 'exponential':
         """Args:
             init_value: the initial learning rate.
             transition_steps: must be positive. See the decay computation above.
@@ -90,12 +90,14 @@ def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax
         learning_rate = optax.exponential_decay(learning_rate, **optimizer_params.lr_kwargs)
 
     # Create optimizer from optax chain
-    optimizer = optax.chain(
-        # Weight decay
-        optax.add_decayed_weights(weight_decay),  # , mask=decay_mask
-        # Gradient clipping
-        optax.clip_by_global_norm(optimizer_params.gradient_clip) if optimizer_params.gradient_clip else optax.identity(),
-        # Optimizer
-        getattr(optax, optimizer_params.opt_name)(learning_rate, **optimizer_params.kwargs),
-    )
-    return optimizer
+    @optax.inject_hyperparams
+    def _make_opt(learning_rate):
+        return optax.chain(
+            # Weight decay
+            optax.add_decayed_weights(weight_decay),  # , mask=decay_mask
+            # Gradient clipping
+            optax.clip_by_global_norm(optimizer_params.gradient_clip) if optimizer_params.gradient_clip else optax.identity(),
+            # Optimizer
+            getattr(optax, optimizer_params.opt_name)(learning_rate, **optimizer_params.kwargs),
+        )
+    return _make_opt(learning_rate)
