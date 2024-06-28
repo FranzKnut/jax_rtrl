@@ -20,7 +20,9 @@ def fully_connected(output_size: int, input_size: int, **_):
 def fully_connected_no_self(output_size: int, input_size: int, **_):
     """Like fully_connected but with zeros on the diagonal."""
     mask = fully_connected(output_size, input_size)
-    return mask - jnp.concatenate([jnp.zeros((output_size, input_size)), jnp.eye(min(output_size, input_size))], axis=1)
+    assert output_size < input_size, f"output_size {output_size} unexpectedly larger than input_size {input_size}"
+    rem = input_size - output_size
+    return mask - jnp.concatenate([jnp.zeros((output_size, rem)), jnp.eye(output_size)], axis=1)
 
 
 def random(output_size: int, input_size: int, key=None, sparsity=0.5, **_):
