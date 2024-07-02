@@ -17,6 +17,7 @@ class OptimizerParams:
         lr_kwargs (dict): Additional keyword arguments for the learning rate decay.
         weight_decay (float): The weight decay for the optimizer.
         gradient_clip (float): The value to clip the gradients.
+        multi_step (int): number of steps to accumulate.
     """
 
     opt_name: str = 'sgd'
@@ -26,6 +27,7 @@ class OptimizerParams:
     lr_kwargs: dict = field(default_factory=dict, hash=False)
     weight_decay: float = 0.0
     gradient_clip: float | None = None
+    multi_step: int | None = None
 
 
 def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax.GradientTransformation:
@@ -92,7 +94,7 @@ def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax
     # Create optimizer from optax chain
     @optax.inject_hyperparams
     def _make_opt(learning_rate):
-        return optax.chain(
+        optimizer = optax.chain(
             # Weight decay
             optax.add_decayed_weights(weight_decay),  # , mask=decay_mask
             # Gradient clipping
@@ -100,4 +102,8 @@ def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax
             # Optimizer
             getattr(optax, optimizer_params.opt_name)(learning_rate, **optimizer_params.kwargs),
         )
+        if optimizer_params.multi_step:
+            optimizer = optax.MultiSteps(optimizer, every_k_schedule=optimizer_params.multi_step)
+        return optimizer
+
     return _make_opt(learning_rate)

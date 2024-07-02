@@ -198,6 +198,10 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     return dh_dw, dh_dx
 
 
+def hebbian(pre, post):
+    return jnp.outer(post, pre)
+
+
 def rflo_murray(cell: CTRNNCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
@@ -211,20 +215,24 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     u = W @ v
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
-    df_dh = jnp.eye(u.shape[-1]) * (1-jnp.tanh(u)**2)
+    df_dh = (1-jnp.tanh(u)**2)
+    # post = jnp.tanh(u)
+
+    # hebb = hebbian(v, post)
 
     # Outer product the get Immediate Jacobian
     # M_immediate = jnp.einsum('ij,k', df_dh, v)
-    M_immediate = df_dh[..., None] * v[None, None]
+    M_immediate = df_dh[..., None] * v[None]
 
     # Update eligibility traces
-    jw += (1 / tau)[:, None, None] * (M_immediate - jw)
-    dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
-    jtau += (1 / tau)[:, None] * dh_dtau
+    jw += (1 / tau)[:, None] * (M_immediate - jw)
+    dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) - jtau
+    jtau += (1 / tau) * dh_dtau
 
     df_dw = {"W": jw, "tau": jtau}
     dh_dx = jx
-    return df_dw, dh_dx
+    # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
+    return df_dw, dh_dx  # , hebb
 
 
 def rflo_tg(cell: CTRNNCell, carry, params, x):
@@ -285,11 +293,16 @@ class OnlineCTRNNCell(CTRNNCell):
         @jax.jit
         def bwd(tmp, y_bar):
             """Backward pass that may use feedback alignment."""
+            # carry, jp, jx, hebb = tmp
             carry, jp, jx = tmp
             df_dy = y_bar[-1]
-            grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
+            if self.plasticity == 'rflo':
+                grads_p = jax.tree.map(lambda t: (df_dy * t.T).T, jp)
+            else:
+                grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
+            # grads_p['W'] += hebb
             grads_x = df_dy @ jx
-            carry = jax.tree.map(jnp.zeros_like, tmp)
+            carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
             return ({'params': grads_p}, carry, grads_x)
 
         f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
@@ -301,7 +314,8 @@ class OnlineCTRNNCell(CTRNNCell):
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
         params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
-        jp = jax.tree.map(lambda x: jnp.zeros(h.shape + x.shape), params['params'])
+        leading_shape = h.shape[:-1] if self.plasticity == 'rflo' else h.shape
+        jp = jax.tree.map(lambda x: jnp.zeros(leading_shape + x.shape), params['params'])
         return h, jp, jx
 
 

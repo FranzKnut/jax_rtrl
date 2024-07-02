@@ -295,7 +295,7 @@ class Hebbian(Plasticity):
         """Update the traces"""
         pre = ctx['pre'][:, -1]
         post = ctx['h_new'][0, -1]
-        dw = jnp.outer(post, pre) * dout[:, None]
+        dw = jnp.outer(post, pre)
         return {'dw': dw}, {}
 
 
