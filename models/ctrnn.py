@@ -152,10 +152,10 @@ class CTRNNCell(nn.RNNCellBase):
             W = jax.lax.stop_gradient(mask) * W
         # Compute updates
         if self.ode_type == 'murray':
-            tau = self.param('tau', partial(jrand.uniform, minval=1, maxval=10), (self.num_units,))
+            tau = self.param('tau', partial(jrand.uniform, minval=2, maxval=8), (self.num_units,))
             df_dt = ctrnn_ode((W, tau), h, x)
         elif self.ode_type == 'tg':
-            W_tau = self.param('W_tau', nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), (self.num_units, x.shape[-1] + self.num_units + 1))
+            W_tau = self.param('W_tau', nn.initializers.he_normal(in_axis=-1, out_axis=-2), (self.num_units, x.shape[-1] + self.num_units + 1))
             df_dt = ctrnn_tg((W, W_tau), h, x)
         # Euler integration step with dt
         out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
@@ -212,7 +212,7 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
 
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
-    u = W @ v
+    u = v @ W.T
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
     df_dh = (1-jnp.tanh(u)**2)
@@ -226,8 +226,8 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
 
     # Update eligibility traces
     jw += (1 / tau)[:, None] * (M_immediate - jw)
-    dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) - jtau
-    jtau += (1 / tau) * dh_dtau
+    dh_dtau = ((h - jnp.tanh(u)) / tau) - jtau
+    jtau += dh_dtau / tau
 
     df_dw = {"W": jw, "tau": jtau}
     dh_dx = jx
@@ -235,33 +235,33 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     return df_dw, dh_dx  # , hebb
 
 
-def rflo_tg(cell: CTRNNCell, carry, params, x):
-    """Compute jacobian trace for RFLO."""
-    h, jp, jx = carry
-    W, tau = params
+# def rflo_tg(cell: CTRNNCell, carry, params, x):
+#     """Compute jacobian trace for RFLO."""
+#     h, jp, jx = carry
+#     W, tau = params
 
-    jw = jp['params']['W']
-    jtau = jp['params']['W_tau']
+#     jw = jp['params']['W']
+#     jtau = jp['params']['W_tau']
 
-    # immediate jacobian (this step)
-    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
-    u = W @ v
-    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
-    # df_dh = jax.jacrev(jax.nn.tanh)(u)
-    df_dh = jnp.eye(u.shape[-1]) * (1-jnp.tanh(u)**2)
+#     # immediate jacobian (this step)
+#     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
+#     u = W @ v
+#     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
+#     # df_dh = jax.jacrev(jax.nn.tanh)(u)
+#     df_dh = jnp.eye(u.shape[-1]) * (1-jnp.tanh(u)**2)
 
-    # Outer product the get Immediate Jacobian
-    # M_immediate = jnp.einsum('ij,k', df_dh, v)
-    M_immediate = df_dh[..., None] * v[None, None]
+#     # Outer product the get Immediate Jacobian
+#     # M_immediate = jnp.einsum('ij,k', df_dh, v)
+#     M_immediate = df_dh[..., None] * v[None, None]
 
-    # Update eligibility traces
-    jw += (1 / tau)[:, None, None] * (M_immediate - jw)
-    dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
-    jtau += (1 / tau)[:, None] * dh_dtau
+#     # Update eligibility traces
+#     jw += (1 / tau)[:, None, None] * (M_immediate - jw)
+#     dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
+#     jtau += (1 / tau)[:, None] * dh_dtau
 
-    df_dw = {"params": {"W": jw, "tau": jtau}}
-    dh_dx = jx
-    return df_dw, dh_dx
+#     df_dw = {"params": {"W": jw, "tau": jtau}}
+#     dh_dx = jx
+#     return df_dw, dh_dx
 
 
 class OnlineCTRNNCell(CTRNNCell):

@@ -33,9 +33,9 @@ def sigmoid_between(x, lower, upper):
     return (upper-lower) * jax.nn.sigmoid(x) + lower
 
 
-def tree_norm(tree):
+def tree_norm(tree, **kwargs):
     """Sum of the norm of all elements in the tree."""
-    return tree_reduce(lambda x, y: x + jnp.linalg.norm(y), tree, initializer=0)
+    return tree_reduce(lambda x, y: x + jnp.linalg.norm(y, **kwargs), tree, initializer=0)
 
 
 def leaf_norms(tree):
