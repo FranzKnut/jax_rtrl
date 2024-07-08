@@ -211,7 +211,7 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     jtau = jp['tau']
 
     # immediate jacobian (this step)
-    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
+    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))], axis=-1)
     u = v @ W.T
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
@@ -297,11 +297,14 @@ class OnlineCTRNNCell(CTRNNCell):
             carry, jp, jx = tmp
             df_dy = y_bar[-1]
             if self.plasticity == 'rflo':
-                grads_p = jax.tree.map(lambda t: (df_dy * t.T).T, jp)
+                grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
             else:
                 grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
+            if len(df_dy.shape) > 1:
+                # has batch dim
+                grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
             # grads_p['W'] += hebb
-            grads_x = df_dy @ jx
+            grads_x = jnp.einsum('...h,...hi->...i', df_dy, jx)
             carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
             return ({'params': grads_p}, carry, grads_x)
 
