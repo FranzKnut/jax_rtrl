@@ -1,4 +1,6 @@
 """Utilies for wandb."""
+
+import collections
 import contextlib
 from dataclasses import asdict
 import os
@@ -12,7 +14,7 @@ from dacite import from_dict
 import plotly.express as px
 import flax.linen as nn
 import jax.tree_util as jtu
-from models.jax_util import leaf_norms, tree_norm, tree_stack, update_nested_dict
+from jax_ctrnn.models.jax_util import leaf_norms, tree_norm, tree_stack
 
 
 class ExceptionPrinter(contextlib.AbstractContextManager):
@@ -35,10 +37,8 @@ def wandb_wrapper(project_name, func, hparams, params_type):
     logger = WandbLogger()
 
     with wandb.init(
-            project=project_name,
-            config=hparams,
-            mode="disabled" if hparams.debug else "online",
-            dir="logs/"), ExceptionPrinter():
+        project=project_name, config=hparams, mode="disabled" if hparams.debug else "online", dir="logs/"
+    ), ExceptionPrinter():
         # If called by wandb.agent,
         # this config will be set by Sweep Controller
         hparams = from_dict(params_type, update_nested_dict(asdict(hparams), wandb.config))
@@ -116,6 +116,28 @@ class DummyLogger(dict, object):
         pass
 
 
+def update_nested_dict(d, u):
+    """Update nested dict d with values from nested dict u.
+
+    Parameters
+    ----------
+    d : dict
+        Base dict
+    u : dict
+        Updates
+    Returns
+    -------
+    dict
+        d with values overwritten by u
+    """
+    for k, v in u.items():
+        if isinstance(v, collections.abc.Mapping):
+            d[k] = update_nested_dict(d.get(k, {}), v)
+        else:
+            d[k] = v
+    return d
+
+
 class AimLogger(DummyLogger):
     """Wandb-like interface for aim."""
 
@@ -128,6 +150,7 @@ class AimLogger(DummyLogger):
         """Create aim run."""
         global aim
         import aim
+
         self.run = aim.Run(experiment=name, repo=repo, log_system_params=True)
         if not isinstance(hparams, dict):
             hparams = asdict(hparams)
@@ -149,7 +172,7 @@ class AimLogger(DummyLogger):
         params_dict : dict
             Dict of hyperparameters.
         """
-        self.run['hparams'] = params_dict
+        self.run["hparams"] = params_dict
 
     def __setitem__(self, key, value):
         """Log scalar for aim."""
@@ -167,12 +190,13 @@ class AimLogger(DummyLogger):
         """Make lineplots for param norms and block until all metrics are logged."""
         if all_param_norms:
             all_param_norms = tree_stack(all_param_norms)
-            self.log({
-                f'Params/{k}': aim.Figure(px.line(x=x_vals,
-                                                  y=list(v.values()),
-                                                  title=k,
-                                                  labels=list(v.keys())))
-                for k, v in all_param_norms.items() if v})
+            self.log(
+                {
+                    f"Params/{k}": aim.Figure(px.line(x=x_vals, y=list(v.values()), title=k, labels=list(v.keys())))
+                    for k, v in all_param_norms.items()
+                    if v
+                }
+            )
 
         self.run.report_successful_finish(block=True)
 
@@ -187,11 +211,11 @@ class AimLogger(DummyLogger):
     @override
     def log_video(self, name, frames, step=None, fps=30, caption=""):
         """Log a video to wandb."""
-        filename = os.path.join('logs/gifs', self.run.hash + ".gif")
+        filename = os.path.join("logs/gifs", self.run.hash + ".gif")
         images = [Image.fromarray(frames[i].transpose(1, 2, 0)) for i in range(len(frames))]
-        os.makedirs('logs/gifs', exist_ok=True)
+        os.makedirs("logs/gifs", exist_ok=True)
         images[0].save(filename, save_all=True, append_images=images[1:], duration=int(1000 / fps), loop=0)
-        self.log({name: aim.Image(filename, caption=caption, format='gif')}, step=step)
+        self.log({name: aim.Image(filename, caption=caption, format="gif")}, step=step)
 
 
 class WandbLogger(DummyLogger):
@@ -215,12 +239,17 @@ class WandbLogger(DummyLogger):
         """Make lineplots for all items in all_param_norms."""
         if all_param_norms:
             all_param_norms = tree_stack(all_param_norms)
-            wandb.log({
-                f'Params/{k}': wandb.plot.line_series(xs=x_vals,
-                                                      ys=v.values(),
-                                                      title=k,
-                                                      keys=list(v.keys()),)
-                for k, v in all_param_norms.items()})
+            wandb.log(
+                {
+                    f"Params/{k}": wandb.plot.line_series(
+                        xs=x_vals,
+                        ys=v.values(),
+                        title=k,
+                        keys=list(v.keys()),
+                    )
+                    for k, v in all_param_norms.items()
+                }
+            )
 
     @override
     def save_model(self, model, filename="model.ckpt"):
@@ -233,16 +262,25 @@ class WandbLogger(DummyLogger):
         wandb.log({name: wandb.Video(frames, fps=fps, caption=caption)}, step=step)
 
 
-def with_logger(func: Callable, hparams: dict, logger_name: str,
-                project_name: str, aim_repo: str = None, run_name="", hparams_type=None):
+def with_logger(
+    func: Callable,
+    hparams: dict,
+    logger_name: str,
+    project_name: str,
+    aim_repo: str = None,
+    run_name="",
+    hparams_type=None,
+):
     """Wrap training function with logger."""
     if logger_name == "wandb":
+
         def pick_fun_and_run(_hparams, logger):
             return func(_hparams, logger=logger)
+
         return wandb_wrapper(project_name, pick_fun_and_run, hparams, params_type=hparams_type)
     elif logger_name == "aim":
         logger = AimLogger(project_name, repo=aim_repo, hparams=hparams, run_name=run_name)
-        return func(hparams, logger=logger)
+        return func(hparams, logger=logger)  # TODO: Consider try catch to avoid broken aim repositories
     else:
         return func(hparams)
 
