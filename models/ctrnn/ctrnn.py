@@ -14,7 +14,7 @@ from flax.linen import nowrap
 
 from typing import Tuple
 
-from jax_ctrnn.models.wirings import make_mask_initializer
+from jax_rtrl.models.wirings import make_mask_initializer
 
 
 def ctrnn_ode(params, h, x):

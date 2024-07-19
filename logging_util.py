@@ -14,7 +14,7 @@ from dacite import from_dict
 import plotly.express as px
 import flax.linen as nn
 import jax.tree_util as jtu
-from jax_ctrnn.models.jax_util import leaf_norms, tree_norm, tree_stack
+from jax_rtrl.models.jax_util import leaf_norms, tree_norm, tree_stack
 
 
 class ExceptionPrinter(contextlib.AbstractContextManager):

@@ -5,7 +5,7 @@ import flax
 from typing import Any, Tuple
 from functools import partial
 
-from jax_ctrnn.models.lru.params_init import gamma_log_init, matrix_init, nu_log_init, theta_log_init
+from jax_rtrl.models.lru.params_init import gamma_log_init, matrix_init, nu_log_init, theta_log_init
 
 PRNGKey = Any
 Shape = Tuple[int, ...]
