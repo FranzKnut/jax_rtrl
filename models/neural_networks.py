@@ -1,4 +1,5 @@
 """Neural networks using the flax package."""
+
 from dataclasses import field
 from typing import Tuple
 from chex import PRNGKey
@@ -26,18 +27,21 @@ class FADense(nn.Dense):
     def __call__(self, x):
         """Make use of randomly initialized Feedback Matrix B when f_align is True."""
         if self.f_align:
-            B = self.variable('falign', 'B',
-                              self.kernel_init,
-                              self.make_rng() if self.has_rng('params') else None,
-                              (jnp.shape(x)[-1], self.features),
-                              self.param_dtype,
-                              ).value
+            B = self.variable(
+                "falign",
+                "B",
+                self.kernel_init,
+                self.make_rng() if self.has_rng("params") else None,
+                (jnp.shape(x)[-1], self.features),
+                self.param_dtype,
+            ).value
         else:
-            B = self.param('kernel',
-                           self.kernel_init,
-                           (jnp.shape(x)[-1], self.features),
-                           self.param_dtype,
-                           )
+            B = self.param(
+                "kernel",
+                self.kernel_init,
+                (jnp.shape(x)[-1], self.features),
+                self.param_dtype,
+            )
 
         def f(mdl, x, B):
             return nn.Dense.__call__(mdl, x)
@@ -50,12 +54,12 @@ class FADense(nn.Dense):
         def bwd(tmp, y_bar):
             """Backward pass that may use feedback alignment."""
             _x, _B = tmp
-            grads = {'params': {'kernel': jnp.einsum('...X,...Y->YX', y_bar, _x)}}
+            grads = {"params": {"kernel": jnp.einsum("...X,...Y->YX", y_bar, _x)}}
             if self.use_bias:
-                grads['params']['bias'] = jnp.einsum('...X->X', y_bar)
+                grads["params"]["bias"] = jnp.einsum("...X->X", y_bar)
             # if self.f_align:
             #     grads['params']['B'] = jnp.zeros_like(B)
-            x_grad = jnp.einsum('YX,...X->...Y', _B, y_bar)
+            x_grad = jnp.einsum("YX,...X->...Y", _B, y_bar)
             return (grads, x_grad, jnp.zeros_like(_B))
 
         fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
@@ -87,10 +91,10 @@ class RBFLayer(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Compute the distance to centers."""
-        c = self.param('centers', self.c_initializer, (self.output_size, x.shape[-1]))
-        beta = self.param('beta', nn.initializers.ones_init(), (self.output_size, 1))
-        x = x.reshape(x.shape[:-1]+(1, x.shape[-1]))
-        z = jnp.exp(-beta * (x - c)**2)
+        c = self.param("centers", self.c_initializer, (self.output_size, x.shape[-1]))
+        beta = self.param("beta", nn.initializers.ones_init(), (self.output_size, 1))
+        x = x.reshape(x.shape[:-1] + (1, x.shape[-1]))
+        z = jnp.exp(-beta * (x - c) ** 2)
         return jnp.sum(z, axis=-1)
 
 
@@ -157,18 +161,18 @@ class DistributionLayer(nn.Module):
     """Parameterized distribution output layer."""
 
     out_size: int
-    distribution: str = 'Normal'
+    distribution: str = "Normal"
     eps: float = 0.01
     f_align: bool = False
 
     @nn.compact
     def __call__(self, x):
         """Make the distribution from given vector."""
-        if self.distribution == 'Normal':
-            x = FADense(2*self.out_size, f_align=self.f_align)(x)
+        if self.distribution == "Normal":
+            x = FADense(2 * self.out_size, f_align=self.f_align)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
-            return distrax.Normal(loc, jax.nn.softplus(scale)+self.eps)
-        elif self.distribution == 'Categorical':
+            return distrax.Normal(loc, jax.nn.softplus(scale) + self.eps)
+        elif self.distribution == "Categorical":
             x = FADense(self.out_size, f_align=self.f_align)(x)
             return distrax.Categorical(logits=x)
         else:
@@ -188,9 +192,9 @@ class ConvEncoder(nn.Module):
         # Encode observation using CNN
         x = nn.Conv(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
-        x = nn.Conv(features=2*self.c_hid, kernel_size=(3, 3), strides=2)(x)
+        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
-        x = nn.Conv(features=4*self.c_hid, kernel_size=(3, 3), strides=2)(x)
+        x = nn.Conv(features=4 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
         x = x.flatten()  # Image grid to single feature vector
         return nn.Dense(features=self.latent_size)(x)
@@ -205,12 +209,12 @@ class ConvDecoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Decode Image from latent vector."""
-        x = nn.Dense(features=12*12*self.c_hid)(x)
+        x = nn.Dense(features=12 * 12 * self.c_hid)(x)
         x = nn.relu(x)
         x = x.reshape(12, 12, -1)
-        x = nn.ConvTranspose(features=self.c_hid//2, kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(features=self.c_hid // 2, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.c_hid//4, kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(features=self.c_hid // 4, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
         x = nn.ConvTranspose(features=self.c_out, kernel_size=(3, 3), strides=2)(x)
         x = nn.sigmoid(x)
@@ -230,11 +234,11 @@ class Autoencoder(nn.Module):
 
     def encode(self, params, x, *_):
         """Encode given Image."""
-        return self.bind(params).enc.apply({'params': params['params']['enc']}, x)
+        return self.bind(params).enc.apply({"params": params["params"]["enc"]}, x)
 
     def decode(self, params, x):
         """Decode Image from latent vector."""
-        return self.bind(params).dec.apply({'params': params['params']['dec']}, x)
+        return self.bind(params).dec.apply({"params": params["params"]["dec"]}, x)
 
     def __call__(self, x, *_):
         """Encode then decode. Returns prediction and latent vector."""
@@ -293,11 +297,11 @@ def bptt_loss(params, model: Autoencoder_RNN, trajectories, initial_hidden):
     trajectories = jax.jax.tree.map(lambda x: x.swapaxes(1, 0), trajectories)
 
     def predict_loop(hidden, batch):
-        hidden, pred, _ = model.apply(params, batch.experience['obs'], batch.experience['act'], hidden)
+        hidden, pred, _ = model.apply(params, batch.experience["obs"], batch.experience["act"], hidden)
         return hidden, pred
 
     _, predictions = jax.lax.scan(jax.vmap(predict_loop), initial_hidden, trajectories)
-    loss = ((predictions[1:-1] - trajectories.experience['obs'][2:]) ** 2).sum()
+    loss = ((predictions[1:-1] - trajectories.experience["obs"][2:]) ** 2).sum()
     return loss
 
 
@@ -334,26 +338,28 @@ class FAAffine(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Make use of randomly initialized Feedback Matrix B when f_align is True."""
-        a = self.param('a', nn.initializers.normal(), (self.features,))
-        b = self.param('b', nn.initializers.zeros, (self.features,))
+        a = self.param("a", nn.initializers.normal(), (self.features,))
+        b = self.param("b", nn.initializers.zeros, (self.features,))
 
         def s(x):
-            return x[..., self.offset:self.features+self.offset]
+            return x[..., self.offset : self.features + self.offset]
 
         def f(mdl, x, a, b):
             return a * s(x) + b
 
         def fwd(mdl, x, a, b):
             """Forward pass with tmp for backward pass."""
-            return a*s(x) + b, (x, a)
+            return a * s(x) + b, (x, a)
 
         # f_bwd :: (c, CT b) -> CT a
         def bwd(res, y_bar):
             """Backward pass that may use feedback alignment."""
             _x, _a = res
-            grads = {'params': {'a': s(_x) * y_bar, 'b': y_bar}}
+            grads = {"params": {"a": s(_x) * y_bar, "b": y_bar}}
             x_bar = jnp.zeros_like(_x)
-            x_bar = x_bar.at[..., self.offset:self.features+self.offset].set(y_bar if not self.f_align else y_bar * _a)
+            x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(
+                y_bar if not self.f_align else y_bar * _a
+            )
             return (grads, x_bar, jnp.zeros_like(a), jnp.zeros_like(b))
 
         fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)

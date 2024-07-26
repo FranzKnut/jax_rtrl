@@ -1,4 +1,5 @@
 """Plasticity Rules for online learning."""
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -22,19 +23,18 @@ class Plasticity:
         @param traces:
         @return: traces so calls can be chained
         """
-        batched_units = (batch_size, self.cell.units) if batch_size else (
-            self.cell.units,)
+        batched_units = (batch_size, self.cell.units) if batch_size else (self.cell.units,)
         # batched_out = (batch_size, self.cell.out_size) if batch_size else (
         #     self.cell.out_size,)
         # P = dh/dw
-        traces['P'] = tree_map(lambda x: jnp.zeros(batched_units + x.shape), eqx.filter(self.cell, eqx.is_array))
+        traces["P"] = tree_map(lambda x: jnp.zeros(batched_units + x.shape), eqx.filter(self.cell, eqx.is_array))
         # if self.cell.output_mapping:
         #     # P_out = (dy/dw_out, dy/db_out)
         #     traces['P_out'] = (jnp.zeros(batched_out + self.cell.w_out.shape),
         #                        jnp.zeros(batched_out + self.cell.b_out.shape))
         if self.cell.with_dh_h:
             # Q = dh/dh
-            traces['Q'] = jnp.zeros(batched_units + (self.cell.input_size + self.cell.units,))
+            traces["Q"] = jnp.zeros(batched_units + (self.cell.input_size + self.cell.units,))
         return traces
 
     @staticmethod
@@ -53,13 +53,18 @@ class Plasticity:
 
         Applies the output mapping to the loss gradient.
         """
-        if cell.output_mapping == 'linear':
+        if cell.output_mapping == "linear":
             # dy/dh = W^T
             dloss_dh = jnp.einsum("ij,...j->...i", cell.w_out.T, dout)
         else:
             # dy/dh = W
-            dloss_dh = jnp.concatenate([jnp.zeros(dout.shape[:-1] + (cell.units - cell.out_size,)),
-                                        dout * (cell.w_out if cell.output_mapping == 'affine' else 1)], axis=-1)
+            dloss_dh = jnp.concatenate(
+                [
+                    jnp.zeros(dout.shape[:-1] + (cell.units - cell.out_size,)),
+                    dout * (cell.w_out if cell.output_mapping == "affine" else 1),
+                ],
+                axis=-1,
+            )
         return dloss_dh
 
     def update(self, cell, traces, dout, with_dy_dx=False):
@@ -69,10 +74,10 @@ class Plasticity:
         @param dout:
         @return: Dictionary where key is the name of the weight and value is the update
         """
-        gradients = tree_map(lambda t: jnp.einsum('H,H...->...', dout, t), traces['P'])
+        gradients = tree_map(lambda t: jnp.einsum("H,H...->...", dout, t), traces["P"])
 
         if with_dy_dx:
-            dy_dx = jnp.einsum('H,H...->...', dout, traces['Q'])[..., :cell.input_size]
+            dy_dx = jnp.einsum("H,H...->...", dout, traces["Q"])[..., : cell.input_size]
             return gradients, dy_dx
 
         # if cell.output_mapping:
@@ -108,22 +113,20 @@ class LocalMSE(Plasticity):
             _type_: _description_
         """
         del traces
-        pre = ctx['pre']
-        post = ctx['post']
+        pre = ctx["pre"]
+        post = ctx["post"]
         out = {}
         if cell.output_mapping:
             jac_out = jax.jacrev(cell.map_output, argnums=0)(cell, post)
-            out['P_out'] = (jac_out.w_out, jac_out.b_out)
+            out["P_out"] = (jac_out.w_out, jac_out.b_out)
 
         if cell.with_dh_h:
-            jac_cell, jac_pre = jax.jacrev(
-                cell.f, argnums=[0, 2], has_aux=True)(cell, [0], pre)[0]
-            out['Q'] = jac_pre[-cell.units:, -cell.units:]
+            jac_cell, jac_pre = jax.jacrev(cell.f, argnums=[0, 2], has_aux=True)(cell, [0], pre)[0]
+            out["Q"] = jac_pre[-cell.units :, -cell.units :]
         else:
-            jac_cell = jax.jacrev(
-                cell.f, argnums=0, has_aux=True)(cell, [0], pre)[0]
-        p = tree_map(lambda x: x[-cell.units:], jac_cell)
-        out['P'] = p
+            jac_cell = jax.jacrev(cell.f, argnums=0, has_aux=True)(cell, [0], pre)[0]
+        p = tree_map(lambda x: x[-cell.units :], jac_cell)
+        out["P"] = p
         return out
 
 
@@ -150,25 +153,24 @@ class RTRL(Plasticity):
         Returns:
             _type_: _description_
         """
-        P = traces['P']
+        P = traces["P"]
         # Q = traces['Q']
-        pre = ctx['pre']
+        pre = ctx["pre"]
         # post = ctx['post']
 
         def rtrl_step(p, rec, dh):
-            return p + (rec + dh[-cell.units:]) * cell.dt
+            return p + (rec + dh[-cell.units :]) * cell.dt
 
         # immediate jacobian (this step)
         df_dw, df_dh = jax.jacrev(cell.f, argnums=[0, 2], has_aux=True)(cell, [0], pre)[0]
 
         # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
         identitiy = jnp.concatenate([jnp.zeros((cell.units, cell.input_size)), jnp.identity(cell.units)], axis=-1)
-        dh_dh = identitiy + df_dh[-cell.units:]
+        dh_dh = identitiy + df_dh[-cell.units :]
         # / cell.dt
 
         # jacobian trace (previous step * dh_h)
-        comm = jax.tree_map(lambda p: jnp.tensordot(
-            df_dh[..., -cell.units:, -cell.units:], p, axes=1), P)
+        comm = jax.tree_map(lambda p: jnp.tensordot(df_dh[..., -cell.units :, -cell.units :], p, axes=1), P)
 
         # Update dh_dw approximation
         dh_dw = jax.tree_map(rtrl_step, P, comm, df_dw)
@@ -179,7 +181,7 @@ class RTRL(Plasticity):
         #     return {'P': dh_dw,
         #             'P_out': dy_dout,
         #             'Q': dh_dh}
-        return {'P': dh_dw, 'Q': dh_dh}
+        return {"P": dh_dw, "Q": dh_dh}
 
     # y = W_out x
     # dL/dx = B (y-yhat)
@@ -201,30 +203,30 @@ class RFLO(Plasticity):
         if "u" not in ctx:
             raise Exception("RFLO ist not implemented for this cell type.")
 
-        P = traces['P'].w
-        S = traces['P'].tau
-        pre = ctx['pre']
-        post = ctx['post']
-        u = ctx['u']
+        P = traces["P"].w
+        S = traces["P"].tau
+        pre = ctx["pre"]
+        post = ctx["post"]
+        u = ctx["u"]
 
         # derivative of activation phi'
         df_dh = jax.jacrev(cell.activation)(u)
 
         # Outer product the get Immediate Jacobian
-        M_immediate = jnp.einsum('ij,k', df_dh, jnp.concatenate([pre, jnp.ones(1)]))  # Add one for bias
+        M_immediate = jnp.einsum("ij,k", df_dh, jnp.concatenate([pre, jnp.ones(1)]))  # Add one for bias
 
         # Update eligibility traces
-        P = P + jnp.einsum('i,ijk->ijk', 1 / cell.tau, M_immediate - P)
-        dh_dtau = ((pre[-cell.units:] - post) / cell.tau) * jnp.eye(cell.units) - S
-        S = S + jnp.einsum('i,ik->ik', 1 / cell.tau, dh_dtau)
+        P = P + jnp.einsum("i,ijk->ijk", 1 / cell.tau, M_immediate - P)
+        dh_dtau = ((pre[-cell.units :] - post) / cell.tau) * jnp.eye(cell.units) - S
+        S = S + jnp.einsum("i,ik->ik", 1 / cell.tau, dh_dtau)
 
-        out = eqx.tree_at(lambda t: (t.w, t.tau), traces['P'], (P, S))
+        out = eqx.tree_at(lambda t: (t.w, t.tau), traces["P"], (P, S))
         # if cell.output_mapping:
         #     jac_out = jax.jacrev(cell.map_output, argnums=0)(cell, post)
         #     p_out = (jac_out.w_out, jac_out.b_out)
         #     return {'P': out,
         #             'P_out': p_out}
-        return {'P': out}
+        return {"P": out}
 
 
 class UORO(Plasticity):
@@ -233,10 +235,10 @@ class UORO(Plasticity):
     @staticmethod
     def call(cell, traces, ctx):
         """Update the traces of UORO."""
-        pre = ctx['h'][0]
-        act = ctx['act']
-        traces['T'] += - jnp.multiply(cell.tau, traces['T'].T).T + act[None, :]
-        traces['S'] += - cell.tau * traces['S'] - pre
+        pre = ctx["h"][0]
+        act = ctx["act"]
+        traces["T"] += -jnp.multiply(cell.tau, traces["T"].T).T + act[None, :]
+        traces["S"] += -cell.tau * traces["S"] - pre
         return traces
 
 
@@ -258,22 +260,22 @@ class Infomax(Plasticity):
         @param ctx:
         @return:
         """
-        if self.type == 'ax+b':
-            if self.activation == 'sigm':
+        if self.type == "ax+b":
+            if self.activation == "sigm":
                 da = x * (1 - 2 * y) + 1 / (self.a + 1e-8)
                 db = 1 - 2 * y
 
             else:
-                da = - 2 * x * y + 1 / (self.a + 1e-8)
+                da = -2 * x * y + 1 / (self.a + 1e-8)
                 db = -2 * y
         else:
-            if self.activation == 'sigm':
-                da = (- 1 / self.a + (x - self.b) * (2 * y - 1) / self.a ** 2)
+            if self.activation == "sigm":
+                da = -1 / self.a + (x - self.b) * (2 * y - 1) / self.a**2
                 db = (2 * y - 1) / self.a
 
             else:
-                da = (- 1 / self.a + 2 * (x - self.b) * y / self.a ** 2)
-                db = (2 * y / self.a)  # 4*eta*np.mean(new_x*new_y**2)
+                da = -1 / self.a + 2 * (x - self.b) * y / self.a**2
+                db = 2 * y / self.a  # 4*eta*np.mean(new_x*new_y**2)
         return traces
 
     def update(self, traces, dout):
@@ -293,39 +295,38 @@ class Hebbian(Plasticity):
 
     def call(self, traces, ctx):
         """Update the traces"""
-        pre = ctx['pre'][:, -1]
-        post = ctx['h_new'][0, -1]
+        pre = ctx["pre"][:, -1]
+        post = ctx["h_new"][0, -1]
         dw = jnp.outer(post, pre)
-        return {'dw': dw}, {}
+        return {"dw": dw}, {}
 
 
 class Oja(Plasticity):
     def call(self, traces, ctx):
-        pre = ctx['pre'][:, -1]
-        post = ctx['h_new'][0, -1]
-        dw = post.T * pre - (post ** 2).T * \
-            self.cell.params['w']  # * old_trace
-        return {'dw': dw}, {}
+        pre = ctx["pre"][:, -1]
+        post = ctx["h_new"][0, -1]
+        dw = post.T * pre - (post**2).T * self.cell.params["w"]  # * old_trace
+        return {"dw": dw}, {}
 
 
 class BCM(Plasticity):
-
     def __init__(self, cell, eta=0.7):
         super().__init__(cell)
         self.eta = eta
 
     def build(self, traces, batch_size=1):
         # theta = <y^2>
-        traces['theta'] = jnp.zeros(self.cell.units)
+        traces["theta"] = jnp.zeros(self.cell.units)
 
     def call(self, traces, ctx):
-        post = ctx['h_new'][0]
-        traces['theta'] += self.eta * (- traces['theta'] + post ** 2)
+        post = ctx["h_new"][0]
+        traces["theta"] += self.eta * (-traces["theta"] + post**2)
 
     def update(self, traces, dout):
-        pre = ctx['pre'][0]
-        post = ctx['h_new'][0, -1]
-        dw = (post * (post - traces['theta'])).T * pre * dout[:, None]
-        return {'dw': dw}, {}
+        pre = ctx["pre"][0]
+        post = ctx["h_new"][0, -1]
+        dw = (post * (post - traces["theta"])).T * pre * dout[:, None]
+        return {"dw": dw}, {}
+
     # * self.syn_mask * self.Erev) - self._trace_decay * old_trace
     # * self.Erev

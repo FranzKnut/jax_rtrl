@@ -21,7 +21,7 @@ def ctrnn_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
     W, tau = params
     # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))], axis=-1)
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     u = y @ W.T
     act = jnp.tanh(u)
@@ -33,7 +33,7 @@ def ctrnn_tg(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
     W, W_tau = params
     # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))], axis=-1)
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     act = jnp.tanh(y @ W.T)
     # tau = jax.nn.softplus(y @ W_tau.T) + 1
@@ -48,8 +48,8 @@ class CTRNNCell(nn.RNNCellBase):
 
     num_units: int
     dt: float = 1.0
-    ode_type: str = 'murray'
-    wiring: str | None = 'random'
+    ode_type: str = "murray"
+    wiring: str | None = "random"
     wiring_kwargs: dict = field(default_factory=dict)
 
     @nn.compact
@@ -57,22 +57,28 @@ class CTRNNCell(nn.RNNCellBase):
         """Compute euler integration step or CTRNN ODE."""
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        W = self.param('W', nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
+        W = self.param("W", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
 
         if self.wiring is not None:
-            mask = self.variable('wiring', 'mask',
-                                 make_mask_initializer(self.wiring, **self.wiring_kwargs),
-                                 self.make_rng() if self.has_rng('params') else None,
-                                 w_shape,
-                                 int,
-                                 ).value
+            mask = self.variable(
+                "wiring",
+                "mask",
+                make_mask_initializer(self.wiring, **self.wiring_kwargs),
+                self.make_rng() if self.has_rng("params") else None,
+                w_shape,
+                int,
+            ).value
             W = jax.lax.stop_gradient(mask) * W
         # Compute updates
-        if self.ode_type == 'murray':
-            tau = self.param('tau', partial(jrand.uniform, minval=2, maxval=8), (self.num_units,))
+        if self.ode_type == "murray":
+            tau = self.param("tau", partial(jrand.uniform, minval=2, maxval=8), (self.num_units,))
             df_dt = ctrnn_ode((W, tau), h, x)
-        elif self.ode_type == 'tg':
-            W_tau = self.param('W_tau', nn.initializers.he_normal(in_axis=-1, out_axis=-2), (self.num_units, x.shape[-1] + self.num_units + 1))
+        elif self.ode_type == "tg":
+            W_tau = self.param(
+                "W_tau",
+                nn.initializers.he_normal(in_axis=-1, out_axis=-2),
+                (self.num_units, x.shape[-1] + self.num_units + 1),
+            )
             df_dt = ctrnn_tg((W, W_tau), h, x)
         # Euler integration step with dt
         out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
@@ -124,15 +130,15 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     h, jp, jx = carry
     W, tau = params.values()
 
-    jw = jp['W']
-    jtau = jp['tau']
+    jw = jp["W"]
+    jtau = jp["tau"]
 
     # immediate jacobian (this step)
-    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))], axis=-1)
+    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     u = v @ W.T
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
-    df_dh = (1-jnp.tanh(u)**2)
+    df_dh = 1 - jnp.tanh(u) ** 2
     # post = jnp.tanh(u)
 
     # hebb = hebbian(v, post)
@@ -184,11 +190,10 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
 class OnlineCTRNNCell(CTRNNCell):
     """Online CTRNN module."""
 
-    plasticity: str = 'rflo'
+    plasticity: str = "rflo"
 
     @nn.compact
     def __call__(self, carry, x):  # noqa
-
         def f(mdl, h, x):
             h, *traces = h
             carry, out = CTRNNCell.__call__(mdl, h, x)
@@ -198,10 +203,10 @@ class OnlineCTRNNCell(CTRNNCell):
             """Forward pass with tmp for backward pass."""
             out, _ = CTRNNCell.__call__(mdl, carry[0], x)
 
-            _p = mdl.variables['params']
-            if self.plasticity == 'rtrl':
+            _p = mdl.variables["params"]
+            if self.plasticity == "rtrl":
                 traces = rtrl_ctrnn(self, carry, _p, x)
-            elif self.plasticity == 'rflo':
+            elif self.plasticity == "rflo":
                 traces = rflo_murray(self, carry, _p, x)
             else:
                 raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
@@ -213,7 +218,7 @@ class OnlineCTRNNCell(CTRNNCell):
             # carry, jp, jx, hebb = tmp
             carry, jp, jx = tmp
             df_dy = y_bar[-1]
-            if self.plasticity == 'rflo':
+            if self.plasticity == "rflo":
                 grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
             else:
                 grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
@@ -221,9 +226,9 @@ class OnlineCTRNNCell(CTRNNCell):
                 # has batch dim
                 grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
             # grads_p['W'] += hebb
-            grads_x = jnp.einsum('...h,...hi->...i', df_dy, jx)
+            grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
             carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
-            return ({'params': grads_p}, carry, grads_x)
+            return ({"params": grads_p}, carry, grads_x)
 
         f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
         return f_grad(self, carry, x)
@@ -234,12 +239,12 @@ class OnlineCTRNNCell(CTRNNCell):
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
         params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
-        leading_shape = h.shape[:-1] if self.plasticity == 'rflo' else h.shape
-        jp = jax.tree.map(lambda x: jnp.zeros(leading_shape + x.shape), params['params'])
+        leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
+        jp = jax.tree.map(lambda x: jnp.zeros(leading_shape + x.shape), params["params"])
         return h, jp, jx
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import numpy as np
     import optax
 
@@ -247,7 +252,7 @@ if __name__ == '__main__':
 
     key = jrand.PRNGKey(0)
     key, key_model, key_data, key_train = jrand.split(key, 4)
-    x = jnp.linspace(0, 5*np.pi, 100)[:, None]
+    x = jnp.linspace(0, 5 * np.pi, 100)[:, None]
     y = jnp.sin(x) + 2
 
     cell = CTRNNCell(32)
@@ -256,7 +261,7 @@ if __name__ == '__main__':
 
     def loss_mse(y_hat, _y):
         """MSE loss function."""
-        return jax.numpy.mean((y_hat - _y)**2)
+        return jax.numpy.mean((y_hat - _y) ** 2)
 
     def loss_rnn(p, c, __x, __y):
         """RNN loss."""
@@ -265,10 +270,12 @@ if __name__ == '__main__':
 
     jax.grad(loss_rnn)(params, carry, x[0], y[0])
 
-    model = nn.Sequential([
-        nn.RNN(cell),
-        nn.Dense(1),
-    ])
+    model = nn.Sequential(
+        [
+            nn.RNN(cell),
+            nn.Dense(1),
+        ]
+    )
 
     params = model.init(key_model, x, mutable=True)
 
@@ -282,7 +289,7 @@ if __name__ == '__main__':
     def print_progress(i, loss):
         """Print inside jit."""
         if i % 1000 == 0:
-            print(f'Iteration {i} | Loss: {loss:.3f}')
+            print(f"Iteration {i} | Loss: {loss:.3f}")
 
     def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-4, batch_size=64):
         """Train network. We use Stochastic Gradient Descent with a constant learning rate."""
@@ -299,8 +306,9 @@ if __name__ == '__main__':
             __params = optax.apply_updates(__params, updates)
             jax.debug.callback(print_progress, n, current_loss)
             return (__params, _opt_state, _key), current_loss
+
         (_params, *_), _losses = jax.lax.scan(step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32))
-        print(f'Final loss: {_losses[-1]:.3f}')
+        print(f"Final loss: {_losses[-1]:.3f}")
         return _params, _losses
 
     key, key_train = jrand.split(key_data)
@@ -315,7 +323,7 @@ if __name__ == '__main__':
     # Plot the trained model output
     plt.subplot(1, 2, 2)
     y_hat = model.apply(params, x)
-    plt.plot(x, y, label='target')
-    plt.plot(x, y_hat, label='trained')
+    plt.plot(x, y, label="target")
+    plt.plot(x, y_hat, label="trained")
     plt.legend()
     plt.show()

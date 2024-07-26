@@ -1,4 +1,5 @@
 """Utility functions for JAX models."""
+
 from functools import partial
 import os
 import jax
@@ -30,7 +31,7 @@ def symlog(x):
 
 def sigmoid_between(x, lower, upper):
     """Map input to sigmoid that goes from lower to upper."""
-    return (upper-lower) * jax.nn.sigmoid(x) + lower
+    return (upper - lower) * jax.nn.sigmoid(x) + lower
 
 
 def tree_norm(tree, **kwargs):
@@ -42,11 +43,10 @@ def leaf_norms(tree):
     """Return Dict of leaf names and their norms."""
     flattened, _ = jtu.tree_flatten_with_path(tree)
     flattened = {jtu.keystr(k): v for k, v in flattened}
-    return {k: tree_reduce(lambda x, y: x + jnp.linalg.norm(y), v, initializer=0)
-            for k, v in flattened.items()}
+    return {k: tree_reduce(lambda x, y: x + jnp.linalg.norm(y), v, initializer=0) for k, v in flattened.items()}
 
 
-@partial(jax.jit, static_argnames=['batch_size'])
+@partial(jax.jit, static_argnames=["batch_size"])
 def zeros_like_tree(tree, batch_size=None):
     """Create pytree of zeros with batchsize."""
     if batch_size is not None:
@@ -86,7 +86,10 @@ def checkpointing(path, fresh=False):
     """
     path = os.path.abspath(path)
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-    def save_model(_params): return checkpointer.save(path, _params, force=True) if save_model else None
+
+    def save_model(_params):
+        return checkpointer.save(path, _params, force=True) if save_model else None
+
     params = None
     if not os.path.exists(path):
         print("No checkpoint found.")

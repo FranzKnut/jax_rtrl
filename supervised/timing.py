@@ -17,21 +17,21 @@ if not os.path.exists(args.outfile) or args.force:
     key = jrand.PRNGKey(0)
     key, key_train = jrand.split(key)
 
-    x = jnp.linspace(0, 5*jnp.pi, 100)[:, None]
+    x = jnp.linspace(0, 5 * jnp.pi, 100)[:, None]
     y = jnp.sin(x) + 2
 
-    rows = ['rtrl', 'rflo']
+    rows = ["rtrl", "rflo"]
     cols = [32, 64, 128, 256, 512]
     runtimes = pd.DataFrame(index=rows, columns=cols)
 
     for plast in rows:
         for size in cols:
-            model, params, h0 = make_model(x[0], key, kwargs={'hidden_size': size, 'plasticity': plast})
+            model, params, h0 = make_model(x[0], key, kwargs={"hidden_size": size, "plasticity": plast})
 
             def loss(p, __x, __y, carry=None):
                 # MSE loss
                 carry, y_hat = model.apply(p, __x, carry)
-                return jnp.sum((y_hat - __y)**2), carry
+                return jnp.sum((y_hat - __y) ** 2), carry
 
             t = timeit.timeit(lambda: train(loss, params, (x, y), key_train, h0, num_steps=100), number=3)
             runtimes.loc[plast, size] = t
@@ -42,10 +42,8 @@ else:
 
 print(runtimes)
 runtimes = runtimes.unstack().reset_index()
-runtimes.columns = ['size', 'plasticity', 'time']
+runtimes.columns = ["size", "plasticity", "time"]
 
-plot = sns.barplot(x=runtimes['size'],
-                   y=runtimes['time'],
-                   hue=runtimes['plasticity'])
+plot = sns.barplot(x=runtimes["size"], y=runtimes["time"], hue=runtimes["plasticity"])
 # plot.set_yscale('log')
-plot.figure.savefig('plots/timing.png')
+plot.figure.savefig("plots/timing.png")

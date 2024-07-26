@@ -1,4 +1,5 @@
 """RNN wirings for JAX."""
+
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
@@ -39,7 +40,7 @@ def random(output_size: int, input_size: int, key=None, sparsity=0.5, **_):
     """
     if key is None:
         key = jrandom.PRNGKey(0)
-    mask = jrandom.bernoulli(key, 1-sparsity, shape=(output_size, input_size))
+    mask = jrandom.bernoulli(key, 1 - sparsity, shape=(output_size, input_size))
     mask = jnp.array(mask, dtype=float)
     return mask
 
@@ -52,9 +53,11 @@ def ncp(num_units: int, input_size: int, interneurons: int, key=None, sparsity=0
         key = jrandom.PRNGKey(0)
     mask = jnp.zeros((num_units, input_size))
     # interneurons receive from inputs and interneurons
-    mask = mask.at[-interneurons:, :-output_size].set(jrandom.bernoulli(key, 1-sparsity, shape=(interneurons, input_size - output_size)))
+    mask = mask.at[-interneurons:, :-output_size].set(
+        jrandom.bernoulli(key, 1 - sparsity, shape=(interneurons, input_size - output_size))
+    )
     # all neurons do receive from interneurons
-    mask = mask.at[:, -interneurons:].set(jrandom.bernoulli(key, 1-sparsity, shape=(num_units, interneurons)))
+    mask = mask.at[:, -interneurons:].set(jrandom.bernoulli(key, 1 - sparsity, shape=(num_units, interneurons)))
 
     # state_strings = [f'o{j}' for j in range(output_neurons)]
     # state_strings += [f'r{j}' for j in range(num_units - interneurons - output_neurons)]
@@ -68,10 +71,12 @@ def ncp(num_units: int, input_size: int, interneurons: int, key=None, sparsity=0
 
 def make_mask_initializer(wiring_name: str, bias=True, **kwargs):
     """Create a mask for given wiring name."""
+
     def make_mask(key, shape, dtype):
         mask = globals()[wiring_name](*shape, key=key, **kwargs)
         if bias:
             # Force bias to be visible
             mask = mask.at[:, -1].set(1.0)
         return mask
+
     return make_mask

@@ -1,9 +1,8 @@
 """Datasets for supervised learning."""
+
 import os
-import random
 
 import jax
-import numpy as np
 from jax import numpy as jnp
 from jax import random as jrandom
 
@@ -17,7 +16,7 @@ def split_train_test(inputs, target, percent_eval=0.2):
     :param target:
     :return: train and eval tuples of (inputs, target)
     """
-    train_size = int(inputs.shape[0] * (1-percent_eval))
+    train_size = int(inputs.shape[0] * (1 - percent_eval))
     inputs_train = inputs[:train_size]
     inputs_eval = inputs[train_size:]
 
@@ -73,10 +72,7 @@ def cut_sequences(set_x: jax.Array, set_y: jax.Array, seq_len: int, overlap=0, s
     x = jax.vmap(lambda start: jax.lax.dynamic_slice(set_x, (start,), (seq_len,)))(starts)
     y = jax.vmap(lambda start: jax.lax.dynamic_slice(set_y, (start,), (seq_len,)))(starts)
     if set_t is None:
-        return (
-            jnp.stack(x, axis=0),
-            jnp.stack(y, axis=0)
-        )
+        return (jnp.stack(x, axis=0), jnp.stack(y, axis=0))
     else:
         t = jax.vmap(lambda start: jax.lax.dynamic_slice(set_y, (start,), (seq_len,)))(starts)
         return (
@@ -126,8 +122,8 @@ def rollouts(name, with_time=False):
     all_dones = []
     for f in files:
         loaded = jnp.load(f, allow_pickle=True)
-        obs_arr = loaded['obs']
-        act_arr = loaded['act']
+        obs_arr = loaded["obs"]
+        act_arr = loaded["act"]
         x = obs_arr.astype(jnp.float32)
         y = act_arr
         x_times = jnp.ones(x.shape[0])

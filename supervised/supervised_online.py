@@ -21,7 +21,7 @@ class Model(nn.Module):
     hidden_size: int = 32
     num_modules: int = 1
     dt: float = 1
-    plasticity: str = 'rtrl'
+    plasticity: str = "rtrl"
     dropout_rate: float = 0
 
     @nn.nowrap
@@ -30,8 +30,8 @@ class Model(nn.Module):
             out_size=self.outsize,
             num_modules=self.num_modules,
             out_dist=self.out_dist,
-            kwargs={'num_units': self.hidden_size, 'dt': self.dt, 'plasticity': self.plasticity},
-            name='rnn'
+            kwargs={"num_units": self.hidden_size, "dt": self.dt, "plasticity": self.plasticity},
+            name="rnn",
         )
 
     @nn.compact
@@ -72,7 +72,6 @@ def train(_loss_fn, _params, data, _key, h0, num_steps=1_000, lr=1e-2):
     pbar = trange(num_steps, maxinterval=2)
 
     def run_episode(ep_carry, n):
-
         def step(carry, _data):
             __params, _opt_state, _key, h = carry
             __x, __y = _data
@@ -100,18 +99,22 @@ def train(_loss_fn, _params, data, _key, h0, num_steps=1_000, lr=1e-2):
 
         def print_progress(i, loss):
             pbar.update()
-            pbar.set_description(f'Iteration {i} | Loss: {loss.mean():.3f}', refresh=False)
+            pbar.set_description(f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False)
+
         jax.debug.callback(print_progress, n, current_loss)
         return step_carry, current_loss
-    (_params, *_), _losses = jax.lax.scan(run_episode, (_params, opt_state, _key, h0), jnp.arange(num_steps, dtype=np.int32))
+
+    (_params, *_), _losses = jax.lax.scan(
+        run_episode, (_params, opt_state, _key, h0), jnp.arange(num_steps, dtype=np.int32)
+    )
     return _params, _losses
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     key = jrand.PRNGKey(1)
     key, key_train = jrand.split(key)
 
-    x = jnp.linspace(0, 5*np.pi, 100)[:, None]
+    x = jnp.linspace(0, 5 * np.pi, 100)[:, None]
     y = jnp.sin(x) + 2
 
     model, params, h0 = make_model(x[0], key)
@@ -119,12 +122,12 @@ if __name__ == '__main__':
     def loss(p, __x, __y, carry=None):
         # MSE loss
         key, rnn_state = carry
-        rnn_state, y_hat = model.apply(p, __x, rnn_state, rngs={'dropout': key}, training=True)
+        rnn_state, y_hat = model.apply(p, __x, rnn_state, rngs={"dropout": key}, training=True)
         key = jrand.fold_in(key, key[0])
         if model.out_dist is None:
-            loss = jnp.mean((__y - y_hat)**2)
+            loss = jnp.mean((__y - y_hat) ** 2)
         else:
-            loss = jnp.mean(- y_hat.log_prob(__y))
+            loss = jnp.mean(-y_hat.log_prob(__y))
         return loss, (key, rnn_state)
 
     params, losses = train(loss, params, (x, y), key_train, h0)
@@ -141,16 +144,17 @@ if __name__ == '__main__':
     def predict(params, x):
         def _step(carry, _x):
             return model.apply(params, _x, carry, training=False)
+
         outs = jax.lax.scan(_step, h0, x)[1]
         if model.out_dist:
             outs = outs.sample(seed=key)
         return outs
 
     y_hat = predict(params, x)
-    print(f'Final loss: {jnp.mean((y-y_hat)**2):.3f}')
-    plt.plot(x, y, label='target')
-    plt.plot(x, y_hat, label='trained')
+    print(f"Final loss: {jnp.mean((y-y_hat)**2):.3f}")
+    plt.plot(x, y, label="target")
+    plt.plot(x, y_hat, label="trained")
     plt.legend()
     plt.show()
-    os.makedirs('plots', exist_ok=True)
-    plt.savefig('plots/sinewave.png')
+    os.makedirs("plots", exist_ok=True)
+    plt.savefig("plots/sinewave.png")
