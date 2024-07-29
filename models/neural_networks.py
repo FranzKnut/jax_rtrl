@@ -305,18 +305,18 @@ class AutoencoderParams:
     latent_size: int = 32
     c_hid: int = 8
 
+
 class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
 
     img_shape: tuple[int]
-    latent_size: int = 32
-    c_hid: int = 8
+    config: AutoencoderParams = field(default_factory=AutoencoderParams())
 
     def setup(self) -> None:
         """Initialize submodules."""
         super().setup()
-        self.enc = ConvEncoder(self.latent_size, self.c_hid)
-        self.dec = ConvDecoder(self.img_shape, self.c_hid)
+        self.enc = ConvEncoder(self.config.latent_size, self.config.c_hid)
+        self.dec = ConvDecoder(self.img_shape, self.config.c_hid)
 
     def encode(self, x, *_):
         """Encode given Image."""
