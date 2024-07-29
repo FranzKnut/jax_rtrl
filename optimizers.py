@@ -1,12 +1,11 @@
 """Util for creating optax optimizers."""
 
-
 from dataclasses import dataclass, field
 import optax
 
 
-@dataclass(frozen=True, eq=True)
-class OptimizerParams:
+@dataclass(frozen=True)
+class OptimizerConfig:
     """Class representing the parameters for an optimizer.
 
     Attributes:
@@ -20,8 +19,8 @@ class OptimizerParams:
         multi_step (int): number of steps to accumulate.
     """
 
-    opt_name: str = 'sgd'
-    learning_rate: float = 1
+    opt_name: str = "sgd"
+    learning_rate: float = 1e-3
     kwargs: dict = field(default_factory=dict, hash=False)
     decay_type: str | None = None
     lr_kwargs: dict = field(default_factory=dict, hash=False)
@@ -30,7 +29,7 @@ class OptimizerParams:
     multi_step: int | None = None
 
 
-def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax.GradientTransformation:
+def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientTransformation:
     """Make optax optimizer.
 
     The decorator allows reading scheduled lr from the optimizer state.
@@ -54,14 +53,26 @@ def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax
     -------
         optax optimizer
     """
-    learning_rate = optimizer_params.learning_rate
-    weight_decay = optimizer_params.weight_decay
-    if direction in ['max', 'maximize']:
+    learning_rate = config.learning_rate
+    weight_decay = config.weight_decay
+    if direction in ["max", "maximize"]:
         learning_rate = -learning_rate
     else:
         weight_decay = -weight_decay
 
-    if optimizer_params.decay_type == 'cosine_warmup':
+    # def decay_mask(tree):
+    #     mask = jax.tree.map(lambda _: False, tree)  # Initialize all False
+
+    #     # Only set some leaves to true for RNNs
+    #     if isinstance(tree, BaseRNNCell):
+    #         mask = eqx.tree_at(lambda x: x.w,  # HERE the leaves for decay are selected
+    #                            mask, True)
+    #     # elif isinstance(tree, Linear):
+    #     #     mask = eqx.tree_at(lambda x: x.W,  # HERE the leaves for decay are selected,
+    #     #                        mask, True)
+    #     return mask
+
+    if config.decay_type == "cosine_warmup":
         """Args:
             init_value: Initial value for the scalar to be annealed.
             peak_value: Peak value for scalar to be annealed at end of warmup.
@@ -76,8 +87,15 @@ def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax
                 ** exponent``.
                 Defaults to 1.0.
       """
-        learning_rate = optax.warmup_cosine_decay_schedule(learning_rate, **optimizer_params.lr_kwargs)
-    elif optimizer_params.decay_type == 'exponential':
+        # Exponentially decaying learning rate, 100k transition steps since we update at each env step
+        learning_rate = optax.warmup_cosine_decay_schedule(
+            learning_rate * config.lr_kwargs["initial_multiplier"],
+            peak_value=learning_rate,
+            end_value=learning_rate * config.lr_kwargs["end_multiplier"],
+            decay_steps=config.lr_kwargs["decay_steps"],
+            warmup_steps=config.lr_kwargs["warmup_steps"],
+        )
+    elif config.decay_type == "exponential":
         """Args:
             init_value: the initial learning rate.
             transition_steps: must be positive. See the decay computation above.
@@ -89,21 +107,28 @@ def make_optimizer(direction="min", optimizer_params=OptimizerParams()) -> optax
                 `decay_rate` < 1, `end_value` is treated as a lower bound, otherwise as
                 an upper bound. Has no effect when `decay_rate` = 0.
         """
-        learning_rate = optax.exponential_decay(learning_rate, **optimizer_params.lr_kwargs)
+        learning_rate = optax.exponential_decay(
+            learning_rate,
+            config.lr_kwargs["decay_steps"],
+            config.lr_kwargs["decay_rate"],
+            config.lr_kwargs["warmup_steps"],
+        )
+    elif config.decay_type is not None:
+        raise ValueError(f"Decay type {config.decay_type} unknown.")
 
-    # Create optimizer from optax chain
     @optax.inject_hyperparams
     def _make_opt(learning_rate):
+        # Create optimizer from optax chain
         optimizer = optax.chain(
             # Weight decay
             optax.add_decayed_weights(weight_decay),  # , mask=decay_mask
             # Gradient clipping
-            optax.clip_by_global_norm(optimizer_params.gradient_clip) if optimizer_params.gradient_clip else optax.identity(),
+            optax.clip_by_global_norm(config.gradient_clip) if config.gradient_clip else optax.identity(),
             # Optimizer
-            getattr(optax, optimizer_params.opt_name)(learning_rate, **optimizer_params.kwargs),
+            getattr(optax, config.opt_name)(learning_rate, **config.kwargs),
         )
-        if optimizer_params.multi_step:
-            optimizer = optax.MultiSteps(optimizer, every_k_schedule=optimizer_params.multi_step)
+        if config.multi_step:
+            optimizer = optax.MultiSteps(optimizer, every_k_schedule=config.multi_step)
         return optimizer
 
-    return _make_opt(learning_rate)
+    return _make_opt(learning_rate=learning_rate)
