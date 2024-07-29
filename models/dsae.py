@@ -118,7 +118,7 @@ class DSAEConfig:
 
     channels: tuple = (64, 32, 16)
     temperature: float = None
-    normalise: bool = False
+    normalise: bool = True
 
 
 class DeepSpatialAutoencoder(nn.Module):
@@ -136,7 +136,7 @@ class DeepSpatialAutoencoder(nn.Module):
             temperature=self.config.temperature,
             normalise=self.config.normalise,
         )
-        self.decoder = DSAE_Decoder(image_output_size=self.image_output_size)
+        self.decoder = DSAE_Decoder(image_output_size=self.image_output_size, normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
