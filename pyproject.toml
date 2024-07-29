@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "rtrrl"
+name = "jax_rtrl"
 version = "0.1.0"
 description = ""
 authors = ["julian <julian.lemmel@tuwien.ac.at>"]

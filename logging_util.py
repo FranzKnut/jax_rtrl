@@ -14,7 +14,7 @@ import numpy as np
 from typing_extensions import override
 
 from PIL import Image
-
+import plotly.express as px
 import jax.tree_util as jtu
 from jax_rtrl.models.jax_util import tree_stack
 from .models.jax_util import leaf_norms, tree_norm
