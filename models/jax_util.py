@@ -119,16 +119,17 @@ def mae_loss(y_hat, y):
     return jnp.mean(jnp.abs(y - y_hat))
 
 
-def make_vmap_model(_model):
+def make_vmap_model(_model, **kwargs):
     @jax.jit
     def _vmap_model(_p, _input):
-        return jax.vmap(jax.tree_util.Partial(_model.apply, _p))(_input)
+        return jax.vmap(jax.tree_util.Partial(_model.apply, _p, **kwargs))(_input)
 
     return _vmap_model
 
 
-def make_validate(_model, test_data):
-    vmap_model = make_vmap_model(_model)
+def make_validate(_model, test_data, **kwargs):
+    vmap_model = make_vmap_model(_model, **kwargs)
+
     @jax.jit
     def _validate(_p):
         y_hat, _ = vmap_model(_p, test_data)

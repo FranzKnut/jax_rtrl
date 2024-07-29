@@ -320,11 +320,11 @@ class Autoencoder(nn.Module):
 
     def encode(self, x, *_):
         """Encode given Image."""
-        return self.enc.apply(x)
+        return self.enc(x)
 
     def decode(self, latent):
         """Decode Image from latent vector."""
-        return self.dec.apply(latent)
+        return self.dec(latent)
 
     def __call__(self, x, *_):
         """Encode then decode. Returns prediction and latent vector."""
