@@ -14,7 +14,6 @@ import numpy as np
 from typing_extensions import override
 
 from PIL import Image
-import plotly.express as px
 import jax.tree_util as jtu
 from jax_rtrl.models.jax_util import tree_stack
 from .models.jax_util import leaf_norms, tree_norm
@@ -201,6 +200,8 @@ class AimLogger(DummyLogger):
     def finalize(self, all_param_norms=None, x_vals=None):
         """Make lineplots for param norms and block until all metrics are logged."""
         if all_param_norms:
+            import plotly.express as px
+
             all_param_norms = tree_stack(all_param_norms)
             self.log(
                 {
