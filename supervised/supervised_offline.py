@@ -7,8 +7,8 @@ import flax.linen as nn
 
 import matplotlib.pyplot as plt
 
-from models.custom_grad import FADense
-from models.neural_networks import CTRNNCell
+from jax_rtrl.model.custom_grad import FADense
+from jax_rtrl.model.neural_networks import CTRNNCell
 
 key = jrand.PRNGKey(0)
 key, key_model, key_data, key_train = jrand.split(key, 4)

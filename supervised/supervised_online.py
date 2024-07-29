@@ -9,7 +9,7 @@ import flax.linen as nn
 import matplotlib.pyplot as plt
 from tqdm import trange
 
-from models.neural_networks import Ensemble
+from jax_rtrl.models.neural_networks import RNNEnsemble
 
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_debug_nans", True)
@@ -21,12 +21,12 @@ class Model(nn.Module):
     hidden_size: int = 32
     num_modules: int = 1
     dt: float = 1
-    plasticity: str = "rtrl"
+    plasticity: str = "rflo"
     dropout_rate: float = 0
 
     @nn.nowrap
     def _make_rnn(self):
-        return Ensemble(
+        return RNNEnsemble(
             out_size=self.outsize,
             num_modules=self.num_modules,
             out_dist=self.out_dist,
@@ -81,9 +81,9 @@ def train(_loss_fn, _params, data, _key, h0, num_steps=1_000, lr=1e-2):
             __params = optax.apply_updates(__params, updates)
 
             # HACK: Clip params to ensure damping tau
-            # for s in __params['params']['rnn']:
-            #     if 'tau' in s:
-            #         __params['params']['rnn'][s]['tau'] = jnp.clip(__params['params']['rnn'][s]['tau'], min=1)
+            for s in __params["params"]["rnn"]:
+                if "tau" in s:
+                    __params["params"]["rnn"][s]["tau"] = jnp.clip(__params["params"]["rnn"][s]["tau"], min=1)
 
             # Grad clipping for the Jacobian traces
             # h = (h[0], *jax.tree.map(lambda x: optax.clip_by_global_norm(.1).update(x, None)[0], h[1:]))

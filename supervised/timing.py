@@ -6,7 +6,7 @@ import jax.random as jrand
 import jax.numpy as jnp
 import seaborn as sns
 
-from experiments.supervised.supervised_online import make_model, train
+from supervised.supervised_online import make_model, train
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--force", action="store_true")
