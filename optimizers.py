@@ -109,9 +109,11 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
         """
         learning_rate = optax.exponential_decay(
             learning_rate,
-            config.lr_kwargs["decay_steps"],
+            config.lr_kwargs["transition_steps"],
             config.lr_kwargs["decay_rate"],
-            config.lr_kwargs["warmup_steps"],
+            config.lr_kwargs.get("warmup_steps", 0),
+            config.lr_kwargs.get("staircase", False),
+            config.lr_kwargs.get("end_value", None),
         )
     elif config.decay_type is not None:
         raise ValueError(f"Decay type {config.decay_type} unknown.")

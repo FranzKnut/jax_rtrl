@@ -159,6 +159,7 @@ class RNNEnsemble(nn.RNNCellBase):
     model: type = OnlineCTRNNCell
     out_dist: str | None = None
     output_layers: tuple[int] | None = None
+    skip: bool = False
     kwargs: dict = field(default_factory=dict)
 
     @nn.compact
@@ -186,20 +187,19 @@ class RNNEnsemble(nn.RNNCellBase):
         carry_out = []
         for i in range(self.num_modules):
             # Loop over rnn submodules
-            carry, out = self.model(**self.kwargs, name=f"rnn{i}")(h[i], x)
+            args = [self.out_size] if not self.out_dist else []
+            carry, out = self.model(*args, **self.kwargs, name=f"rnn{i}")(h[i], x)
             carry_out.append(carry)
-            out = jnp.concatenate([out, x], axis=-1)
+            if self.skip:
+                out = jnp.concatenate([out, x], axis=-1)
             if self.output_layers:
                 out = MLP(self.output_layers, self.kwargs.get("f_align", False))(out)
             # Make distribution for each submodule
-            out = DistributionLayer(self.out_size, self.out_dist)(out)
+            if self.out_dist:
+                out = DistributionLayer(self.out_size, self.out_dist)(out)
             outs.append(out)
 
-        if not self.out_dist:
-            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
-            if not training:
-                outs = jnp.mean(outs, axis=0)
-        else:
+        if self.out_dist:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
             outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
@@ -211,7 +211,8 @@ class RNNEnsemble(nn.RNNCellBase):
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize neuron states."""
-        return [self.model(**self.kwargs).initialize_carry(rng, input_shape)] * self.num_modules
+        args = [self.out_size] if not self.out_dist else []
+        return [self.model(*args, **self.kwargs).initialize_carry(rng, input_shape)] * self.num_modules
 
     @property
     def num_feature_axes(self) -> int:

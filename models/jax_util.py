@@ -8,7 +8,6 @@ import jax.random as jrandom
 import orbax.checkpoint
 from jax.tree_util import tree_map, tree_reduce
 import jax.tree_util as jtu
-import dm_pix as pix
 
 
 class JAX_RNG:
@@ -37,6 +36,8 @@ def sigmoid_between(x, lower, upper):
 
 def preprocess_img(img):
     """Make grayscale from RGB Image."""
+    import dm_pix as pix
+
     return pix.rgb_to_grayscale(jnp.array(img / 255.0, dtype=jnp.float32))
 
 
