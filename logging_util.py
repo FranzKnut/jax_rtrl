@@ -1,20 +1,24 @@
-"""Utilies for wandb."""
+"""Utilies for logging."""
 
+from argparse import Namespace
 import collections
 import contextlib
-from dataclasses import asdict
+from dataclasses import asdict, replace
+import json
+from operator import attrgetter
 import os
 import traceback
 from typing import Callable
+from dacite import from_dict
+import numpy as np
 from typing_extensions import override
 
 from PIL import Image
-from dacite import from_dict
 
-import plotly.express as px
-import flax.linen as nn
 import jax.tree_util as jtu
-from jax_rtrl.models.jax_util import leaf_norms, tree_norm, tree_stack
+from jax_rtrl.models.jax_util import tree_stack
+from .models.jax_util import leaf_norms, tree_norm
+import flax.linen as nn
 
 
 class ExceptionPrinter(contextlib.AbstractContextManager):
@@ -143,25 +147,33 @@ class AimLogger(DummyLogger):
 
     def __repr__(self) -> str:
         """Return name of logger."""
-        return "DummyLogger"
+        return "AimLogger"
 
     @override
-    def __init__(self, name, repo=None, hparams=None, run_name=""):
+    def __init__(self, name, repo=None, hparams=None, run_name="", run_hash=None):
         """Create aim run."""
         global aim
         import aim
 
-        self.run = aim.Run(experiment=name, repo=repo, log_system_params=True)
-        if not isinstance(hparams, dict):
+        self.run = aim.Run(experiment=name, repo=repo, run_hash=run_hash, log_system_params=True)
+        hparams = hparams or {}
+        if isinstance(hparams, Namespace):
+            hparams = vars(hparams)
+        elif not isinstance(hparams, dict):
+            # Assuming it is a dataclass
             hparams = asdict(hparams)
         self.log_params(hparams)
         self.run.name = run_name + " " + self.run.hash
+        if hparams.get("save_model", False):
+            import orbax.checkpoint
+
+            self.checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
     @override
-    def log(self, metrics, step=None):
+    def log(self, metrics, step=None, context=None):
         """Loop over scalars and track them with aim."""
         for k, v in metrics.items():
-            self.run.track(v, name=k, epoch=None if step is None else int(step))
+            self.run.track(v, name=k, epoch=None if step is None else int(step), context=context)
 
     @override
     def log_params(self, params_dict):
@@ -203,16 +215,34 @@ class AimLogger(DummyLogger):
     @override
     def save_model(self, model, filename="model.ckpt"):
         """Save the model to aim directory using equinox."""
-        raise NotImplementedError()
-        # run_artifacts_dir = os.path.join('artifacts/aim',  self.run.hash)
+        run_artifacts_dir = os.path.join("artifacts/aim", self.run.hash)
         # os.makedirs(run_artifacts_dir, exist_ok=True)
-        # model_file = os.path.join(run_artifacts_dir, filename)
+        model_file = os.path.abspath(os.path.join(run_artifacts_dir, filename))
+        config_file = os.path.abspath(os.path.join(run_artifacts_dir, "config.json"))
+        # eqx.tree_serialise_leaves(model_file, model)
+        self.checkpointer.save(model_file, model, force=True)
+        if not os.path.exists(config_file):
+            # Save config file as json
+            with open(config_file, "w") as f:
+                json.dump(self.run["hparams"], f)
+
+    @override
+    def log_img(self, name, img, step=None, caption="", pil_mode="RGB", format="png"):
+        """Log an image to wandb."""
+        self.log(
+            {
+                name: aim.Image(
+                    Image.fromarray(np.asarray(img, dtype=np.uint8), mode=pil_mode), caption=caption, format=format
+                )
+            },
+            step=step,
+        )
 
     @override
     def log_video(self, name, frames, step=None, fps=30, caption=""):
         """Log a video to wandb."""
         filename = os.path.join("logs/gifs", self.run.hash + ".gif")
-        images = [Image.fromarray(frames[i].transpose(1, 2, 0)) for i in range(len(frames))]
+        images = [Image.fromarray(frames[i]) for i in range(len(frames))]
         os.makedirs("logs/gifs", exist_ok=True)
         images[0].save(filename, save_all=True, append_images=images[1:], duration=int(1000 / fps), loop=0)
         self.log({name: aim.Image(filename, caption=caption, format="gif")}, step=step)
@@ -296,4 +326,18 @@ def log_norms(pytree):
     """Compute norms and leaf norms of given pytree."""
     flattened, _ = jtu.tree_flatten_with_path(pytree)
     flattened = {jtu.keystr(k): v for k, v in flattened}
-    return calc_norms(flattened)[0]
+    return calc_norms(flattened)
+
+
+def deep_replace(obj, /, **kwargs):
+    """Like dataclasses.replace but can replace arbitrarily nested attributes."""
+    for k, v in kwargs.items():
+        k = k.replace("__", ".")
+
+        while "." in k:
+            prefix, _, attr = k.rpartition(".")
+            deep_attr = attrgetter(prefix)(obj)
+            v = replace(deep_attr, **{attr: v})
+            k = prefix
+        obj = replace(obj, **{k: v})
+    return obj

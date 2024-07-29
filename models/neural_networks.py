@@ -1,6 +1,6 @@
 """Neural networks using the flax package."""
 
-from dataclasses import field
+from dataclasses import dataclass, field
 from typing import Tuple
 from chex import PRNGKey
 import distrax
@@ -8,6 +8,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 
 from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell
 
@@ -71,7 +72,7 @@ class MLP(nn.Module):
     """MLP built with equinox."""
 
     layers: list
-    f_align: bool = True
+    f_align: bool = False
 
     @nn.compact
     def __call__(self, x):
@@ -98,17 +99,70 @@ class RBFLayer(nn.Module):
         return jnp.sum(z, axis=-1)
 
 
-class Ensemble(nn.RNNCellBase):
+class MLPEnsemble(nn.Module):
     """Ensemble of CTRNN cells."""
 
-    out_size: int | None = None
-    num_modules: int = 1
-    model: type[nn.Module] = OnlineCTRNNCell
+    out_size: int
+    num_modules: int
+    model: type = MLP
     out_dist: str | None = None
     kwargs: dict = field(default_factory=dict)
 
     @nn.compact
-    def __call__(self, h, x, training=False):  # noqa
+    def __call__(self, x, training=True, rng=None):  # noqa
+        """Call submodules and concatenate output.
+
+        If out_dist is not None, the output will be distribution(s),
+
+        Parameters
+        ----------
+        h : List
+            of rnn submodule states
+        x : Array
+            input
+        training : bool, optional, by default False
+            If true, returns one value per submodule in order to train them independently,
+            If false, mean of submodules or a Mixed Distribution is returned.
+
+        Returns
+        -------
+        _type_
+            _description_
+        """
+        outs = []
+        for i in range(self.num_modules):
+            # Loop over rnn submodules
+            out = self.model(**self.kwargs, name=f"mlp{i}")(x)
+            # Make distribution for each submodule
+            out = DistributionLayer(self.out_size, self.out_dist)(out)
+            outs.append(out)
+
+        if not self.out_dist:
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
+            if not training:
+                outs = jnp.mean(outs, axis=0)
+        else:
+            # Last dim is batch in distrax
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
+            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
+            if rng is not None:
+                outs = outs.sample(seed=rng)
+
+        return outs
+
+
+class RNNEnsemble(nn.RNNCellBase):
+    """Ensemble of CTRNN cells."""
+
+    out_size: int
+    num_modules: int
+    model: type = OnlineCTRNNCell
+    out_dist: str | None = None
+    output_layers: tuple[int] | None = None
+    kwargs: dict = field(default_factory=dict)
+
+    @nn.compact
+    def __call__(self, h, x, training=False, rng=None):  # noqa
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -132,17 +186,25 @@ class Ensemble(nn.RNNCellBase):
         carry_out = []
         for i in range(self.num_modules):
             # Loop over rnn submodules
-            carry, out = self.model(**self.kwargs)(h[i], x)
+            carry, out = self.model(**self.kwargs, name=f"rnn{i}")(h[i], x)
             carry_out.append(carry)
+            out = jnp.concatenate([out, x], axis=-1)
+            if self.output_layers:
+                out = MLP(self.output_layers, self.kwargs.get("f_align", False))(out)
             # Make distribution for each submodule
+            out = DistributionLayer(self.out_size, self.out_dist)(out)
             outs.append(out)
 
-        outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
-        if not training:
-            if not self.out_dist:
+        if not self.out_dist:
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
+            if not training:
                 outs = jnp.mean(outs, axis=0)
-            else:
-                outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
+        else:
+            # Last dim is batch in distrax
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
+            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
+            if rng is not None:
+                outs = outs.sample(seed=rng)
 
         return carry_out, outs
 
@@ -181,64 +243,88 @@ class DistributionLayer(nn.Module):
 
 
 class ConvEncoder(nn.Module):
-    """2D-Convolutional Encoder."""
+    """2D-Convolutional Encoder.
 
+    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
+
+    latent_size: int
     c_hid: int = 8
-    latent_size: int = 128
 
     @nn.compact
     def __call__(self, x):
         """Encode given Image."""
         # Encode observation using CNN
         x = nn.Conv(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
+        x = nn.gelu(x)
+        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
+        x = nn.gelu(x)
         x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
+        x = nn.gelu(x)
+        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
+        x = nn.gelu(x)
         x = nn.Conv(features=4 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
+        x = nn.gelu(x)
         x = x.flatten()  # Image grid to single feature vector
         return nn.Dense(features=self.latent_size)(x)
 
 
 class ConvDecoder(nn.Module):
-    """2D-Convolutional Decoder."""
+    """2D-Convolutional Decoder.
 
-    c_out: int = 1
-    c_hid: int = 32
+    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
+
+    img_shape: tuple[int]
+    c_hid: int = 8
 
     @nn.compact
     def __call__(self, x):
         """Decode Image from latent vector."""
-        x = nn.Dense(features=12 * 12 * self.c_hid)(x)
-        x = nn.relu(x)
-        x = x.reshape(12, 12, -1)
+        xy_shape = np.array(self.img_shape[:2]) / (2 * 2 * 2)  # initial img shape depends on number of layers
+        if any(xy_shape != xy_shape.astype(int)):
+            raise ValueError("The img x- and y-shapes must be divisible by 8.")
+
+        x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
+        x = nn.gelu(x)
+
+        x = x.reshape(*[int(n) for n in xy_shape], -1)
         x = nn.ConvTranspose(features=self.c_hid // 2, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
+        x = nn.gelu(x)
+        x = nn.ConvTranspose(features=self.c_hid // 2, kernel_size=(3, 3))(x)
+        x = nn.gelu(x)
         x = nn.ConvTranspose(features=self.c_hid // 4, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.c_out, kernel_size=(3, 3), strides=2)(x)
-        x = nn.sigmoid(x)
+        x = nn.gelu(x)
+        x = nn.ConvTranspose(features=self.c_hid // 4, kernel_size=(3, 3))(x)
+        x = nn.gelu(x)
+        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
+        x = nn.tanh(x)
         return x
 
+
+@dataclass
+class AutoencoderParams:
+    latent_size: int = 32
+    c_hid: int = 8
 
 class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
 
-    latent_size: int = 128
+    img_shape: tuple[int]
+    latent_size: int = 32
+    c_hid: int = 8
 
     def setup(self) -> None:
         """Initialize submodules."""
         super().setup()
-        self.enc = ConvEncoder(self.latent_size)
-        self.dec = ConvDecoder()
+        self.enc = ConvEncoder(self.latent_size, self.c_hid)
+        self.dec = ConvDecoder(self.img_shape, self.c_hid)
 
-    def encode(self, params, x, *_):
+    def encode(self, x, *_):
         """Encode given Image."""
-        return self.bind(params).enc.apply({"params": params["params"]["enc"]}, x)
+        return self.enc.apply(x)
 
-    def decode(self, params, x):
+    def decode(self, latent):
         """Decode Image from latent vector."""
-        return self.bind(params).dec.apply({"params": params["params"]["dec"]}, x)
+        return self.dec.apply(latent)
 
     def __call__(self, x, *_):
         """Encode then decode. Returns prediction and latent vector."""
@@ -250,6 +336,7 @@ class Autoencoder(nn.Module):
 class Autoencoder_RNN(nn.Module):
     """Deterministic 2D-Autoencoder that also contains an RNN."""
 
+    img_shape: tuple[int]
     latent_size: int = 128
     num_units: int = 32
     use_cnn: bool = True
@@ -284,7 +371,7 @@ class Autoencoder_RNN(nn.Module):
         x = jnp.concatenate([x, e], axis=-1)
         latent = nn.Dense(features=self.latent_size)(x)
         if self.use_cnn:
-            pred = ConvDecoder()(latent)
+            pred = ConvDecoder(self.img_shape)(latent)
         else:
             pred = nn.Dense(features=obs_size)(latent)
         return carry, pred, latent

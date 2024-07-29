@@ -8,6 +8,7 @@ import jax.random as jrandom
 import orbax.checkpoint
 from jax.tree_util import tree_map, tree_reduce
 import jax.tree_util as jtu
+import dm_pix as pix
 
 
 class JAX_RNG:
@@ -32,6 +33,11 @@ def symlog(x):
 def sigmoid_between(x, lower, upper):
     """Map input to sigmoid that goes from lower to upper."""
     return (upper - lower) * jax.nn.sigmoid(x) + lower
+
+
+def preprocess_img(img):
+    """Make grayscale from RGB Image."""
+    return pix.rgb_to_grayscale(jnp.array(img / 255.0, dtype=jnp.float32))
 
 
 def tree_norm(tree, **kwargs):
@@ -91,8 +97,9 @@ def checkpointing(path, fresh=False):
         return checkpointer.save(path, _params, force=True) if save_model else None
 
     params = None
+    print(path, end=": ")
     if not os.path.exists(path):
-        print("No checkpoint found.")
+        print("No checkpoint found")
     else:
         if fresh:
             print("Overwriting existing checkpoint")
@@ -100,3 +107,24 @@ def checkpointing(path, fresh=False):
             params = checkpointer.restore(path)
             print("Restored model from checkpoint")
     return params, save_model
+
+
+def mse_loss(y_hat, y):
+    """Mean squared error."""
+    return jnp.mean((y - y_hat) ** 2)
+
+
+def mae_loss(y_hat, y):
+    """Mean absoluted error."""
+    return jnp.mean(jnp.abs(y - y_hat))
+
+
+@jax.jit
+def apply_model_vmap(_model, _p, _input):
+    return jax.vmap(jax.tree_util.Partial(_model.apply, _p))(_input)
+
+
+@jax.jit
+def validate(_model, _params, test_data):
+    y_hat, _ = apply_model_vmap(_model, _params, test_data)
+    return mse_loss(y_hat, test_data)
