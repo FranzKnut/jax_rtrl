@@ -96,13 +96,23 @@ class DSAE_Decoder(nn.Module):
 
     image_output_size: tuple
     normalise: bool = True
+    c_hid: int = 8
 
     @nn.compact
     def __call__(self, x):
+        xy_shape = np.array(self.image_output_size[:2]) / (2 * 2)  # initial img shape depends on number of layers
+        if any(xy_shape != xy_shape.astype(int)):
+            raise ValueError("The img x- and y-shapes must be divisible by 4.")
+
+        x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
+        x = nn.relu(x)
+        x = x.reshape(*[int(n) for n in xy_shape], -1)
+        x = nn.ConvTranspose(features=self.c_hid // 2, kernel_size=(3, 3), strides=2)(x)
+        x = nn.relu(x)
+        x = nn.ConvTranspose(features=self.image_output_size[-1], kernel_size=(3, 3), strides=2)(x)
         activ = nn.tanh if self.normalise else nn.sigmoid
-        out = activ(nn.Dense(features=np.prod(self.image_output_size))(x))
-        out = out.reshape(*self.image_output_size)
-        return out
+        x = activ(x)
+        return x
 
 
 @dataclass
