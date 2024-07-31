@@ -16,6 +16,23 @@ from jax.nn import softmax
 import numpy as np
 
 
+@dataclass
+class DSAEConfig:
+    """Default parameters are the ones used in [1].
+
+    :param image_output_size: Reconstructed image size
+    :param in_channels: Number of channels of input image
+    :param out_channels: Output channels of each conv layer in the encoder.
+    :param latent_dimension: Input dimension for decoder
+    :param temperature: Temperature parameter, None if it is to be learnt
+    :param normalise: Should spatial features be normalised to [-1, 1]?
+    """
+
+    channels: tuple = (64, 32, 16)
+    temperature: float = None
+    normalise: bool = True
+
+
 def get_image_coordinates(h, w, normalise):
     x_range = jnp.arange(w, dtype=jnp.float32)
     y_range = jnp.arange(h, dtype=jnp.float32)
@@ -39,12 +56,12 @@ class SpatialSoftArgmax(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Apply Spatial SoftArgmax operation on the input batch of images x.
-        :param x: batch of images, of size (N, C, H, W)
-        :return: Spatial features (one point per channel), of size (N, C, 2)
+        :param x: batch of images, of size (H, W, C)
+        :return: Spatial features (one point per channel), of size (C, 2)
         """
-        c, h, w = x.shape[-3:]
+        h, w, c = x.shape[-3:]
         _temperature = self.param("temperature", lambda _: jnp.ones(1)) if self.temperature is None else jnp.array([self.temperature])
-        spatial_softmax_per_map = softmax(x.reshape(-1, h * w) / _temperature, axis=-1)
+        spatial_softmax_per_map = softmax(x.reshape(h * w, -1).transpose() / _temperature, axis=0)
         spatial_softmax = spatial_softmax_per_map.reshape(-1, c, h, w).squeeze()
 
         # calculate image coordinate maps
@@ -111,27 +128,8 @@ class DSAE_Decoder(nn.Module):
         return x
 
 
-@dataclass
-class DSAEConfig:
-    """
-    :param image_output_size: Reconstructed image size
-    :param in_channels: Number of channels of input image
-    :param out_channels: Output channels of each conv layer in the encoder.
-    :param latent_dimension: Input dimension for decoder
-    :param temperature: Temperature parameter, None if it is to be learnt
-    :param normalise: Should spatial features be normalised to [-1, 1]?
-    """
-
-    channels: tuple = (64, 32, 16)
-    temperature: float = None
-    normalise: bool = True
-
-
 class DeepSpatialAutoencoder(nn.Module):
-    """A deep spatial autoencoder. Default parameters are the ones used in [1], with the original input image
-    being 3x240x240. See docs for encoder and decoder.
-
-    """
+    """A deep spatial autoencoder."""
 
     image_output_size: tuple
     config: DSAEConfig = field(default_factory=DSAEConfig)

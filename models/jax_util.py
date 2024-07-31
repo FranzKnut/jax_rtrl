@@ -2,6 +2,7 @@
 
 from functools import partial
 import os
+import json
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -82,7 +83,7 @@ def tree_stack(trees):
     return treedef_list[0].unflatten(result_leaves)
 
 
-def checkpointing(path, fresh=False):
+def checkpointing(path, fresh=False, hparams: dict = None):
     """Set up checkpointing at given path.
 
     Returns:
@@ -90,24 +91,39 @@ def checkpointing(path, fresh=False):
                 Restored parameters or None if no checkpoint found or fresh is True.
         save_model : Callable
                 Function (PyTree->None) for saving given PyTree
+        hparams : dict
+                Stores given hyper-parameters alongside model params as json
     """
     path = os.path.abspath(path)
+    hparams_file_path = os.path.join(path, "hparams.json")
+
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
     def save_model(_params):
         return checkpointer.save(path, _params, force=True) if save_model else None
 
-    params = None
+    restored_params = None
+    restored_hparams = {}
     print(path, end=": ")
-    if not os.path.exists(path):
+    exists = os.path.exists(path)
+    if not exists:
         print("No checkpoint found")
     else:
         if fresh:
             print("Overwriting existing checkpoint")
         else:
-            params = checkpointer.restore(path)
+            restored_params = checkpointer.restore(path)
             print("Restored model from checkpoint")
-    return params, save_model
+            if os.path.exists(hparams_file_path):
+                with open(hparams_file_path) as f:
+                    restored_hparams = json.load(f)
+
+    if (not exists or fresh) and hparams is not None:
+        os.makedirs(path, exist_ok=True)
+        with open(hparams_file_path, "w") as f:
+            json.dump(hparams, f)
+
+    return (restored_params, restored_hparams), save_model
 
 
 def mse_loss(y_hat, y):
