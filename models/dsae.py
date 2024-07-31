@@ -43,11 +43,7 @@ class SpatialSoftArgmax(nn.Module):
         :return: Spatial features (one point per channel), of size (N, C, 2)
         """
         c, h, w = x.shape[-3:]
-        _temperature = (
-            self.param("temperature", lambda _: jnp.ones(1))
-            if self.temperature is None
-            else jnp.array([self.temperature])
-        )
+        _temperature = self.param("temperature", lambda _: jnp.ones(1)) if self.temperature is None else jnp.array([self.temperature])
         spatial_softmax_per_map = softmax(x.reshape(-1, h * w) / _temperature, axis=-1)
         spatial_softmax = spatial_softmax_per_map.reshape(-1, c, h, w).squeeze()
 
@@ -178,5 +174,5 @@ def dsae_loss(reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None):
     loss_info = {"reconstruction_loss": mse_loss}
     if ft_minus1 is not None:
         g_slow_contrib = jnp.sum((ft_plus1 - ft - (ft - ft_minus1)) ** 2)
-        loss_info["g_slow":g_slow_contrib]
+        loss_info["g_slow"] = g_slow_contrib
     return mse_loss + g_slow_contrib, loss_info
