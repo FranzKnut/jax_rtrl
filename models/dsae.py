@@ -90,7 +90,8 @@ class DSAE_Encoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool = True):
-        x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7), strides=(2, 2))(x)
+        x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7))(x)
+        x = nn.max_pool(x, (3, 3))
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
@@ -158,10 +159,10 @@ def dsae_loss(reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None):
     :param ft_plus1: Features produced by the encoder for the next image in the trajectory to the target one
     :return: A tuple (mse, g_slow) where mse = the MSE reconstruction loss and g_slow = g_slow contribution term ([1])
     """
-    mse_loss = jnp.sum((reconstructed - target) ** 2)
+    mse_loss = jnp.mean((reconstructed - target) ** 2)
     g_slow_contrib = 0.0
     loss_info = {"reconstruction_loss": mse_loss}
     if ft_minus1 is not None:
-        g_slow_contrib = jnp.sum((ft_plus1 - ft - (ft - ft_minus1)) ** 2)
+        g_slow_contrib = jnp.mean((ft_plus1 - ft - (ft - ft_minus1)) ** 2)
         loss_info["g_slow"] = g_slow_contrib
     return mse_loss + g_slow_contrib, loss_info
