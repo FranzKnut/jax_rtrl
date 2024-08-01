@@ -100,9 +100,9 @@ class DSAE_Encoder(nn.Module):
         return out
 
 
-class DSAE_Decoder(nn.Module):
+class LinearDecoder(nn.Module):
     """
-    Creates a Deep Spatial Autoencoder decoder
+    Creates a Linear Image decoder used in the Deep Spatial Autoencoder
     :param image_output_size: (height, width) of the output, grayscale image
     :param normalise: True if output in range [-1, 1], False for range [0, 1]
     """
@@ -113,16 +113,8 @@ class DSAE_Decoder(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        xy_shape = np.array(self.image_output_size[:2]) / (2 * 2)  # initial img shape depends on number of layers
-        if any(xy_shape != xy_shape.astype(int)):
-            raise ValueError("The img x- and y-shapes must be divisible by 4.")
-
-        x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
-        x = nn.relu(x)
-        x = x.reshape(*[int(n) for n in xy_shape], -1)
-        x = nn.ConvTranspose(features=self.c_hid // 2, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.image_output_size[-1], kernel_size=(3, 3), strides=2)(x)
+        x = nn.Dense(features=int(np.prod(self.image_output_size)) * self.c_hid)(x)
+        x = x.reshape(-1,*[int(n) for n in self.image_output_size])
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
@@ -140,7 +132,7 @@ class DeepSpatialAutoencoder(nn.Module):
             temperature=self.config.temperature,
             normalise=self.config.normalise,
         )
-        self.decoder = DSAE_Decoder(image_output_size=self.image_output_size, normalise=self.config.normalise)
+        self.decoder = LinearDecoder(image_output_size=self.image_output_size, normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
