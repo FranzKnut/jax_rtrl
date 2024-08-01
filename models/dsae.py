@@ -109,12 +109,11 @@ class LinearDecoder(nn.Module):
 
     image_output_size: tuple
     normalise: bool = True
-    c_hid: int = 8
 
     @nn.compact
     def __call__(self, x):
-        x = nn.Dense(features=int(np.prod(self.image_output_size)) * self.c_hid)(x)
-        x = x.reshape(-1,*[int(n) for n in self.image_output_size])
+        x = nn.Dense(features=int(np.prod(self.image_output_size)))(x)
+        x = x.reshape(*[int(n) for n in self.image_output_size])
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
