@@ -39,9 +39,7 @@ def wandb_wrapper(project_name, func, hparams, params_type):
 
     logger = WandbLogger()
 
-    with wandb.init(
-        project=project_name, config=hparams, mode="disabled" if hparams.debug else "online", dir="logs/"
-    ), ExceptionPrinter():
+    with wandb.init(project=project_name, config=hparams, mode="disabled" if hparams.debug else "online", dir="logs/"), ExceptionPrinter():
         # If called by wandb.agent,
         # this config will be set by Sweep Controller
         hparams = from_dict(params_type, update_nested_dict(asdict(hparams), wandb.config))
@@ -203,13 +201,7 @@ class AimLogger(DummyLogger):
             import plotly.express as px
 
             all_param_norms = tree_stack(all_param_norms)
-            self.log(
-                {
-                    f"Params/{k}": aim.Figure(px.line(x=x_vals, y=list(v.values()), title=k, labels=list(v.keys())))
-                    for k, v in all_param_norms.items()
-                    if v
-                }
-            )
+            self.log({f"Params/{k}": aim.Figure(px.line(x=x_vals, y=list(v.values()), title=k, labels=list(v.keys()))) for k, v in all_param_norms.items() if v})
 
         self.run.report_successful_finish(block=True)
 
@@ -231,11 +223,7 @@ class AimLogger(DummyLogger):
     def log_img(self, name, img, step=None, caption="", pil_mode="RGB", format="png"):
         """Log an image to wandb."""
         self.log(
-            {
-                name: aim.Image(
-                    Image.fromarray(np.asarray(img, dtype=np.uint8), mode=pil_mode), caption=caption, format=format
-                )
-            },
+            {name: aim.Image(Image.fromarray(np.asarray(img, dtype=np.uint8), mode=pil_mode), caption=caption, format=format)},
             step=step,
         )
 
@@ -296,8 +284,8 @@ class WandbLogger(DummyLogger):
 def with_logger(
     func: Callable,
     hparams: dict,
-    logger_name: str,
     project_name: str,
+    logger_name: str = "aim",
     aim_repo: str = None,
     run_name="",
     hparams_type=None,

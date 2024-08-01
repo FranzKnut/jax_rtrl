@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 from PIL import Image
 
-DATA_FOLDER = "data/hebi/data_5"
+DATA_FOLDER = "data/first"
 
 
 def make_video(frames, fps=30, output_file="video.mp4"):
@@ -15,7 +15,7 @@ def make_video(frames, fps=30, output_file="video.mp4"):
     out.release()
 
 
-def make_gif(frames, fps=30, output_file="artifacts/videos/hebi5.gif", scale=0.5, downsample=5):
+def make_gif(frames, fps=30, output_file="artifacts/videos/video.gif", scale=0.5, downsample=5):
     new_shape = [int(s * scale) for s in reversed(frames.shape[1:-1])]
 
     def transform(img):
@@ -25,6 +25,7 @@ def make_gif(frames, fps=30, output_file="artifacts/videos/hebi5.gif", scale=0.5
     imgs = [transform(img) for img in frames]
     # duration is the number of milliseconds between frames; this is 40 frames per second
     print("Writing Video to", output_file)
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
     imgs[0].save(output_file, save_all=True, append_images=imgs[1::downsample], duration=1000 // (fps * downsample), loop=0)
 
 
@@ -39,4 +40,4 @@ for f in os.listdir(DATA_FOLDER):
 frames = [frames[k] for k in sorted(frames)]
 frames = np.concatenate(frames).astype(np.uint8)
 # make_video(frames)
-make_gif(frames)
+make_gif(frames, output_file=f"artifacts/videos/{os.path.basename(DATA_FOLDER)}.gif")
