@@ -41,7 +41,7 @@ def get_image_coordinates(h, w, normalise):
         y_range = (y_range / (h - 1)) * 2 - 1
     image_x = jnp.tile(x_range[None, :], (h, 1))
     image_y = jnp.tile(y_range[:, None], (1, w))
-    return image_x, image_y
+    return jnp.stack((image_x, image_y), axis=-1)
 
 
 class SpatialSoftArgmax(nn.Module):
@@ -56,23 +56,28 @@ class SpatialSoftArgmax(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Apply Spatial SoftArgmax operation on the input batch of images x.
-        :param x: batch of images, of size (H, W, C)
+        :param x: batch of images, of size (N, H, W, C)
         :return: Spatial features (one point per channel), of size (C, 2)
         """
         h, w, c = x.shape[-3:]
-        _temperature = self.param("temperature", lambda _: jnp.ones(1)) if self.temperature is None else jnp.array([self.temperature])
-        spatial_softmax_per_map = softmax(x.reshape(h * w, -1).transpose() / _temperature, axis=0)
+        # Reshape to (N, C, H, W)
+        x = x.transpose((0, 3, 1, 2))
+        _temperature = (
+            self.param("temperature", lambda _: jnp.ones(1))
+            if self.temperature is None
+            else jnp.array([self.temperature])
+        )
+        spatial_softmax_per_map = softmax(x.reshape(-1, h * w) / _temperature, axis=0)
         spatial_softmax = spatial_softmax_per_map.reshape(-1, c, h, w).squeeze()
+        spatial_softmax = spatial_softmax.transpose((0, 2, 3, 1))
 
-        # calculate image coordinate maps
-        image_x, image_y = get_image_coordinates(h, w, normalise=self.normalise)
-        # size (H, W, 2)
-        image_coordinates = jnp.stack((image_x, image_y), axis=-1)
+        # calculate image coordinate maps, size (H, W, 2)
+        image_coordinates = get_image_coordinates(h, w, normalise=self.normalise)
 
         # multiply coordinates by the softmax and sum over height and width, like in [2]
         expanded_spatial_softmax = spatial_softmax[..., None]
-        image_coordinates = image_coordinates[None, None, ...]
-        out = jnp.sum(expanded_spatial_softmax * image_coordinates, axis=(2, 3))
+        image_coordinates = image_coordinates[:, :, None]
+        out = jnp.sum(expanded_spatial_softmax * image_coordinates, axis=(1, 2))
         return out
 
 
@@ -114,7 +119,7 @@ class LinearDecoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Dense(features=int(np.prod(self.image_output_size)))(x)
-        x = x.reshape(*[int(n) for n in self.image_output_size])
+        x = x.reshape(-1,*[int(n) for n in self.image_output_size])
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
