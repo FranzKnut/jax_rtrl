@@ -31,6 +31,7 @@ class DSAEConfig:
     channels: tuple = (64, 32, 16)
     temperature: float = None
     normalise: bool = True
+    g_slow_factor: float = 1e-3
 
 
 def get_image_coordinates(h, w, normalise):
@@ -95,8 +96,8 @@ class DSAE_Encoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool = True):
-        x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7))(x)
-        x = nn.max_pool(x, (3, 3))
+        x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7), strides=(2, 2))(x)
+        # x = nn.max_pool(x, (3, 3))
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
@@ -119,7 +120,7 @@ class LinearDecoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Dense(features=int(np.prod(self.image_output_size)))(x)
-        x = x.reshape(-1,*[int(n) for n in self.image_output_size])
+        x = x.reshape(-1, *[int(n) for n in self.image_output_size])
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
@@ -153,21 +154,21 @@ class DeepSpatialAutoencoder(nn.Module):
         return self.decoder(spatial_features.reshape(n, c * 2)), spatial_features
 
 
-def dsae_loss(reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None):
-    """Compute Loss for deep spatial autoencoder.
-    For the start of a trajectory, where ft_minus1 = ft, simply pass in ft_minus1=ft, ft=ft
-    For the end of a trajectory, where ft_plus1 = ft, simply pass in ft=ft, ft_plus1=ft
-    :param reconstructed: Reconstructed, grayscale image
-    :param target: Target, grayscale image
-    :param ft_minus1: Features produced by the encoder for the previous image in the trajectory to the target one
-    :param ft: Features produced by the encoder for the target image
-    :param ft_plus1: Features produced by the encoder for the next image in the trajectory to the target one
-    :return: A tuple (mse, g_slow) where mse = the MSE reconstruction loss and g_slow = g_slow contribution term ([1])
-    """
-    mse_loss = jnp.mean((reconstructed - target) ** 2)
-    g_slow_contrib = 0.0
-    loss_info = {"reconstruction_loss": mse_loss}
-    if ft_minus1 is not None:
-        g_slow_contrib = jnp.mean((ft_plus1 - ft - (ft - ft_minus1)) ** 2)
-        loss_info["g_slow"] = g_slow_contrib
-    return mse_loss + g_slow_contrib, loss_info
+    def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None):
+        """Compute Loss for deep spatial autoencoder.
+        For the start of a trajectory, where ft_minus1 = ft, simply pass in ft_minus1=ft, ft=ft
+        For the end of a trajectory, where ft_plus1 = ft, simply pass in ft=ft, ft_plus1=ft
+        :param reconstructed: Reconstructed, grayscale image
+        :param target: Target, grayscale image
+        :param ft_minus1: Features produced by the encoder for the previous image in the trajectory to the target one
+        :param ft: Features produced by the encoder for the target image
+        :param ft_plus1: Features produced by the encoder for the next image in the trajectory to the target one
+        :return: A tuple (mse, g_slow) where mse = the MSE reconstruction loss and g_slow = g_slow contribution term ([1])
+        """
+        mse_loss = jnp.mean((reconstructed - target) ** 2)
+        g_slow_contrib = 0.0
+        loss_info = {"reconstruction_loss": mse_loss}
+        if ft_minus1 is not None:
+            g_slow_contrib = jnp.mean((ft_plus1 - ft - (ft - ft_minus1)) ** 2)
+            loss_info["g_slow"] = g_slow_contrib * self.config.g_slow_factor
+        return mse_loss + g_slow_contrib, loss_info
