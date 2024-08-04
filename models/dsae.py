@@ -15,6 +15,8 @@ from flax import linen as nn
 from jax.nn import softmax
 import numpy as np
 
+from .neural_networks import ConvDecoder
+
 
 @dataclass
 class DSAEConfig:
@@ -138,7 +140,7 @@ class DeepSpatialAutoencoder(nn.Module):
             temperature=self.config.temperature,
             normalise=self.config.normalise,
         )
-        self.decoder = LinearDecoder(image_output_size=self.image_output_size, normalise=self.config.normalise)
+        self.decoder = ConvDecoder(image_output_size=self.image_output_size, normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
@@ -153,7 +155,6 @@ class DeepSpatialAutoencoder(nn.Module):
         n, c, _2 = spatial_features.shape
         return self.decoder(spatial_features.reshape(n, c * 2)), spatial_features
 
-
     def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None):
         """Compute Loss for deep spatial autoencoder.
         For the start of a trajectory, where ft_minus1 = ft, simply pass in ft_minus1=ft, ft=ft
@@ -165,7 +166,7 @@ class DeepSpatialAutoencoder(nn.Module):
         :param ft_plus1: Features produced by the encoder for the next image in the trajectory to the target one
         :return: A tuple (mse, g_slow) where mse = the MSE reconstruction loss and g_slow = g_slow contribution term ([1])
         """
-        mse_loss = jnp.mean((reconstructed - target) ** 2)
+        mse_loss = jnp.mean((target - reconstructed) ** 2)
         g_slow_contrib = 0.0
         loss_info = {"reconstruction_loss": mse_loss}
         if ft_minus1 is not None:
