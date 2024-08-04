@@ -34,7 +34,7 @@ class DSAEConfig:
     channels: tuple = (64, 32, 16)
     temperature: float = None
     normalise: bool = True
-    g_slow_factor: float = 1e-3
+    g_slow_factor: float = 1e-2
 
 
 def get_image_coordinates(h, w, normalise):
@@ -71,7 +71,7 @@ class SpatialSoftArgmax(nn.Module):
             if self.temperature is None
             else jnp.array([self.temperature])
         )
-        spatial_softmax_per_map = softmax(x.reshape(-1, h * w) / _temperature, axis=0)
+        spatial_softmax_per_map = softmax(x.reshape(-1, h * w) / _temperature, axis=-1)
         spatial_softmax = spatial_softmax_per_map.reshape(-1, c, h, w).squeeze()
         spatial_softmax = spatial_softmax.transpose((0, 2, 3, 1))
 
@@ -100,7 +100,6 @@ class DSAE_Encoder(nn.Module):
     @nn.compact
     def __call__(self, x, train: bool = True):
         x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7), strides=(2, 2))(x)
-        # x = nn.max_pool(x, (3, 3))
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
