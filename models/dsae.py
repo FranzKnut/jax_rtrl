@@ -10,6 +10,7 @@ References:
 """
 
 from dataclasses import dataclass, field
+import jax
 import jax.numpy as jnp
 from flax import linen as nn
 from jax.nn import softmax
@@ -153,7 +154,7 @@ class DeepSpatialAutoencoder(nn.Module):
     def __call__(self, x, train: bool = True):
         spatial_features = self.encoder(x, train=train)
         n, c, _2 = spatial_features.shape
-        return self.decoder(spatial_features.reshape(n, c * 2)), spatial_features
+        return jax.vmap(self.decoder)(spatial_features.reshape(n, c * 2)), spatial_features
 
     def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None):
         """Compute Loss for deep spatial autoencoder.
