@@ -116,13 +116,13 @@ class LinearDecoder(nn.Module):
     :param normalise: True if output in range [-1, 1], False for range [0, 1]
     """
 
-    image_output_size: tuple
+    img_shape: tuple
     normalise: bool = True
 
     @nn.compact
     def __call__(self, x):
-        x = nn.Dense(features=int(np.prod(self.image_output_size)))(x)
-        x = x.reshape(-1, *[int(n) for n in self.image_output_size])
+        x = nn.Dense(features=int(np.prod(self.img_shape)))(x)
+        x = x.reshape(-1, *[int(n) for n in self.img_shape])
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
@@ -140,7 +140,7 @@ class DeepSpatialAutoencoder(nn.Module):
             temperature=self.config.temperature,
             normalise=self.config.normalise,
         )
-        self.decoder = ConvDecoder(image_output_size=self.image_output_size, normalise=self.config.normalise)
+        self.decoder = ConvDecoder(img_shape=self.image_output_size)  # normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
