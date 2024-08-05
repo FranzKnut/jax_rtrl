@@ -100,7 +100,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
 
     def save_model(_params):
-        return checkpointer.save(path, _params, force=True) if save_model else None
+        return checkpointer.save(path, _params, force=True)
 
     restored_params = None
     restored_hparams = {}
