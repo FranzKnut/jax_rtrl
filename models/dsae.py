@@ -10,15 +10,12 @@ References:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
 from jax.nn import softmax
 import numpy as np
-
-from .neural_networks import ConvDecoder
-
 
 @dataclass
 class DSAEConfig:
@@ -35,7 +32,7 @@ class DSAEConfig:
     channels: List[int] = field(default_factory=lambda: (8, 16, 32))
     temperature: float = None
     normalise: bool = True
-    g_slow_factor: float = 1e-2
+    g_slow_factor: float = 1
 
 
 def get_image_coordinates(h, w, normalise):
