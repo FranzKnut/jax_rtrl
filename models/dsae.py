@@ -10,6 +10,7 @@ References:
 """
 
 from dataclasses import dataclass, field
+from typing import List, Tuple
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
@@ -31,7 +32,7 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: tuple[int] = (8, 16, 32)
+    channels: List[int] = field(default_factory=lambda: (8, 16, 32))
     temperature: float = None
     normalise: bool = True
     g_slow_factor: float = 1e-2
@@ -122,7 +123,7 @@ class LinearDecoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Dense(features=int(np.prod(self.img_shape)))(x)
-        x = x.reshape(-1, *[int(n) for n in self.img_shape])
+        x = x.reshape(*[int(n) for n in self.img_shape])
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
@@ -140,7 +141,7 @@ class DeepSpatialAutoencoder(nn.Module):
             temperature=self.config.temperature,
             normalise=self.config.normalise,
         )
-        self.decoder = ConvDecoder(img_shape=self.image_output_size)  # normalise=self.config.normalise)
+        self.decoder = LinearDecoder(img_shape=self.image_output_size, normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
@@ -155,7 +156,7 @@ class DeepSpatialAutoencoder(nn.Module):
         n, c, _2 = spatial_features.shape
         return jax.vmap(self.decoder)(spatial_features.reshape(n, c * 2)), spatial_features
 
-    def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None):
+    def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None, pixel_weights=None):
         """Compute Loss for deep spatial autoencoder.
         For the start of a trajectory, where ft_minus1 = ft, simply pass in ft_minus1=ft, ft=ft
         For the end of a trajectory, where ft_plus1 = ft, simply pass in ft=ft, ft_plus1=ft
@@ -164,9 +165,13 @@ class DeepSpatialAutoencoder(nn.Module):
         :param ft_minus1: Features produced by the encoder for the previous image in the trajectory to the target one
         :param ft: Features produced by the encoder for the target image
         :param ft_plus1: Features produced by the encoder for the next image in the trajectory to the target one
+        :param pixel_weights: An array with same dimensions as the image. For weighting each pixel differently in the loss
         :return: A tuple (mse, g_slow) where mse = the MSE reconstruction loss and g_slow = g_slow contribution term ([1])
         """
-        mse_loss = jnp.mean((target - reconstructed) ** 2)
+        pixel_diff = target - reconstructed
+        if pixel_weights is not None:
+            pixel_diff *= pixel_weights
+        mse_loss = jnp.mean(pixel_diff**2)
         g_slow_contrib = 0.0
         loss_info = {"reconstruction_loss": mse_loss}
         if ft_minus1 is not None:
