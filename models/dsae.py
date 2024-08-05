@@ -31,7 +31,7 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: tuple = (64, 32, 16)
+    channels: tuple[int] = (8, 16, 32)
     temperature: float = None
     normalise: bool = True
     g_slow_factor: float = 1e-2
@@ -99,7 +99,7 @@ class DSAE_Encoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool = True):
-        x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7), strides=(2, 2))(x)
+        x = nn.Conv(features=self.out_channels[0], kernel_size=(5, 5), strides=(2, 2))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
