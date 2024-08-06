@@ -98,9 +98,10 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     hparams_file_path = os.path.join(path, "hparams.json")
 
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
-        return checkpointer.save(path, _params, force=True)
+        return checkpointer.save(orbax_path, _params, force=True)
 
     restored_params = None
     restored_hparams = {}
@@ -112,7 +113,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
         if fresh:
             print("Overwriting existing checkpoint")
         else:
-            restored_params = checkpointer.restore(path)
+            restored_params = checkpointer.restore(orbax_path)
             print("Restored model from checkpoint")
             if os.path.exists(hparams_file_path):
                 with open(hparams_file_path) as f:

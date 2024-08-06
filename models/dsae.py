@@ -30,7 +30,7 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: List[int] = field(default_factory=lambda: (64, 32, 32))
+    channels: List[int] = field(default_factory=lambda: (64, 32, 16))
     temperature: float = None
     normalise: bool = True
     g_slow_factor: float = 1
