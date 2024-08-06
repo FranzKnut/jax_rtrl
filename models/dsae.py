@@ -127,7 +127,7 @@ class LinearDecoder(nn.Module):
         return x
 
 
-class ConvDecoder(nn.Module):
+class SimpleConvDecoder(nn.Module):
     """2D-Convolutional Decoder.
 
     https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
@@ -164,7 +164,7 @@ class DeepSpatialAutoencoder(nn.Module):
             temperature=self.config.temperature,
             normalise=self.config.normalise,
         )
-        self.decoder = LinearDecoder(img_shape=self.image_output_size, normalise=self.config.normalise)
+        self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
