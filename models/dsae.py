@@ -30,7 +30,7 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: List[int] = field(default_factory=lambda: (8, 16, 32))
+    channels: List[int] = field(default_factory=lambda: (64, 32, 32))
     temperature: float = None
     normalise: bool = True
     g_slow_factor: float = 1
@@ -59,20 +59,20 @@ class SpatialSoftArgmax(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Apply Spatial SoftArgmax operation on the input batch of images x.
-        :param x: batch of images, of size (N, H, W, C)
+        :param x: batch of images, of size (H, W, C)
         :return: Spatial features (one point per channel), of size (C, 2)
         """
         h, w, c = x.shape[-3:]
-        # Reshape to (N, C, H, W)
-        x = x.transpose((0, 3, 1, 2))
+        # Reshape to (C, H, W)
+        x = x.transpose((2, 0, 1))
         _temperature = (
             self.param("temperature", lambda _: jnp.ones(1))
             if self.temperature is None
             else jnp.array([self.temperature])
         )
-        spatial_softmax_per_map = softmax(x.reshape(-1, h * w) / _temperature, axis=-1)
-        spatial_softmax = spatial_softmax_per_map.reshape(-1, c, h, w).squeeze()
-        spatial_softmax = spatial_softmax.transpose((0, 2, 3, 1))
+        spatial_softmax_per_map = softmax(x.reshape(c, h * w) / _temperature, axis=-1)
+        spatial_softmax = spatial_softmax_per_map.reshape(c, h, w).squeeze()
+        spatial_softmax = spatial_softmax.transpose((1, 2, 0))
 
         # calculate image coordinate maps, size (H, W, 2)
         image_coordinates = get_image_coordinates(h, w, normalise=self.normalise)
@@ -80,7 +80,7 @@ class SpatialSoftArgmax(nn.Module):
         # multiply coordinates by the softmax and sum over height and width, like in [2]
         expanded_spatial_softmax = spatial_softmax[..., None]
         image_coordinates = image_coordinates[:, :, None]
-        out = jnp.sum(expanded_spatial_softmax * image_coordinates, axis=(1, 2))
+        out = jnp.sum(expanded_spatial_softmax * image_coordinates, axis=(0, 1))
         return out
 
 
@@ -176,8 +176,8 @@ class DeepSpatialAutoencoder(nn.Module):
 
     def __call__(self, x, train: bool = True):
         spatial_features = self.encoder(x, train=train)
-        n, c, _2 = spatial_features.shape
-        return jax.vmap(self.decoder)(spatial_features.reshape(n, c * 2)), spatial_features
+        c, _2 = spatial_features.shape
+        return self.decoder(spatial_features.flatten()), spatial_features
 
     def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None, pixel_weights=None):
         """Compute Loss for deep spatial autoencoder.
