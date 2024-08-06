@@ -63,11 +63,7 @@ class SpatialSoftArgmax(nn.Module):
         h, w, c = x.shape[-3:]
         # Reshape to (C, H, W)
         x = x.transpose((2, 0, 1))
-        _temperature = (
-            self.param("temperature", lambda _: jnp.ones(1))
-            if self.temperature is None
-            else jnp.array([self.temperature])
-        )
+        _temperature = self.param("temperature", lambda _: jnp.ones(1)) if self.temperature is None else jnp.array([self.temperature])
         spatial_softmax_per_map = softmax(x.reshape(c, h * w) / _temperature, axis=-1)
         spatial_softmax = spatial_softmax_per_map.reshape(c, h, w).squeeze()
         spatial_softmax = spatial_softmax.transpose((1, 2, 0))
@@ -96,7 +92,8 @@ class DSAE_Encoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool = True):
-        x = nn.Conv(features=self.out_channels[0], kernel_size=(5, 5), strides=(2, 2))(x)
+        x = nn.Conv(features=self.out_channels[0], kernel_size=(5, 5))(x)
+        x = nn.max_pool(x, window_shape=(2, 2))
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
@@ -119,7 +116,7 @@ class LinearDecoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Dense(features=int(np.prod(self.img_shape)))(x)
-        x = x.reshape(*[int(n) for n in self.img_shape])
+        x = x.reshape(*[int(n) for n in self.img_shape[:2]])
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
@@ -139,12 +136,12 @@ class SimpleConvDecoder(nn.Module):
         """Decode Image from latent vector."""
         xy_shape = np.array(self.img_shape[:2]) / 2  # initial img shape depends on number of layers
         if any(xy_shape != xy_shape.astype(int)):
-            raise ValueError("The img x- and y-shapes must be divisible by 8.")
+            raise ValueError("The img x- and y-shapes must be divisible by 2.")
 
         x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
         x = nn.relu(x)
         x = x.reshape(*[int(n) for n in xy_shape], -1)
-        x = nn.ConvTranspose(features=self.c_hid // 2, kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
@@ -157,11 +154,7 @@ class DeepSpatialAutoencoder(nn.Module):
     config: DSAEConfig = field(default_factory=DSAEConfig)
 
     def setup(self):
-        self.encoder = DSAE_Encoder(
-            out_channels=self.config.channels,
-            temperature=self.config.temperature,
-            normalise=self.config.normalise,
-        )
+        self.encoder = DSAE_Encoder(out_channels=self.config.channels, temperature=self.config.temperature, normalise=self.config.normalise)
         self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):

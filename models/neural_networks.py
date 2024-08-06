@@ -297,15 +297,15 @@ class ConvDecoder(nn.Module):
 
 @dataclass
 class AutoencoderParams:
-    latent_size: int = 32
-    c_hid: int = 8
+    latent_size: int = 128
+    c_hid: int = 32
 
 
 class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
 
     img_shape: tuple[int]
-    config: AutoencoderParams = field(default_factory=AutoencoderParams())
+    config: AutoencoderParams = field(default_factory=AutoencoderParams)
 
     def setup(self) -> None:
         """Initialize submodules."""
