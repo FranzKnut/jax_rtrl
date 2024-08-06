@@ -92,8 +92,8 @@ class DSAE_Encoder(nn.Module):
 
     @nn.compact
     def __call__(self, x, train: bool = True):
-        x = nn.Conv(features=self.out_channels[0], kernel_size=(5, 5))(x)
-        x = nn.max_pool(x, window_shape=(2, 2))
+        x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7))(x)
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2,2))
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
