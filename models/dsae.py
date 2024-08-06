@@ -10,8 +10,6 @@ References:
 """
 
 from dataclasses import dataclass, field
-from typing import List
-import jax
 import jax.numpy as jnp
 from flax import linen as nn
 from jax.nn import softmax
@@ -30,8 +28,8 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: List[int] = field(default_factory=lambda: (64, 32, 16))
-    temperature: float = None
+    channels: list[int] = field(default_factory=lambda: [64, 32, 16])
+    temperature: float | None = None
     normalise: bool = True
     g_slow_factor: float = 1
 
