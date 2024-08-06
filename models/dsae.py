@@ -17,6 +17,7 @@ from flax import linen as nn
 from jax.nn import softmax
 import numpy as np
 
+
 @dataclass
 class DSAEConfig:
     """Default parameters are the ones used in [1].
@@ -121,6 +122,31 @@ class LinearDecoder(nn.Module):
     def __call__(self, x):
         x = nn.Dense(features=int(np.prod(self.img_shape)))(x)
         x = x.reshape(*[int(n) for n in self.img_shape])
+        activ = nn.tanh if self.normalise else nn.sigmoid
+        x = activ(x)
+        return x
+
+
+class ConvDecoder(nn.Module):
+    """2D-Convolutional Decoder.
+
+    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
+
+    img_shape: tuple[int]
+    c_hid: int = 8
+    normalise: bool = True
+
+    @nn.compact
+    def __call__(self, x):
+        """Decode Image from latent vector."""
+        xy_shape = np.array(self.img_shape[:2]) / 2  # initial img shape depends on number of layers
+        if any(xy_shape != xy_shape.astype(int)):
+            raise ValueError("The img x- and y-shapes must be divisible by 8.")
+
+        x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
+        x = nn.relu(x)
+        x = x.reshape(*[int(n) for n in xy_shape], -1)
+        x = nn.ConvTranspose(features=self.c_hid // 2, kernel_size=(3, 3), strides=2)(x)
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
