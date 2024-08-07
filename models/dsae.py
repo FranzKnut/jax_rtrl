@@ -36,6 +36,7 @@ class DSAEConfig:
     g_slow_factor: float = 0
     c_hid_dec: int = 16
     norm: str | None = None
+    decoder: str = "SimpleConv"
 
 
 def get_image_coordinates(h, w, normalise):
@@ -126,13 +127,13 @@ class LinearDecoder(nn.Module):
     """
 
     img_shape: tuple
-    normalise: bool = True
+    tanh_output: bool = True
 
     @nn.compact
     def __call__(self, x):
         x = nn.Dense(features=int(np.prod(self.img_shape)))(x)
         x = x.reshape(*[int(n) for n in self.img_shape[:2]])
-        activ = nn.tanh if self.normalise else nn.sigmoid
+        activ = nn.tanh if self.tanh_output else nn.sigmoid
         x = activ(x)
         return x
 
@@ -156,9 +157,9 @@ class SimpleConvDecoder(nn.Module):
         x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid * 2)(x)
         x = nn.relu(x)
         x = x.reshape(*[int(n) for n in xy_shape], -1)
-        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(5, 5), strides=2)(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(5, 5), strides=2)(x)
+        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
         activ = nn.tanh if self.tanh_output else nn.sigmoid
         x = activ(x)
         return x
@@ -172,7 +173,12 @@ class DeepSpatialAutoencoder(nn.Module):
 
     def setup(self):
         self.encoder = DSAE_Encoder(out_channels=self.config.channels, temperature=self.config.temperature, tanh_output=self.config.tanh_output, norm=self.config.norm)
-        self.decoder = ConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output)
+        if self.config.decoder == "SimpleConv":
+            self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
+        elif self.config.decoder == "Linear":
+            self.decoder = LinearDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output)
+        elif self.config.decoder == "Conv":
+            self.decoder = ConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
