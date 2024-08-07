@@ -28,10 +28,11 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: list[int] = field(default_factory=lambda: [64, 32, 32, 16])
+    channels: list[int] = field(default_factory=lambda: [64, 32, 32, 32, 16])
     temperature: float | None = None
     normalise: bool = True
     g_slow_factor: float = 1
+    c_hid_dec: int = 16
 
 
 def get_image_coordinates(h, w, normalise):
@@ -97,13 +98,18 @@ class DSAE_Encoder(nn.Module):
     @nn.compact
     def __call__(self, x, train: bool = True):
         x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7))(x)
-        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
-        x = nn.Conv(features=self.out_channels[2], kernel_size=(3, 3))(x)
+        x = nn.Conv(features=self.out_channels[2], kernel_size=(5, 5))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+
         x = nn.Conv(features=self.out_channels[3], kernel_size=(3, 3))(x)
+        x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
+        x = nn.Conv(features=self.out_channels[4], kernel_size=(3, 3))(x)
         x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.normalise)(x)
         return out
@@ -134,7 +140,7 @@ class SimpleConvDecoder(nn.Module):
     https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
 
     img_shape: tuple[int]
-    c_hid: int = 8
+    c_hid: int = 16
     normalise: bool = True
 
     @nn.compact
@@ -147,9 +153,9 @@ class SimpleConvDecoder(nn.Module):
         x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid * 2)(x)
         x = nn.relu(x)
         x = x.reshape(*[int(n) for n in xy_shape], -1)
-        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(7, 7), strides=2)(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(5, 5), strides=2)(x)
+        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
         activ = nn.tanh if self.normalise else nn.sigmoid
         x = activ(x)
         return x
