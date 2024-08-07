@@ -32,9 +32,9 @@ class DSAEConfig:
 
     channels: list[int] = field(default_factory=lambda: [32, 32, 64, 64])
     temperature: float | None = None
-    normalise: bool = True
+    tanh_output: bool = True
     g_slow_factor: float = 0
-    c_hid_dec: int = 32
+    c_hid_dec: int = 16
     norm: str | None = None
 
 
@@ -67,11 +67,7 @@ class SpatialSoftArgmax(nn.Module):
         h, w, c = x.shape[-3:]
         # Reshape to (C, H, W)
         x = x.transpose((2, 0, 1))
-        _temperature = (
-            self.param("temperature", lambda _: jnp.ones(1))
-            if self.temperature is None
-            else jnp.array([self.temperature])
-        )
+        _temperature = self.param("temperature", lambda _: jnp.ones(1)) if self.temperature is None else jnp.array([self.temperature])
         spatial_softmax_per_map = softmax(x.reshape(c, h * w) / _temperature, axis=-1)
         spatial_softmax = spatial_softmax_per_map.reshape(c, h, w).squeeze()
         spatial_softmax = spatial_softmax.transpose((1, 2, 0))
@@ -96,13 +92,13 @@ class DSAE_Encoder(nn.Module):
 
     out_channels: tuple
     temperature: float = None
-    normalise: bool = False
+    tanh_output: bool = False
     norm: str | None = None
 
     @nn.compact
     def __call__(self, x, train: bool = True):
         def norm(x):
-            if self.config.norm == "batch":
+            if self.norm == "batch":
                 x = nn.BatchNorm()(x, use_running_average=not train)
             return x
 
@@ -118,7 +114,7 @@ class DSAE_Encoder(nn.Module):
 
         x = nn.Conv(features=self.out_channels[3], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
-        out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.normalise)(x)
+        out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
         return out
 
 
@@ -175,10 +171,8 @@ class DeepSpatialAutoencoder(nn.Module):
     config: DSAEConfig = field(default_factory=DSAEConfig)
 
     def setup(self):
-        self.encoder = DSAE_Encoder(
-            out_channels=self.config.channels, temperature=self.config.temperature, normalise=self.config.normalise
-        )
-        self.decoder = ConvDecoder(img_shape=self.image_output_size, normalise=self.config.normalise)
+        self.encoder = DSAE_Encoder(out_channels=self.config.channels, temperature=self.config.temperature, tanh_output=self.config.tanh_output, norm=self.config.norm)
+        self.decoder = ConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
