@@ -162,7 +162,7 @@ class RNNEnsemble(nn.RNNCellBase):
     kwargs: dict = field(default_factory=dict)
 
     @nn.compact
-    def __call__(self, h, x, training=False, rng=None):  # noqa
+    def __call__(self, h: jax.Array | None = None, x: jax.Array = None, training=False, rng=None):  # noqa
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -182,6 +182,8 @@ class RNNEnsemble(nn.RNNCellBase):
         _type_
             _description_
         """
+        if h is None:
+            h = self.initialize_carry(jax.random.key(0), x.shape)
         outs = []
         carry_out = []
         for i in range(self.num_modules):
@@ -282,7 +284,7 @@ class ConvDecoder(nn.Module):
         """Decode Image from latent vector."""
         xy_shape = np.array(self.img_shape[:2]) / (2 * 2)  # initial img shape depends on number of layers
         if any(xy_shape != xy_shape.astype(int)):
-            raise ValueError("The img x- and y-shapes must be divisible by 8.")
+            raise ValueError("The img x- and y-shapes must be divisible by 4.")
 
         x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
         x = nn.relu(x)
@@ -440,9 +442,7 @@ class FAAffine(nn.Module):
             _x, _a = res
             grads = {"params": {"a": s(_x) * y_bar, "b": y_bar}}
             x_bar = jnp.zeros_like(_x)
-            x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(
-                y_bar if not self.f_align else y_bar * _a
-            )
+            x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(y_bar if not self.f_align else y_bar * _a)
             return (grads, x_bar, jnp.zeros_like(a), jnp.zeros_like(b))
 
         fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)

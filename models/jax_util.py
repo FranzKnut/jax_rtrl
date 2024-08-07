@@ -35,6 +35,7 @@ def sigmoid_between(x, lower, upper):
     return (upper - lower) * jax.nn.sigmoid(x) + lower
 
 
+@jax.jit
 def preprocess_img(img):
     """Make grayscale from RGB Image."""
     import dm_pix as pix
