@@ -15,6 +15,8 @@ from flax import linen as nn
 from jax.nn import softmax
 import numpy as np
 
+from jax_rtrl.models.neural_networks import ConvDecoder
+
 
 @dataclass
 class DSAEConfig:
@@ -28,11 +30,12 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: list[int] = field(default_factory=lambda: [64, 32, 32, 32, 16])
+    channels: list[int] = field(default_factory=lambda: [32, 32, 64, 64])
     temperature: float | None = None
     normalise: bool = True
-    g_slow_factor: float = 1
-    c_hid_dec: int = 16
+    g_slow_factor: float = 0
+    c_hid_dec: int = 32
+    norm: str | None = None
 
 
 def get_image_coordinates(h, w, normalise):
@@ -94,23 +97,27 @@ class DSAE_Encoder(nn.Module):
     out_channels: tuple
     temperature: float = None
     normalise: bool = False
+    norm: str | None = None
 
     @nn.compact
     def __call__(self, x, train: bool = True):
+        def norm(x):
+            if self.config.norm == "batch":
+                x = nn.BatchNorm()(x, use_running_average=not train)
+            return x
+
         x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7))(x)
-        x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
+        x = nn.relu(norm(x))
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
 
         x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
-        x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
-        x = nn.Conv(features=self.out_channels[2], kernel_size=(5, 5))(x)
-        x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
+        x = nn.relu(norm(x))
+        x = nn.Conv(features=self.out_channels[2], kernel_size=(3, 3))(x)
+        x = nn.relu(norm(x))
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
 
         x = nn.Conv(features=self.out_channels[3], kernel_size=(3, 3))(x)
-        x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
-        x = nn.Conv(features=self.out_channels[4], kernel_size=(3, 3))(x)
-        x = nn.relu(nn.BatchNorm()(x, use_running_average=not train))
+        x = nn.relu(norm(x))
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.normalise)(x)
         return out
 
@@ -141,7 +148,7 @@ class SimpleConvDecoder(nn.Module):
 
     img_shape: tuple[int]
     c_hid: int = 16
-    normalise: bool = True
+    tanh_output: bool = True
 
     @nn.compact
     def __call__(self, x):
@@ -153,10 +160,10 @@ class SimpleConvDecoder(nn.Module):
         x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid * 2)(x)
         x = nn.relu(x)
         x = x.reshape(*[int(n) for n in xy_shape], -1)
-        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(7, 7), strides=2)(x)
+        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
-        activ = nn.tanh if self.normalise else nn.sigmoid
+        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(5, 5), strides=2)(x)
+        activ = nn.tanh if self.tanh_output else nn.sigmoid
         x = activ(x)
         return x
 
@@ -171,7 +178,7 @@ class DeepSpatialAutoencoder(nn.Module):
         self.encoder = DSAE_Encoder(
             out_channels=self.config.channels, temperature=self.config.temperature, normalise=self.config.normalise
         )
-        self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, normalise=self.config.normalise)
+        self.decoder = ConvDecoder(img_shape=self.image_output_size, normalise=self.config.normalise)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""

@@ -275,6 +275,7 @@ class ConvDecoder(nn.Module):
 
     img_shape: tuple[int]
     c_hid: int = 8
+    tanh_output: bool = True  # sigmoid otherwise
 
     @nn.compact
     def __call__(self, x):
@@ -291,7 +292,7 @@ class ConvDecoder(nn.Module):
         x = nn.ConvTranspose(features=self.c_hid // 4, kernel_size=(3, 3))(x)
         x = nn.relu(x)
         x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
-        x = nn.tanh(x)
+        x = nn.tanh(x) if self.tanh_output else nn.sigmoid(x)
         return x
 
 
