@@ -30,13 +30,13 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: list[int] = field(default_factory=lambda: [32, 32, 64, 64])
+    channels: list[int] = field(default_factory=lambda: [16, 32, 32, 64, 128])
     temperature: float | None = None
     tanh_output: bool = True
-    g_slow_factor: float = 0
-    c_hid_dec: int = 16
-    norm: str | None = None
-    decoder: str = "SimpleConv"
+    g_slow_factor: float = 1
+    c_hid_dec: int = 32
+    norm: str | None = "batch"
+    decoder: str = "Conv"
 
 
 def get_image_coordinates(h, w, normalise):
@@ -103,17 +103,19 @@ class DSAE_Encoder(nn.Module):
                 x = nn.BatchNorm()(x, use_running_average=not train)
             return x
 
-        x = nn.Conv(features=self.out_channels[0], kernel_size=(7, 7))(x)
+        x = nn.Conv(features=self.out_channels[0], kernel_size=(5, 5))(x)
         x = nn.relu(norm(x))
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
 
-        x = nn.Conv(features=self.out_channels[1], kernel_size=(5, 5))(x)
+        x = nn.Conv(features=self.out_channels[1], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
         x = nn.Conv(features=self.out_channels[2], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
-
+        
         x = nn.Conv(features=self.out_channels[3], kernel_size=(3, 3))(x)
+        x = nn.relu(norm(x))
+        x = nn.Conv(features=self.out_channels[4], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
         return out
