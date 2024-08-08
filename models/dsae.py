@@ -68,7 +68,11 @@ class SpatialSoftArgmax(nn.Module):
         h, w, c = x.shape[-3:]
         # Reshape to (C, H, W)
         x = x.transpose((2, 0, 1))
-        _temperature = self.param("temperature", lambda _: jnp.ones(1)) if self.temperature is None else jnp.array([self.temperature])
+        _temperature = (
+            self.param("temperature", lambda _: jnp.ones(1))
+            if self.temperature is None
+            else jnp.array([self.temperature])
+        )
         spatial_softmax_per_map = softmax(x.reshape(c, h * w) / _temperature, axis=-1)
         spatial_softmax = spatial_softmax_per_map.reshape(c, h, w).squeeze()
         spatial_softmax = spatial_softmax.transpose((1, 2, 0))
@@ -104,15 +108,15 @@ class DSAE_Encoder(nn.Module):
             return x
 
         x = nn.Conv(features=self.out_channels[0], kernel_size=(5, 5))(x)
-        x = nn.relu(norm(x))
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = nn.relu(norm(x))
 
         x = nn.Conv(features=self.out_channels[1], kernel_size=(3, 3))(x)
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
         x = nn.relu(norm(x))
+
         x = nn.Conv(features=self.out_channels[2], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
-        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
-        
         x = nn.Conv(features=self.out_channels[3], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
         x = nn.Conv(features=self.out_channels[4], kernel_size=(3, 3))(x)
@@ -174,13 +178,22 @@ class DeepSpatialAutoencoder(nn.Module):
     config: DSAEConfig = field(default_factory=DSAEConfig)
 
     def setup(self):
-        self.encoder = DSAE_Encoder(out_channels=self.config.channels, temperature=self.config.temperature, tanh_output=self.config.tanh_output, norm=self.config.norm)
+        self.encoder = DSAE_Encoder(
+            out_channels=self.config.channels,
+            temperature=self.config.temperature,
+            tanh_output=self.config.tanh_output,
+            norm=self.config.norm,
+        )
         if self.config.decoder == "SimpleConv":
-            self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
+            self.decoder = SimpleConvDecoder(
+                img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec
+            )
         elif self.config.decoder == "Linear":
             self.decoder = LinearDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output)
         elif self.config.decoder == "Conv":
-            self.decoder = ConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
+            self.decoder = ConvDecoder(
+                img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec
+            )
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
