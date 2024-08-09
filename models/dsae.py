@@ -30,7 +30,7 @@ class DSAEConfig:
     :param normalise: Should spatial features be normalised to [-1, 1]?
     """
 
-    channels: list[int] = field(default_factory=lambda: [16, 32, 32, 64, 128])
+    channels: list[int] = field(default_factory=lambda: [16, 32, 32, 64, 64])
     temperature: float | None = None
     tanh_output: bool = True
     g_slow_factor: float = 1e-2
@@ -124,7 +124,7 @@ class DSAE_Encoder(nn.Module):
         x = nn.Conv(features=self.out_channels[4], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
-        vec_out = nn.tanh(nn.Dense(self.latent_size)(x))
+        vec_out = nn.tanh(nn.Dense(self.latent_size)(x.flatten()))
         return out, vec_out
 
 
