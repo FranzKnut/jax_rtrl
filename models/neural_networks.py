@@ -284,7 +284,7 @@ class ConvDecoder(nn.Module):
         """Decode Image from latent vector."""
         xy_shape = np.array(self.img_shape[:2]) / (2 * 2)  # initial img shape depends on number of layers
         if any(xy_shape != xy_shape.astype(int)):
-            raise ValueError("The img x- and y-shapes must be divisible by 4.")
+            raise ValueError("The img x- and y-shapes must be divisible by number of expanding layers.")
 
         x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
         x = nn.relu(x)
@@ -293,11 +293,11 @@ class ConvDecoder(nn.Module):
         x = nn.relu(x)
         x = nn.ConvTranspose(features=2 * self.c_hid, kernel_size=(3, 3))(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=2 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(features=2 * self.c_hid, kernel_size=(3, 3))(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3))(x)
+        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3))(x)
         x = nn.tanh(x) if self.tanh_output else nn.sigmoid(x)
         return x
 

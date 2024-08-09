@@ -25,7 +25,7 @@ class DSAEConfig:
     latent_size: int = 128
     temperature: float | None = None
     tanh_output: bool = True
-    g_slow_factor: float = 1e-2
+    g_slow_factor: float = 1e-4
     norm: str | None = "batch"
     decoder: str = "Conv"
 
@@ -75,18 +75,13 @@ class SpatialSoftArgmax(nn.Module):
 
 
 class DSAE_Encoder(nn.Module):
-    """Creates a Deep Spatial Autoencoder encoder
-    :param out_channels: Output channels for each of the layers. The last output channel corresponds to half the
-    size of the low-dimensional latent representation.
-    :param temperature: Temperature for spatial soft argmax operation. See SpatialSoftArgmax.
-    :param normalise: Normalisation of spatial features. See SpatialSoftArgmax.
-    """
+    """Creates a Deep Spatial Autoencoder encoder"""
 
     c_hid: int = 32
     temperature: float = None
     tanh_output: bool = False
     norm: str | None = None
-    latent_size: int = 64  # Additional latent size
+    latent_size: int = 64
 
     @nn.compact
     def __call__(self, x, train: bool = True):
@@ -112,6 +107,10 @@ class DSAE_Encoder(nn.Module):
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
         vec_out = nn.tanh(nn.Dense(self.latent_size)(x.flatten()))
         return out, vec_out
+
+    def get_full_latent_size(self):
+        # 2 * for coordinates of spatial + 1 * vector latent
+        return 3 * self.latent_size
 
 
 class LinearDecoder(nn.Module):
