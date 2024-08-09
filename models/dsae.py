@@ -20,22 +20,12 @@ from jax_rtrl.models.neural_networks import ConvDecoder
 
 @dataclass
 class DSAEConfig:
-    """Default parameters are the ones used in [1].
-
-    :param image_output_size: Reconstructed image size
-    :param in_channels: Number of channels of input image
-    :param out_channels: Output channels of each conv layer in the encoder.
-    :param latent_dimension: Input dimension for decoder
-    :param temperature: Temperature parameter, None if it is to be learnt
-    :param normalise: Should spatial features be normalised to [-1, 1]?
-    """
-
-    channels: list[int] = field(default_factory=lambda: [16, 32, 32, 64, 64])
+    c_hid_enc: int = 32
+    c_hid_dec: int = 32
+    latent_size: int = 128
     temperature: float | None = None
     tanh_output: bool = True
     g_slow_factor: float = 1e-2
-    c_hid_dec: int = 32
-    latent_size: int = 128
     norm: str | None = "batch"
     decoder: str = "Conv"
 
@@ -69,11 +59,7 @@ class SpatialSoftArgmax(nn.Module):
         h, w, c = x.shape[-3:]
         # Reshape to (C, H, W)
         x = x.transpose((2, 0, 1))
-        _temperature = (
-            self.param("temperature", lambda _: jnp.ones(1))
-            if self.temperature is None
-            else jnp.array([self.temperature])
-        )
+        _temperature = self.param("temperature", lambda _: jnp.ones(1)) if self.temperature is None else jnp.array([self.temperature])
         spatial_softmax_per_map = softmax(x.reshape(c, h * w) / _temperature, axis=-1)
         spatial_softmax = spatial_softmax_per_map.reshape(c, h, w).squeeze()
         spatial_softmax = spatial_softmax.transpose((1, 2, 0))
@@ -182,22 +168,18 @@ class DeepSpatialAutoencoder(nn.Module):
 
     def setup(self):
         self.encoder = DSAE_Encoder(
-            out_channels=self.config.channels,
+            c_hid=self.config.c_hid_enc,
             temperature=self.config.temperature,
             tanh_output=self.config.tanh_output,
             norm=self.config.norm,
             latent_size=self.config.latent_size,
         )
         if self.config.decoder == "SimpleConv":
-            self.decoder = SimpleConvDecoder(
-                img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec
-            )
+            self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
         elif self.config.decoder == "Linear":
             self.decoder = LinearDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output)
         elif self.config.decoder == "Conv":
-            self.decoder = ConvDecoder(
-                img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec
-            )
+            self.decoder = ConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
 
     def encode(self, x, train: bool = True):
         """Encode given Image."""
