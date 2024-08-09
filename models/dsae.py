@@ -96,11 +96,11 @@ class DSAE_Encoder(nn.Module):
     :param normalise: Normalisation of spatial features. See SpatialSoftArgmax.
     """
 
-    out_channels: tuple
+    c_hid: int = 32
     temperature: float = None
     tanh_output: bool = False
     norm: str | None = None
-    latent_size: int = 128  # Additional latent size
+    latent_size: int = 64  # Additional latent size
 
     @nn.compact
     def __call__(self, x, train: bool = True):
@@ -109,20 +109,20 @@ class DSAE_Encoder(nn.Module):
                 x = nn.BatchNorm()(x, use_running_average=not train)
             return x
 
-        x = nn.Conv(features=self.out_channels[0], kernel_size=(5, 5))(x)
+        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
-        x = nn.relu(norm(x))
-
-        x = nn.Conv(features=self.out_channels[1], kernel_size=(3, 3))(x)
+        x = nn.gelu(norm(x))
+        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
+        x = nn.gelu(norm(x))
+        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
-        x = nn.relu(norm(x))
-
-        x = nn.Conv(features=self.out_channels[2], kernel_size=(3, 3))(x)
-        x = nn.relu(norm(x))
-        x = nn.Conv(features=self.out_channels[3], kernel_size=(3, 3))(x)
-        x = nn.relu(norm(x))
-        x = nn.Conv(features=self.out_channels[4], kernel_size=(3, 3))(x)
-        x = nn.relu(norm(x))
+        x = nn.gelu(norm(x))
+        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
+        x = nn.gelu(norm(x))
+        x = nn.Conv(features=4 * self.c_hid, kernel_size=(3, 3))(x)
+        x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
+        x = nn.gelu(norm(x))
+        x = nn.Conv(features=self.latent_size, kernel_size=(3, 3))(x)
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
         vec_out = nn.tanh(nn.Dense(self.latent_size)(x.flatten()))
         return out, vec_out

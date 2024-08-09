@@ -19,7 +19,7 @@ class OptimizerConfig:
         multi_step (int): number of steps to accumulate.
     """
 
-    opt_name: str = "sgd"
+    opt_name: str = "adam"
     learning_rate: float = 1e-3
     kwargs: dict = field(default_factory=dict, hash=False)
     decay_type: str | None = None
