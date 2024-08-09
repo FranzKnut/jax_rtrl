@@ -20,9 +20,9 @@ from jax_rtrl.models.neural_networks import ConvDecoder
 
 @dataclass
 class DSAEConfig:
-    c_hid_enc: int = 32
-    c_hid_dec: int = 32
-    latent_size: int = 128
+    c_hid_enc: int = 16
+    c_hid_dec: int = 16
+    latent_size: int = 64
     temperature: float | None = None
     tanh_output: bool = True
     g_slow_factor: float = 1e-6
