@@ -25,7 +25,7 @@ class DSAEConfig:
     latent_size: int = 128
     temperature: float | None = None
     tanh_output: bool = True
-    g_slow_factor: float = 1e-4
+    g_slow_factor: float = 1e-6
     norm: str | None = "batch"
     decoder: str = "Conv"
 
@@ -108,10 +108,6 @@ class DSAE_Encoder(nn.Module):
         vec_out = nn.tanh(nn.Dense(self.latent_size)(x.flatten()))
         return out, vec_out
 
-    def get_full_latent_size(self):
-        # 2 * for coordinates of spatial + 1 * vector latent
-        return 3 * self.latent_size
-
 
 class LinearDecoder(nn.Module):
     """
@@ -187,6 +183,10 @@ class DeepSpatialAutoencoder(nn.Module):
     def decode(self, latent):
         """Decode Image from latent vector."""
         return self.decoder(latent)
+
+    def get_full_latent_size(self):
+        # 2 * for coordinates of spatial + 1 * vector latent
+        return 3 * self.config.latent_size
 
     def __call__(self, x, train: bool = True):
         spatial_features, vec_features = self.encoder(x, train=train)

@@ -86,8 +86,7 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
                 The exponent modifies this to be ``(0.5 * (1 + cos(pi * t/T)))
                 ** exponent``.
                 Defaults to 1.0.
-      """
-        # Exponentially decaying learning rate, 100k transition steps since we update at each env step
+        """
         learning_rate = optax.warmup_cosine_decay_schedule(
             learning_rate * config.lr_kwargs["initial_multiplier"],
             peak_value=learning_rate,
@@ -95,6 +94,20 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
             decay_steps=config.lr_kwargs["decay_steps"],
             warmup_steps=config.lr_kwargs["warmup_steps"],
         )
+    if config.decay_type == "cosine":
+        """Args:
+            init_value: An initial value for the learning rate.
+            decay_steps: Positive integer - the number of steps for which to apply
+                the decay for.
+            alpha: The minimum value of the multiplier used to adjust the
+                learning rate. Defaults to 0.0.
+            exponent:  The default decay is ``0.5 * (1 + cos(pi * t/T))``, where 
+                ``t`` is the current timestep and ``T`` is the ``decay_steps``. The
+                exponent modifies this to be ``(0.5 * (1 + cos(pi * t/T))) ** exponent``.
+                Defaults to 1.0.
+
+        """
+        learning_rate = optax.cosine_decay_schedule(learning_rate, decay_steps=config.lr_kwargs["decay_steps"], alpha=config.lr_kwargs.get("alpha", 0))
     elif config.decay_type == "exponential":
         """Args:
             init_value: the initial learning rate.
