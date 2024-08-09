@@ -33,8 +33,9 @@ class DSAEConfig:
     channels: list[int] = field(default_factory=lambda: [16, 32, 32, 64, 128])
     temperature: float | None = None
     tanh_output: bool = True
-    g_slow_factor: float = 1
+    g_slow_factor: float = 1e-2
     c_hid_dec: int = 32
+    latent_size: int = 128
     norm: str | None = "batch"
     decoder: str = "Conv"
 
@@ -99,6 +100,7 @@ class DSAE_Encoder(nn.Module):
     temperature: float = None
     tanh_output: bool = False
     norm: str | None = None
+    latent_size: int = 128  # Additional latent size
 
     @nn.compact
     def __call__(self, x, train: bool = True):
@@ -122,7 +124,8 @@ class DSAE_Encoder(nn.Module):
         x = nn.Conv(features=self.out_channels[4], kernel_size=(3, 3))(x)
         x = nn.relu(norm(x))
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
-        return out
+        vec_out = nn.tanh(nn.Dense(self.latent_size)(x))
+        return out, vec_out
 
 
 class LinearDecoder(nn.Module):
@@ -183,6 +186,7 @@ class DeepSpatialAutoencoder(nn.Module):
             temperature=self.config.temperature,
             tanh_output=self.config.tanh_output,
             norm=self.config.norm,
+            latent_size=self.config.latent_size,
         )
         if self.config.decoder == "SimpleConv":
             self.decoder = SimpleConvDecoder(
@@ -204,9 +208,9 @@ class DeepSpatialAutoencoder(nn.Module):
         return self.decoder(latent)
 
     def __call__(self, x, train: bool = True):
-        spatial_features = self.encoder(x, train=train)
-        c, _2 = spatial_features.shape
-        return self.decoder(spatial_features.flatten()), spatial_features
+        spatial_features, vec_features = self.encoder(x, train=train)
+        features = jnp.concatenate([spatial_features.flatten(), vec_features], axis=-1)
+        return self.decoder(features), features
 
     def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None, pixel_weights=None):
         """Compute Loss for deep spatial autoencoder.
