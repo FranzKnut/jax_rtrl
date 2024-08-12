@@ -28,7 +28,7 @@ class DSAEConfig:
     g_slow_factor: float = 1e-6
     norm: str | None = "batch"
     decoder: str = "Conv"
-    twin_bottleneck: bool = False
+    twin_bottleneck: bool = True
 
 
 def get_image_coordinates(h, w, normalise):
