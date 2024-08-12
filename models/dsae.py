@@ -28,6 +28,7 @@ class DSAEConfig:
     g_slow_factor: float = 1e-6
     norm: str | None = "batch"
     decoder: str = "Conv"
+    twin_bottleneck: bool = False
 
 
 def get_image_coordinates(h, w, normalise):
@@ -82,6 +83,7 @@ class DSAE_Encoder(nn.Module):
     tanh_output: bool = False
     norm: str | None = None
     latent_size: int = 64
+    twin_bottleneck: bool = False
 
     @nn.compact
     def __call__(self, x, train: bool = True):
@@ -105,8 +107,11 @@ class DSAE_Encoder(nn.Module):
         x = nn.gelu(norm(x))
         x = nn.Conv(features=self.latent_size, kernel_size=(3, 3))(x)
         out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
-        vec_out = nn.tanh(nn.Dense(self.latent_size)(x.flatten()))
-        return out, vec_out
+        if self.twin_bottleneck:
+            vec_out = nn.tanh(nn.Dense(self.latent_size)(x.flatten()))
+            return out, vec_out
+        else:
+            return out
 
 
 class LinearDecoder(nn.Module):
@@ -123,9 +128,7 @@ class LinearDecoder(nn.Module):
     def __call__(self, x):
         x = nn.Dense(features=int(np.prod(self.img_shape)))(x)
         x = x.reshape(*[int(n) for n in self.img_shape[:2]])
-        activ = nn.tanh if self.tanh_output else nn.sigmoid
-        x = activ(x)
-        return x
+        return nn.tanh(x) if self.tanh_output else x
 
 
 class SimpleConvDecoder(nn.Module):
@@ -150,9 +153,7 @@ class SimpleConvDecoder(nn.Module):
         x = nn.ConvTranspose(features=self.c_hid, kernel_size=(5, 5), strides=2)(x)
         x = nn.relu(x)
         x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
-        activ = nn.tanh if self.tanh_output else nn.sigmoid
-        x = activ(x)
-        return x
+        return nn.tanh(x) if self.tanh_output else x
 
 
 class DeepSpatialAutoencoder(nn.Module):
@@ -168,6 +169,7 @@ class DeepSpatialAutoencoder(nn.Module):
             tanh_output=self.config.tanh_output,
             norm=self.config.norm,
             latent_size=self.config.latent_size,
+            twin_bottleneck=self.config.twin_bottleneck,
         )
         if self.config.decoder == "SimpleConv":
             self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
@@ -189,11 +191,15 @@ class DeepSpatialAutoencoder(nn.Module):
         return 3 * self.config.latent_size
 
     def __call__(self, x, train: bool = True):
-        spatial_features, vec_features = self.encoder(x, train=train)
-        features = jnp.concatenate([spatial_features.flatten(), vec_features], axis=-1)
+        enc_out = self.encoder(x, train=train)
+        if self.config.twin_bottleneck:
+            spatial_features, vec_features = enc_out
+            features = jnp.concatenate([spatial_features.flatten(), vec_features], axis=-1)
+        else:
+            features = enc_out.flatten()
         return self.decoder(features), features
 
-    def dsae_loss(self, reconstructed, target, ft_minus1=None, ft=None, ft_plus1=None, pixel_weights=None):
+    def dsae_g_slow_loss(self, ft_minus1=None, ft=None, ft_plus1=None):
         """Compute Loss for deep spatial autoencoder.
         For the start of a trajectory, where ft_minus1 = ft, simply pass in ft_minus1=ft, ft=ft
         For the end of a trajectory, where ft_plus1 = ft, simply pass in ft=ft, ft_plus1=ft
@@ -205,13 +211,7 @@ class DeepSpatialAutoencoder(nn.Module):
         :param pixel_weights: An array with same dimensions as the image. For weighting each pixel differently in the loss
         :return: A tuple (mse, g_slow) where mse = the MSE reconstruction loss and g_slow = g_slow contribution term ([1])
         """
-        pixel_diff = target - reconstructed
-        if pixel_weights is not None:
-            pixel_diff *= pixel_weights
-        mse_loss = jnp.mean(pixel_diff**2)
         g_slow_contrib = 0.0
-        loss_info = {"reconstruction_loss": mse_loss}
         if ft_minus1 is not None:
             g_slow_contrib = jnp.mean((ft_plus1 - ft - (ft - ft_minus1)) ** 2)
-            loss_info["g_slow"] = g_slow_contrib * self.config.g_slow_factor
-        return mse_loss + g_slow_contrib, loss_info
+        return g_slow_contrib * self.config.g_slow_factor

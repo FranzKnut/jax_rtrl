@@ -6,6 +6,7 @@ import json
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import optax
 import orbax.checkpoint
 from jax.tree_util import tree_map, tree_reduce
 import jax.tree_util as jtu
@@ -131,6 +132,11 @@ def checkpointing(path, fresh=False, hparams: dict = None):
 def mse_loss(y_hat, y):
     """Mean squared error."""
     return jnp.mean((y - y_hat) ** 2)
+
+
+def bce_loss(y_hat, y):
+    """Binary cross-entropy."""
+    return optax.sigmoid_binary_cross_entropy(y_hat, y)
 
 
 def mae_loss(y_hat, y):
