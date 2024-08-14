@@ -29,6 +29,7 @@ class DSAEConfig:
     norm: str | None = "batch"
     decoder: str = "Conv"
     twin_bottleneck: bool = True
+    head_type: str = "Small"
 
 
 def get_image_coordinates(h, w, normalise):
@@ -78,6 +79,7 @@ class SpatialSoftArgmax(nn.Module):
 class DSAE_Encoder(nn.Module):
     """Creates a Deep Spatial Autoencoder encoder"""
 
+    head_type: str = "Small"
     c_hid: int = 32
     temperature: float = None
     tanh_output: bool = False
@@ -95,13 +97,15 @@ class DSAE_Encoder(nn.Module):
         x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
         x = nn.gelu(norm(x))
-        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.gelu(norm(x))
+        if self.head_type == "Large":
+            x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
+            x = nn.gelu(norm(x))
         x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
         x = nn.gelu(norm(x))
-        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.gelu(norm(x))
+        if self.head_type == "Large":
+            x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
+            x = nn.gelu(norm(x))
         x = nn.Conv(features=4 * self.c_hid, kernel_size=(3, 3))(x)
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
         x = nn.gelu(norm(x))
@@ -170,6 +174,7 @@ class DeepSpatialAutoencoder(nn.Module):
             norm=self.config.norm,
             latent_size=self.config.latent_size,
             twin_bottleneck=self.config.twin_bottleneck,
+            head_type=self.config.head_type,
         )
         if self.config.decoder == "SimpleConv":
             self.decoder = SimpleConvDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec)
