@@ -106,7 +106,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
         return checkpointer.save(orbax_path, _params, force=True)
 
     restored_params = None
-    restored_hparams = "{}"
+    restored_hparams = {}
     print(path, end=": ")
     exists = os.path.exists(path)
     if not exists:
