@@ -3,6 +3,7 @@
 from functools import partial
 import os
 import json
+import numpy as np
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -115,7 +116,10 @@ def checkpointing(path, fresh=False, hparams: dict = None):
         if fresh:
             print("Overwriting existing checkpoint")
         else:
-            restored_params = checkpointer.restore(orbax_path)
+            restored_params = checkpointer.restore(orbax_path, restore_args= jax.tree_map(
+                    lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray), checkpointer.metadata(orbax_path)
+                )
+            )
             print("Restored model from checkpoint")
             if os.path.exists(hparams_file_path):
                 with open(hparams_file_path) as f:

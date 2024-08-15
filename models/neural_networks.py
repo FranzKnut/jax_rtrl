@@ -235,7 +235,7 @@ class DistributionLayer(nn.Module):
         if self.distribution == "Normal":
             x = FADense(2 * self.out_size, f_align=self.f_align)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
-            return distrax.Normal(loc, jax.nn.softplus(scale) + self.eps)
+            return distrax.Normal(loc, jax.nn.sigmoid(scale) + self.eps)
         elif self.distribution == "Categorical":
             x = FADense(self.out_size, f_align=self.f_align)(x)
             return distrax.Categorical(logits=x)
