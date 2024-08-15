@@ -116,9 +116,11 @@ def checkpointing(path, fresh=False, hparams: dict = None):
         if fresh:
             print("Overwriting existing checkpoint")
         else:
-            restored_params = checkpointer.restore(orbax_path, restore_args= jax.tree_map(
+            restored_params = checkpointer.restore(
+                orbax_path,
+                restore_args=jax.tree_map(
                     lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray), checkpointer.metadata(orbax_path)
-                )
+                ),
             )
             print("Restored model from checkpoint")
             if os.path.exists(hparams_file_path):
@@ -146,6 +148,15 @@ def bce_loss(y_hat, y):
 def mae_loss(y_hat, y):
     """Mean absoluted error."""
     return jnp.mean(jnp.abs(y - y_hat))
+
+
+def g_slow_loss(x_before, x_t, x_next):
+    """Change in first derivative error.
+
+    For the start of a trajectory, where x_before = x_t, simply pass in x_before=x_t, x_t=x_t
+    For the end of a trajectory, where x_next = x_t, simply pass in x_t=x_t, x_next=x_t
+    """
+    return jnp.mean((x_next - x_t - (x_t - x_before)) ** 2)
 
 
 def make_vmap_model(_model, **kwargs):

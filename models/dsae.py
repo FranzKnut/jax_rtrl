@@ -25,7 +25,6 @@ class DSAEConfig:
     latent_size: int = 20
     temperature: float | None = None
     tanh_output: bool = True
-    g_slow_factor: float = 1e-6
     norm: str | None = "batch"
     decoder: str = "Conv"
     twin_bottleneck: bool = True
@@ -203,20 +202,3 @@ class DeepSpatialAutoencoder(nn.Module):
         else:
             features = enc_out.flatten()
         return self.decoder(features), features
-
-    def dsae_g_slow_loss(self, ft_minus1=None, ft=None, ft_plus1=None):
-        """Compute Loss for deep spatial autoencoder.
-        For the start of a trajectory, where ft_minus1 = ft, simply pass in ft_minus1=ft, ft=ft
-        For the end of a trajectory, where ft_plus1 = ft, simply pass in ft=ft, ft_plus1=ft
-        :param reconstructed: Reconstructed, grayscale image
-        :param target: Target, grayscale image
-        :param ft_minus1: Features produced by the encoder for the previous image in the trajectory to the target one
-        :param ft: Features produced by the encoder for the target image
-        :param ft_plus1: Features produced by the encoder for the next image in the trajectory to the target one
-        :param pixel_weights: An array with same dimensions as the image. For weighting each pixel differently in the loss
-        :return: A tuple (mse, g_slow) where mse = the MSE reconstruction loss and g_slow = g_slow contribution term ([1])
-        """
-        g_slow_contrib = 0.0
-        if ft_minus1 is not None:
-            g_slow_contrib = jnp.mean((ft_plus1 - ft - (ft - ft_minus1)) ** 2)
-        return g_slow_contrib * self.config.g_slow_factor
