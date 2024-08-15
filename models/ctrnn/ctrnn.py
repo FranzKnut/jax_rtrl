@@ -49,7 +49,7 @@ class CTRNNCell(nn.RNNCellBase):
     num_units: int
     dt: float = 1.0
     ode_type: str = "murray"
-    wiring: str | None = "random"
+    wiring: str | None = "fully_connected"
     wiring_kwargs: dict = field(default_factory=dict)
 
     @nn.compact

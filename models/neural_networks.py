@@ -226,7 +226,7 @@ class DistributionLayer(nn.Module):
 
     out_size: int
     distribution: str = "Normal"
-    eps: float = 0.01
+    eps: float = 0.001
     f_align: bool = False
 
     @nn.compact
