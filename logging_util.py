@@ -90,15 +90,14 @@ class DummyLogger(dict, object):
         """
         pass
 
-    def save_model(self, model: nn.Module, filename="model.ckpt"):
-        """Save an equinox model to file.
+    def log_file(self, name: str, path: str):
+        """Save a file as an artifact.
 
         Parameters
         ----------
-        model : equinox.Module
-            The model to be saved
-        filename : str, optional
-            by default "model.ckpt"
+        name : str
+        path : str
+            Path to the file to be logged.
         """
         pass
 
@@ -198,7 +197,7 @@ class AimLogger(DummyLogger):
         return self.run[key]
 
     @override
-    def finalize(self, all_param_norms=None, x_vals=None):
+    def report_successful_finish(self, all_param_norms=None, x_vals=None):
         """Make lineplots for param norms and block until all metrics are logged."""
         if all_param_norms:
             import plotly.express as px
@@ -215,17 +214,14 @@ class AimLogger(DummyLogger):
         self.run.report_successful_finish(block=True)
 
     @override
-    def save_model(self, model, filename="model.ckpt"):
-        """Save the model to aim directory using equinox."""
-        os.makedirs(self.run_artifacts_dir, exist_ok=True)
-        model_file = os.path.abspath(os.path.join(self.run_artifacts_dir, filename))
-        config_file = os.path.abspath(os.path.join(self.run_artifacts_dir, "config.json"))
-        # eqx.tree_serialise_leaves(model_file, model)
-        self.checkpointer.save(model_file, model, force=True)
-        if not os.path.exists(config_file):
-            # Save config file as json
-            with open(config_file, "w") as f:
-                json.dump(self.run["hparams"], f)
+    def finalize(self):
+        """Finalize the Run."""
+        self.run.finalize()
+
+    @override
+    def log_file(self, name, path):
+        """Save a file."""
+        self.run.log_artifact(path, name)
 
     @override
     def log_img(self, name, img, step=None, caption="", pil_mode="RGB", format="png"):
@@ -242,7 +238,8 @@ class AimLogger(DummyLogger):
     @override
     def log_video(self, name, frames, step=None, fps=30, caption=""):
         """Log a video to wandb."""
-        file_name = f"{name}_{step}.gif" if step is not None else f"{name}.gif"
+        file_name = name.replace("/", "_")
+        file_name = f"{file_name}_{step}.gif" if step is not None else f"{file_name}.gif"
         file_name = os.path.join(self.run_artifacts_dir, file_name)
         images = [Image.fromarray(frames[i]) for i in range(len(frames))]
         os.makedirs(self.run_artifacts_dir, exist_ok=True)
@@ -284,8 +281,8 @@ class WandbLogger(DummyLogger):
             )
 
     @override
-    def save_model(self, model, filename="model.ckpt"):
-        """Save the model to wandb directory using orbax."""
+    def log_file(self, name, path):
+        """Upload a file to wandb."""
         raise NotImplementedError()
 
     @override
@@ -312,7 +309,10 @@ def with_logger(
         return wandb_wrapper(project_name, pick_fun_and_run, hparams, params_type=hparams_type)
     elif logger_name == "aim":
         logger = AimLogger(project_name, repo=aim_repo, hparams=hparams, run_name=run_name)
-        return func(hparams, logger=logger)  # TODO: Consider try catch to avoid broken aim repositories
+        try:
+            return func(hparams, logger=logger)
+        finally:
+            logger.finalize()
     else:
         return func(hparams)
 
