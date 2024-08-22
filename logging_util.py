@@ -39,7 +39,9 @@ def wandb_wrapper(project_name, func, hparams, params_type):
 
     logger = WandbLogger()
 
-    with wandb.init(project=project_name, config=hparams, mode="disabled" if hparams.debug else "online", dir="logs/"), ExceptionPrinter():
+    with wandb.init(
+        project=project_name, config=hparams, mode="disabled" if hparams.debug else "online", dir="logs/"
+    ), ExceptionPrinter():
         # If called by wandb.agent,
         # this config will be set by Sweep Controller
         hparams = from_dict(params_type, update_nested_dict(asdict(hparams), wandb.config))
@@ -153,6 +155,7 @@ class AimLogger(DummyLogger):
         import aim
 
         self.run = aim.Run(experiment=name, repo=repo, run_hash=run_hash, log_system_params=True)
+        self.run_artifacts_dir = os.path.join("artifacts/aim", self.run.hash)
         hparams = hparams or {}
         if isinstance(hparams, Namespace):
             hparams = vars(hparams)
@@ -201,17 +204,22 @@ class AimLogger(DummyLogger):
             import plotly.express as px
 
             all_param_norms = tree_stack(all_param_norms)
-            self.log({f"Params/{k}": aim.Figure(px.line(x=x_vals, y=list(v.values()), title=k, labels=list(v.keys()))) for k, v in all_param_norms.items() if v})
+            self.log(
+                {
+                    f"Params/{k}": aim.Figure(px.line(x=x_vals, y=list(v.values()), title=k, labels=list(v.keys())))
+                    for k, v in all_param_norms.items()
+                    if v
+                }
+            )
 
         self.run.report_successful_finish(block=True)
 
     @override
     def save_model(self, model, filename="model.ckpt"):
         """Save the model to aim directory using equinox."""
-        run_artifacts_dir = os.path.join("artifacts/aim", self.run.hash)
-        # os.makedirs(run_artifacts_dir, exist_ok=True)
-        model_file = os.path.abspath(os.path.join(run_artifacts_dir, filename))
-        config_file = os.path.abspath(os.path.join(run_artifacts_dir, "config.json"))
+        os.makedirs(self.run_artifacts_dir, exist_ok=True)
+        model_file = os.path.abspath(os.path.join(self.run_artifacts_dir, filename))
+        config_file = os.path.abspath(os.path.join(self.run_artifacts_dir, "config.json"))
         # eqx.tree_serialise_leaves(model_file, model)
         self.checkpointer.save(model_file, model, force=True)
         if not os.path.exists(config_file):
@@ -223,18 +231,23 @@ class AimLogger(DummyLogger):
     def log_img(self, name, img, step=None, caption="", pil_mode="RGB", format="png"):
         """Log an image to wandb."""
         self.log(
-            {name: aim.Image(Image.fromarray(np.asarray(img, dtype=np.uint8), mode=pil_mode), caption=caption, format=format)},
+            {
+                name: aim.Image(
+                    Image.fromarray(np.asarray(img, dtype=np.uint8), mode=pil_mode), caption=caption, format=format
+                )
+            },
             step=step,
         )
 
     @override
     def log_video(self, name, frames, step=None, fps=30, caption=""):
         """Log a video to wandb."""
-        filename = os.path.join("logs/gifs", self.run.hash + ".gif")
+        file_name = f"{name}_{step}.gif" if step is not None else f"{name}.gif"
+        file_name = os.path.join(self.run_artifacts_dir, file_name)
         images = [Image.fromarray(frames[i]) for i in range(len(frames))]
-        os.makedirs("logs/gifs", exist_ok=True)
-        images[0].save(filename, save_all=True, append_images=images[1:], duration=int(1000 / fps), loop=0)
-        self.log({name: aim.Image(filename, caption=caption, format="gif")}, step=step)
+        os.makedirs(self.run_artifacts_dir, exist_ok=True)
+        images[0].save(file_name, save_all=True, append_images=images[1:], duration=int(1000 / fps), loop=0)
+        self.log({name: aim.Image(file_name, caption=caption, format="gif")}, step=step)
 
 
 class WandbLogger(DummyLogger):

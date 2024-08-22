@@ -162,7 +162,7 @@ class RNNEnsemble(nn.RNNCellBase):
     kwargs: dict = field(default_factory=dict)
 
     @nn.compact
-    def __call__(self, h: jax.Array | None = None, x: jax.Array = None, training=False, rng=None):  # noqa
+    def __call__(self, h: jax.Array | None = None, x: jax.Array = None, rng=None):  # noqa
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -190,17 +190,15 @@ class RNNEnsemble(nn.RNNCellBase):
             # Loop over rnn submodules
             carry, out = self.model(**self.kwargs, name=f"rnn{i}")(h[i], x)
             carry_out.append(carry)
-            out = jnp.concatenate([out, x], axis=-1)
             if self.output_layers:
                 out = MLP(self.output_layers, self.kwargs.get("f_align", False))(out)
-            # Make distribution for each submodule
-            out = DistributionLayer(self.out_size, self.out_dist)(out)
+            if self.out_dist:
+                # Make distribution for each submodule
+                out = DistributionLayer(self.out_size, self.out_dist)(out)
             outs.append(out)
 
         if not self.out_dist:
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
-            if not training:
-                outs = jnp.mean(outs, axis=0)
         else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
@@ -237,7 +235,10 @@ class DistributionLayer(nn.Module):
             loc, scale = jnp.split(x, 2, axis=-1)
             return distrax.Normal(loc, jax.nn.sigmoid(scale) + self.eps)
         elif self.distribution == "Categorical":
-            x = FADense(self.out_size, f_align=self.f_align)(x)
+            out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
+            x = FADense(out_size, f_align=self.f_align)(x)
+            if isinstance(self.out_size, tuple):
+                x = x.reshape(self.out_size)
             return distrax.Categorical(logits=x)
         else:
             # Becomes deterministic
