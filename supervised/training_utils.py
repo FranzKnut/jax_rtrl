@@ -3,19 +3,16 @@ from jax import numpy as jnp
 import optax
 from tqdm import trange
 
+from optimizers import OptimizerConfig, make_optimizer
 
-def train_rnn_online(_loss_fn, _params, data, _key, h0, num_steps=1_000, lr=1e-3, param_post_update_fn=None):
+
+def train_rnn_online(_loss_fn, _params, data, _key, h0, num_steps=1_000, opt_config=OptimizerConfig(), param_post_update_fn=None):
     # We use Stochastic Gradient Descent with a constant learning rate
     _x, _y = data
     # mask = jax.tree.map(lambda x: True, _params)
     # mask['params']['cell']['tau'] = False
     # lr = optax.warmup_cosine_decay_schedule(init_value=lr/10, peak_value=lr, warmup_steps=500, decay_steps=2500)
-    optimizer = optax.chain(
-        # optax.clip_by_global_norm(1),
-        optax.sgd(lr),
-        # optax.sgd(lr, momentum=0.8, nesterov=True),
-        # optax.adam(lr),
-    )
+    optimizer = make_optimizer(opt_config)
     opt_state = optimizer.init(_params)
     pbar = trange(int(num_steps), maxinterval=2)
 
