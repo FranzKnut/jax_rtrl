@@ -94,6 +94,12 @@ class CTRNNCell(nn.RNNCellBase):
         """Returns the number of feature axes of the RNN cell."""
         return 1
 
+    @staticmethod
+    def clip_tau(params):
+        """HACK: clip tau to > 1.0"""
+        params["params"]["rnn"]["tau"] = jnp.clip(params["params"]["rnn"]["tau"], min=1.0)
+        return params
+
 
 def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     """Compute jacobian trace update for RTRL."""

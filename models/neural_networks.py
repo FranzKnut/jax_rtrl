@@ -218,6 +218,13 @@ class RNNEnsemble(nn.RNNCellBase):
         """Returns the number of feature axes of the RNN cell."""
         return 1
 
+    @staticmethod
+    def clip_tau(params):
+        """HACK: clip tau to > 1.0"""
+        for k in params["params"]["rnn"]:
+            params["params"]["rnn"][k]["tau"] = jnp.clip(params["params"]["rnn"][k]["tau"], min=1.0)
+        return params
+
 
 class DistributionLayer(nn.Module):
     """Parameterized distribution output layer."""
@@ -447,7 +454,9 @@ class FAAffine(nn.Module):
             _x, _a = res
             grads = {"params": {"a": s(_x) * y_bar, "b": y_bar}}
             x_bar = jnp.zeros_like(_x)
-            x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(y_bar if not self.f_align else y_bar * _a)
+            x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(
+                y_bar if not self.f_align else y_bar * _a
+            )
             return (grads, x_bar, jnp.zeros_like(a), jnp.zeros_like(b))
 
         fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
