@@ -152,7 +152,7 @@ class MLPEnsemble(nn.Module):
 
 
 class RNNEnsemble(nn.RNNCellBase):
-    """Ensemble of CTRNN cells."""
+    """Ensemble of RNN cells."""
 
     out_size: int
     num_modules: int

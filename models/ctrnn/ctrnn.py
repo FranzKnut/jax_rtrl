@@ -14,7 +14,7 @@ from flax.linen import nowrap
 
 from typing import Tuple
 
-from jax_rtrl.models.wirings import make_mask_initializer
+from models.wirings import make_mask_initializer
 
 
 def ctrnn_ode(params, h, x):
@@ -55,6 +55,8 @@ class CTRNNCell(nn.RNNCellBase):
     @nn.compact
     def __call__(self, h, x):  # noqa
         """Compute euler integration step or CTRNN ODE."""
+        if h is None:
+            h = self.initialize_carry(self.make_rng(), x.shape)
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
         W = self.param("W", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
@@ -97,7 +99,7 @@ class CTRNNCell(nn.RNNCellBase):
     @staticmethod
     def clip_tau(params):
         """HACK: clip tau to > 1.0"""
-        params["params"]["rnn"]["tau"] = jnp.clip(params["params"]["rnn"]["tau"], min=1.0)
+        params["tau"] = jnp.clip(params["tau"], min=1.0)
         return params
 
 
@@ -200,6 +202,9 @@ class OnlineCTRNNCell(CTRNNCell):
 
     @nn.compact
     def __call__(self, carry, x):  # noqa
+        if carry is None:
+            carry = self.initialize_carry(self.make_rng(), x.shape)
+
         def f(mdl, h, x):
             h, *traces = h
             carry, out = CTRNNCell.__call__(mdl, h, x)
