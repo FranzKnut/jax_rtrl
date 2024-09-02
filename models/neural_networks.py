@@ -154,9 +154,9 @@ class MLPEnsemble(nn.Module):
 class RNNEnsemble(nn.RNNCellBase):
     """Ensemble of RNN cells."""
 
-    out_size: int
     num_modules: int
     model: type = OnlineCTRNNCell
+    out_size: int | None = None
     out_dist: str | None = None
     output_layers: tuple[int] | None = None
     kwargs: dict = field(default_factory=dict)
@@ -173,9 +173,9 @@ class RNNEnsemble(nn.RNNCellBase):
             of rnn submodule states
         x : Array
             input
-        training : bool, optional, by default False
-            If true, returns one value per submodule in order to train them independently,
-            If false, mean of submodules or a Mixed Distribution is returned.
+        rng : PRNGKey, optional, 
+            if given, returns one value per submodule in order to train them independently,
+            If None, mean of submodules or a Mixed Distribution is returned.
 
         Returns
         -------
@@ -192,13 +192,15 @@ class RNNEnsemble(nn.RNNCellBase):
             carry_out.append(carry)
             if self.output_layers:
                 out = MLP(self.output_layers, self.kwargs.get("f_align", False))(out)
-            if self.out_dist:
+            if self.out_size is not None:
                 # Make distribution for each submodule
                 out = DistributionLayer(self.out_size, self.out_dist)(out)
             outs.append(out)
 
         if not self.out_dist:
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
+            if rng is not None:
+                outs = outs.mean(axis=0)
         else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
