@@ -6,19 +6,19 @@ authors = ["julian <julian.lemmel@tuwien.ac.at>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = "^3.10"
 gymnax = "^0.0.8"
-brax = "^0.10.4"
-plotly = "^5.22.0"
-flax = "^0.8.4"
+brax = "^0.10.5"
+plotly = "^5.24.0"
+flax = "^0.9.0"
 dacite = "^1.8.1"
 simple-parsing = "^0.1.5"
 distrax = "^0.1.5"
-tqdm = "^4.66.4"
-optax = "^0.2.2"
+tqdm = "^4.66.5"
+optax = "^0.2.3"
 pyhopper = "^1.2.3"
-mujoco-mjx = "^3.1.6"
-poethepoet = "^0.26.1"
+mujoco-mjx = "^3.2.2"
+poethepoet = "^0.28.0"
 
 
 [build-system]
