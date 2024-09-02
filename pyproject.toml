@@ -8,15 +8,11 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 flax = "^0.9.0"
-gymnax = "^0.0.8"
-brax = "^0.10.5"
 plotly = "^5.24.0"
 dacite = "^1.8.1"
 simple-parsing = "^0.1.5"
 distrax = "^0.1.5"
 tqdm = "^4.66.5"
-pyhopper = "^1.2.3"
-mujoco-mjx = "^3.2.2"
 poethepoet = "^0.28.0"
 
 
