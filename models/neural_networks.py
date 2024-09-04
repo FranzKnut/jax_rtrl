@@ -102,14 +102,14 @@ class RBFLayer(nn.Module):
 class MLPEnsemble(nn.Module):
     """Ensemble of CTRNN cells."""
 
-    out_size: int
     num_modules: int
     model: type = MLP
+    out_size: int | None = None
     out_dist: str | None = None
     kwargs: dict = field(default_factory=dict)
 
     @nn.compact
-    def __call__(self, x, training=True, rng=None):  # noqa
+    def __call__(self, x, rng=None):  # noqa
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -134,12 +134,13 @@ class MLPEnsemble(nn.Module):
             # Loop over rnn submodules
             out = self.model(**self.kwargs, name=f"mlp{i}")(x)
             # Make distribution for each submodule
-            out = DistributionLayer(self.out_size, self.out_dist)(out)
+            if self.out_size is not None:
+                out = DistributionLayer(self.out_size, self.out_dist)(out)
             outs.append(out)
 
         if not self.out_dist:
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
-            if not training:
+            if rng is not None:
                 outs = jnp.mean(outs, axis=0)
         else:
             # Last dim is batch in distrax
