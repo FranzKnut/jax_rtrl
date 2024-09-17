@@ -1,7 +1,7 @@
 """Neural networks using the flax package."""
 
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Callable, Tuple
 from chex import PRNGKey
 import distrax
 import flax.linen as nn
@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
+
 
 from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell
 
@@ -69,16 +70,20 @@ class FADense(nn.Dense):
 
 
 class MLP(nn.Module):
-    """MLP built with equinox."""
+    """MLP built with Flax.
+
+    activation_fn is applied after every layer except the last one.
+    If f_align is true, each layer uses feedback alignment instead of backpropagation."""
 
     layers: list
+    activation_fn: Callable = jax.nn.relu
     f_align: bool = False
 
     @nn.compact
     def __call__(self, x):
         """Call MLP."""
-        for i, size in enumerate(self.layers[:-1]):
-            x = jax.nn.elu(FADense(size, f_align=self.f_align)(x))
+        for size in self.layers[:-1]:
+            x = self.activation_fn(FADense(size, f_align=self.f_align)(x))
         x = FADense(self.layers[-1], f_align=self.f_align)(x)
         return x
 
@@ -152,6 +157,37 @@ class MLPEnsemble(nn.Module):
         return outs
 
 
+class BPMultiLayerRNN(nn.RNNCellBase):
+    """Multilayer RNN."""
+
+    layers: list
+    rnn_cls: nn.RNNCellBase = CTRNNCell
+    rnn_kwargs: dict = field(default_factory=dict)
+
+    @nn.nowrap
+    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+        shapes = zip(self.layers, [input_shape, self.layers[:-1]])
+        return [self.rnn_cls(size, **self.rnn_kwargs).initializes_carry(rng, in_size) for size, in_size in shapes]
+
+    @property
+    def num_feature_axes(self) -> int:
+        """Returns the number of feature axes of the RNN cell."""
+        return 1
+
+    @nn.compact
+    def __call__(self, carries, x):
+        """Call MLP."""
+        for i, size in enumerate(self.layers):
+            carries[i], x = self.rnn_cls(size, **self.rnn_kwargs)(carries[i], x)
+        return carries, x
+
+
+class DFAMultiLayerRNN(nn.RNNCellBase):
+    layers: list
+    rnn_cls: nn.RNNCellBase = OnlineCTRNNCell
+    rnn_kwargs: dict = field(default_factory=dict)
+
+
 class RNNEnsemble(nn.RNNCellBase):
     """Ensemble of RNN cells."""
 
@@ -174,7 +210,7 @@ class RNNEnsemble(nn.RNNCellBase):
             of rnn submodule states
         x : Array
             input
-        rng : PRNGKey, optional, 
+        rng : PRNGKey, optional,
             if given, returns one value per submodule in order to train them independently,
             If None, mean of submodules or a Mixed Distribution is returned.
 
@@ -288,7 +324,7 @@ class ConvDecoder(nn.Module):
 
     img_shape: tuple[int]
     c_hid: int = 8
-    tanh_output: bool = True  # sigmoid otherwise
+    tanh_output: bool = False  # sigmoid otherwise
 
     @nn.compact
     def __call__(self, x):
@@ -309,11 +345,11 @@ class ConvDecoder(nn.Module):
         x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
         x = nn.relu(x)
         x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3))(x)
-        x = nn.tanh(x) if self.tanh_output else x
+        x = nn.tanh(x) if self.tanh_output else nn.sigmoid(x)
         return x
 
 
-@dataclass
+@dataclass(frozen=True)
 class AutoencoderParams:
     latent_size: int = 128
     c_hid: int = 32
@@ -388,21 +424,6 @@ class Autoencoder_RNN(nn.Module):
         else:
             pred = nn.Dense(features=obs_size)(latent)
         return carry, pred, latent
-
-
-@jax.value_and_grad
-def bptt_loss(params, model: Autoencoder_RNN, trajectories, initial_hidden):
-    """Loss for a sequence of Observations."""
-    # Transpose batch and sequence dimensions
-    trajectories = jax.jax.tree.map(lambda x: x.swapaxes(1, 0), trajectories)
-
-    def predict_loop(hidden, batch):
-        hidden, pred, _ = model.apply(params, batch.experience["obs"], batch.experience["act"], hidden)
-        return hidden, pred
-
-    _, predictions = jax.lax.scan(jax.vmap(predict_loop), initial_hidden, trajectories)
-    loss = ((predictions[1:-1] - trajectories.experience["obs"][2:]) ** 2).sum()
-    return loss
 
 
 if __name__ == "__main__":
