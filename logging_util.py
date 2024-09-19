@@ -4,7 +4,6 @@ from argparse import Namespace
 import collections
 import contextlib
 from dataclasses import asdict, replace
-import json
 from operator import attrgetter
 import os
 import traceback
@@ -17,7 +16,6 @@ from PIL import Image
 import jax.tree_util as jtu
 from jax_rtrl.models.jax_util import tree_stack
 from .models.jax_util import leaf_norms, tree_norm
-import flax.linen as nn
 
 
 class ExceptionPrinter(contextlib.AbstractContextManager):

@@ -11,7 +11,7 @@ import jax.random as jrandom
 import numpy as np
 
 
-from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell
+from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell, rtrl_gradient
 
 
 """
@@ -198,8 +198,29 @@ class RNNEnsemble(nn.RNNCellBase):
     output_layers: tuple[int] | None = None
     kwargs: dict = field(default_factory=dict)
 
-    @nn.compact
-    def __call__(self, h: jax.Array | None = None, x: jax.Array = None, rng=None):  # noqa
+    def setup(self):
+        self.rnns = [self.model(**self.kwargs, name=f"rnns_{i}") for i in range(self.num_modules)]
+        if self.output_layers:
+            self.mlps = [
+                MLP(self.output_layers, self.kwargs.get("f_align", False), name=f"mlps_{i}")
+                for i in range(self.num_modules)
+            ]
+        if self.out_size is not None:
+            # Make distribution for each submodule
+            self.dists = [
+                DistributionLayer(self.out_size, self.out_dist, name=f"dists_{i}") for i in range(self.num_modules)
+            ]
+
+    def _map_outputs(self, outs):
+        if not self.out_dist:
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
+        else:
+            # Last dim is batch in distrax
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
+            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
+        return outs
+
+    def __call__(self, h: jax.Array | None = None, x: jax.Array = None, rng=None, **call_args):  # noqa
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -225,32 +246,52 @@ class RNNEnsemble(nn.RNNCellBase):
         carry_out = []
         for i in range(self.num_modules):
             # Loop over rnn submodules
-            carry, out = self.model(**self.kwargs, name=f"rnn{i}")(h[i], x)
+            carry, out = self.rnns[i](h[i], x, **call_args)
             carry_out.append(carry)
             if self.output_layers:
-                out = MLP(self.output_layers, self.kwargs.get("f_align", False))(out)
+                out = self.mlps[i](out)
             if self.out_size is not None:
                 # Make distribution for each submodule
-                out = DistributionLayer(self.out_size, self.out_dist)(out)
+                out = self.dists[i](out)
+            outs.append(out)
+        # Aggregate outputs
+        outs = self._map_outputs(outs)
+
+        if rng is not None:
+            outs = outs.sample(seed=rng) if self.out_dist else outs.mean(axis=0)
+        return carry_out, outs
+
+    def _loss(self, hidden, loss_fn, target):
+        outs = []
+        for i in range(self.num_modules):
+            out = hidden[i]
+            # Loop over rnn submodules
+            if self.output_layers:
+                out = self.mlps[i](out)
+            if self.out_size is not None:
+                # Make distribution for each submodule
+                out = self.dists[i](out)
             outs.append(out)
 
-        if not self.out_dist:
-            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
-            if rng is not None:
-                outs = outs.mean(axis=0)
-        else:
-            # Last dim is batch in distrax
-            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
-            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
-            if rng is not None:
-                outs = outs.sample(seed=rng)
+        outs = self._map_outputs(outs)
+        return loss_fn(outs, target)
 
-        return carry_out, outs
+    @nn.nowrap
+    def loss_and_grad(self, params, loss_fn, carry, target):
+        if self.model != OnlineCTRNNCell:
+            raise NotImplementedError("Only OnlineCTRNNCell is supported for asynchronuous gradient computation.")
+        loss, (grads, df_dh) = jax.value_and_grad(self.apply, argnums=[0, 1])(
+            params, [c[0] for c in carry], loss_fn, target, method=self._loss
+        )
+
+        for i, (c, d) in enumerate(zip(carry, df_dh)):
+            grads["params"][f"rnns_{i}"] = rtrl_gradient(c, d, plasticity=self.kwargs["plasticity"])[0]
+        return loss, grads
 
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize neuron states."""
-        return [self.model(**self.kwargs).initialize_carry(rng, input_shape)] * self.num_modules
+        return [self.model(**self.kwargs).initialize_carry(rng, input_shape) for _ in range(self.num_modules)]
 
     @property
     def num_feature_axes(self) -> int:

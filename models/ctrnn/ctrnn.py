@@ -166,6 +166,20 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     return df_dw, dh_dx  # , hebb
 
 
+def rtrl_gradient(carry, df_dy, plasticity="rtrl"):
+    """Compute RTRL gradient."""
+    h, jp, jx = carry
+    if plasticity == "rflo":
+        grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
+    else:
+        grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
+    if len(df_dy.shape) > 1:
+        # has batch dim
+        grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
+    grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
+    return grads_p, grads_x
+
+
 # def rflo_tg(cell: CTRNNCell, carry, params, x):
 #     """Compute jacobian trace for RFLO."""
 #     h, jp, jx = carry
@@ -201,43 +215,42 @@ class OnlineCTRNNCell(CTRNNCell):
     plasticity: str = "rflo"
 
     @nn.compact
-    def __call__(self, carry, x):  # noqa
+    def __call__(self, carry, x, force_trace_compute=False):  # noqa
         if carry is None:
             carry = self.initialize_carry(self.make_rng(), x.shape)
 
-        def f(mdl, h, x):
-            h, *traces = h
-            carry, out = CTRNNCell.__call__(mdl, h, x)
-            return (carry, *traces), out
-
-        def fwd(mdl, carry, x):
-            """Forward pass with tmp for backward pass."""
-            out, _ = CTRNNCell.__call__(mdl, carry[0], x)
-
-            _p = mdl.variables["params"]
+        def _trace_update(carry, _p, x):
             if self.plasticity == "rtrl":
                 traces = rtrl_ctrnn(self, carry, _p, x)
             elif self.plasticity == "rflo":
                 traces = rflo_murray(self, carry, _p, x)
             else:
                 raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
-            return ((out, *traces), out), (out, *traces)
+            return traces
+
+        def f(mdl, h, x):
+            h, *traces = h
+            carry, out = CTRNNCell.__call__(mdl, h, x)
+            if force_trace_compute:
+                traces = _trace_update((carry, *traces), mdl.variables["params"], x)
+            return (carry, *traces), out
+
+        def fwd(mdl, carry, x):
+            """Forward pass with tmp for backward pass."""
+            out, _ = CTRNNCell.__call__(mdl, carry[0], x)
+            traces = _trace_update(carry, mdl.variables["params"], x)
+            return (
+                (out, *traces),
+                (out, *traces) if force_trace_compute else out,
+            ), (out, *traces)
 
         @jax.jit
         def bwd(tmp, y_bar):
-            """Backward pass that may use feedback alignment."""
+            """Backward pass using RTRL."""
             # carry, jp, jx, hebb = tmp
-            carry, jp, jx = tmp
             df_dy = y_bar[-1]
-            if self.plasticity == "rflo":
-                grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
-            else:
-                grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
-            if len(df_dy.shape) > 1:
-                # has batch dim
-                grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
+            grads_p, grads_x = rtrl_gradient(tmp, df_dy, self.plasticity)
             # grads_p['W'] += hebb
-            grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
             carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
             return ({"params": grads_p}, carry, grads_x)
 
