@@ -311,7 +311,7 @@ class DistributionLayer(nn.Module):
 
     out_size: int
     distribution: str = "Normal"
-    eps: float = 0.001
+    eps: float = 0.01
     f_align: bool = False
 
     @nn.compact
@@ -320,7 +320,7 @@ class DistributionLayer(nn.Module):
         if self.distribution == "Normal":
             x = FADense(2 * self.out_size, f_align=self.f_align)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
-            return distrax.Normal(loc, jax.nn.sigmoid(scale) + self.eps)
+            return distrax.Normal(loc, jax.nn.softplus(scale) + self.eps)
         elif self.distribution == "Categorical":
             out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
             x = FADense(out_size, f_align=self.f_align)(x)
