@@ -94,7 +94,7 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
             decay_steps=config.lr_kwargs["decay_steps"],
             warmup_steps=config.lr_kwargs["warmup_steps"],
         )
-    if config.decay_type == "cosine":
+    elif config.decay_type == "cosine":
         """Args:
             init_value: An initial value for the learning rate.
             decay_steps: Positive integer - the number of steps for which to apply
