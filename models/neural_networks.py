@@ -112,6 +112,7 @@ class MLPEnsemble(nn.Module):
     out_size: int | None = None
     out_dist: str | None = None
     kwargs: dict = field(default_factory=dict)
+    skip_connection: bool = False
 
     @nn.compact
     def __call__(self, x, rng=None):  # noqa
@@ -138,6 +139,9 @@ class MLPEnsemble(nn.Module):
         for i in range(self.num_modules):
             # Loop over rnn submodules
             out = self.model(**self.kwargs, name=f"mlp{i}")(x)
+            # Optional Skip connection
+            if self.skip_connection:
+                out = jnp.concatenate([x, out], axis=-1)
             # Make distribution for each submodule
             if self.out_size is not None:
                 out = DistributionLayer(self.out_size, self.out_dist)(out)
@@ -197,6 +201,7 @@ class RNNEnsemble(nn.RNNCellBase):
     out_dist: str | None = None
     output_layers: tuple[int] | None = None
     kwargs: dict = field(default_factory=dict)
+    skip_connection: bool = False
 
     def setup(self):
         self.rnns = [self.model(**self.kwargs, name=f"rnns_{i}") for i in range(self.num_modules)]
@@ -211,7 +216,20 @@ class RNNEnsemble(nn.RNNCellBase):
                 DistributionLayer(self.out_size, self.out_dist, name=f"dists_{i}") for i in range(self.num_modules)
             ]
 
-    def _map_outputs(self, outs):
+    def _postprocessing(self, outs, x):
+        for i in range(self.num_modules):
+            out = outs[i]
+            # Optional Skip connection
+            if self.skip_connection:
+                out = jnp.concatenate([x, out], axis=-1)
+            # Outup FF layers
+            if self.output_layers:
+                out = self.mlps[i](out)
+            if self.out_size is not None:
+                # Make distribution for each submodule
+                outs[i] = self.dists[i](out)
+
+        # Aggregate outputs
         if not self.out_dist:
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
         else:
@@ -248,40 +266,26 @@ class RNNEnsemble(nn.RNNCellBase):
             # Loop over rnn submodules
             carry, out = self.rnns[i](h[i], x, **call_args)
             carry_out.append(carry)
-            if self.output_layers:
-                out = self.mlps[i](out)
-            if self.out_size is not None:
-                # Make distribution for each submodule
-                out = self.dists[i](out)
             outs.append(out)
-        # Aggregate outputs
-        outs = self._map_outputs(outs)
+
+        # Post-process and aggregate outputs
+        outs = self._postprocessing(outs, x)
 
         if rng is not None:
             outs = outs.sample(seed=rng) if self.out_dist else outs.mean(axis=0)
         return carry_out, outs
 
-    def _loss(self, hidden, loss_fn, target):
-        outs = []
-        for i in range(self.num_modules):
-            out = hidden[i]
-            # Loop over rnn submodules
-            if self.output_layers:
-                out = self.mlps[i](out)
-            if self.out_size is not None:
-                # Make distribution for each submodule
-                out = self.dists[i](out)
-            outs.append(out)
-
-        outs = self._map_outputs(outs)
+    def _loss(self, hidden, loss_fn, target, x):
+        # Post-process and aggregate outputs
+        outs = self._postprocessing(hidden, x)
         return loss_fn(outs, target)
 
     @nn.nowrap
-    def loss_and_grad(self, params, loss_fn, carry, target):
+    def loss_and_grad(self, params, loss_fn, carry, x, target):
         if self.model != OnlineCTRNNCell:
             raise NotImplementedError("Only OnlineCTRNNCell is supported for asynchronuous gradient computation.")
         loss, (grads, df_dh) = jax.value_and_grad(self.apply, argnums=[0, 1])(
-            params, [c[0] for c in carry], loss_fn, target, method=self._loss
+            params, [c[0] for c in carry], loss_fn, target, x, method=self._loss
         )
 
         for i, (c, d) in enumerate(zip(carry, df_dh)):
