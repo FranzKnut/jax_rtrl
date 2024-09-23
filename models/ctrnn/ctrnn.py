@@ -73,7 +73,7 @@ class CTRNNCell(nn.RNNCellBase):
             W = jax.lax.stop_gradient(mask) * W
         # Compute updates
         if self.ode_type == "murray":
-            tau = self.param("tau", partial(jrand.uniform, minval=3, maxval=10), (self.num_units,))
+            tau = self.param("tau", partial(jrand.uniform, minval=1, maxval=8), (self.num_units,))
             df_dt = ctrnn_ode((W, tau), h, x)
         elif self.ode_type == "tg":
             W_tau = self.param(
