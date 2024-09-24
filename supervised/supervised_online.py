@@ -14,7 +14,7 @@ from jax_rtrl.optimizers import OptimizerConfig
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from jax_rtrl.models import CELL_TYPES
-from models.neural_networks import RNNEnsemble
+from models.neural_networks import RNNEnsemble, RNNEnsembleConfig
 from supervised.training_utils import predict, train_rnn_online as train
 
 # jax.config.update("jax_disable_jit", True)
@@ -32,18 +32,21 @@ class Model(nn.Module):
     @nn.nowrap
     def _make_rnn(self):
         model_cls = CELL_TYPES[self.plasticity]
-        kwargs = {"num_units": self.hidden_size}
         if model_cls == OnlineCTRNNCell:
-            kwargs = {**kwargs, "dt": self.dt, "plasticity": self.plasticity}
+            kwargs = {"dt": self.dt, "plasticity": self.plasticity}
         elif model_cls == OnlineLRULayer:
-            kwargs["d_output"] = self.outsize
+            kwargs = {"d_output": self.outsize}
         return RNNEnsemble(
-            model=CELL_TYPES[self.plasticity],
-            out_size=self.outsize,
-            num_modules=self.num_modules,
-            out_dist=self.out_dist,
-            kwargs=kwargs,
-            output_layers=[self.outsize],
+            RNNEnsembleConfig(
+                layers=(self.hidden_size,) * 2,
+                model=CELL_TYPES[self.plasticity],
+                out_size=self.outsize,
+                num_modules=self.num_modules,
+                out_dist=self.out_dist,
+                rnn_kwargs=kwargs,
+                output_layers=[self.outsize],
+                fa_type="dfa"
+            ),
             name="rnn",
         )
 
@@ -88,7 +91,12 @@ if __name__ == "__main__":
         return loss, rnn_state
 
     params, losses = train(
-        loss, params, (x, y), key_train, h0, opt_config=OptimizerConfig(opt_name="adam", learning_rate=1e-3, gradient_clip=1)
+        loss,
+        params,
+        (x, y),
+        key_train,
+        h0,
+        opt_config=OptimizerConfig(opt_name="adam", learning_rate=1e-3, gradient_clip=1),
     )
 
     plt.figure(figsize=(10, 5))

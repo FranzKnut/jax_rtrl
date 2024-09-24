@@ -179,33 +179,8 @@ class OnlineLRULayer(nn.RNNCellBase):
         return carry, y_t  # carry, output
 
     @staticmethod
-    def rtrl_gradient(residuals, y_t, plasticity="rtrl"):
-        """Compute RTRL gradient."""
-        vjp_func, new_grad_memory, vjp_to_lambda, gamma_log = residuals
-
-        if plasticity != "rtrl":
-            raise ValueError("Unknown plasticity for LRU: " + plasticity)
-        params_t, *inputs_t = vjp_func(y_t)
-        d_output_d_h = y_t[1][0]
-
-        d_output_d_lambda = d_output_d_h * new_grad_memory[0]
-        d_params_rec = vjp_to_lambda(d_output_d_lambda)[0]
-        correct_nu_log, correct_theta_log = (
-            d_params_rec["params"]["nu_log"],
-            d_params_rec["params"]["theta_log"],
-        )
-
-        correct_gamma_log = (d_output_d_h * new_grad_memory[1]).real * jnp.exp(gamma_log)
-        grad_B = jnp.expand_dims(d_output_d_h, -1) * new_grad_memory[2]
-        # correct_B_re = (jnp.expand_dims(d_output_d_h,-1) * new_grad_memory[2]).real
-        # correct_B_img = (jnp.expand_dims(d_output_d_h,-1) * new_grad_memory[2]).imag
-        params_t1 = flax.core.unfreeze(params_t)
-        params_t1["params"]["nu_log"] = correct_nu_log
-        params_t1["params"]["theta_log"] = correct_theta_log
-        params_t1["params"]["gamma_log"] = correct_gamma_log.real
-        params_t1["params"]["B_real"] = grad_B.real  # jnp.sum(correct_B_re,0)
-        params_t1["params"]["B_img"] = -grad_B.imag  # jnp.sum(correct_B_img,0)
-        return params_t1, *inputs_t
+    def rtrl_gradient(*args, **kwargs):
+        return OnlineLRUCell.rtrl_gradient(*args, **kwargs)
 
     def initialize_carry(self, rng, input_shape):
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()

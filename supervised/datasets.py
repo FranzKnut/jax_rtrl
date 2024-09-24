@@ -101,6 +101,13 @@ def spirals(dataset_size, key):
     return x, y
 
 
+def sine(length=100, offset=2, num_periods=3):
+    """A simple sine-wave."""
+    x = jnp.linspace(0, num_periods * 2 * jnp.pi, length)[:, None]
+    y = jnp.sin(x) + offset
+    return x, y
+
+
 # Gym Simulations ---------------------------------------------------------------
 
 

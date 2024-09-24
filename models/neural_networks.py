@@ -1,6 +1,6 @@
 """Neural networks built with flax."""
 
-from dataclasses import field
+from dataclasses import dataclass, field
 from typing import Callable, Tuple
 from chex import PRNGKey
 import numpy as np
@@ -8,6 +8,8 @@ import jax
 import jax.numpy as jnp
 import distrax
 import flax.linen as nn
+
+from jax_rtrl.models.jax_util import zeros_like_tree
 
 from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell
 
@@ -192,7 +194,7 @@ class MLPEnsemble(nn.Module):
         return outs
 
 
-class BPMultiLayerRNN(nn.RNNCellBase):
+class MultiLayerRNN(nn.RNNCellBase):
     """Multilayer RNN."""
 
     layers: list
@@ -202,7 +204,10 @@ class BPMultiLayerRNN(nn.RNNCellBase):
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         shapes = zip(self.layers, [input_shape, self.layers[:-1]])
-        return [self.rnn_cls(size, **self.rnn_kwargs).initializes_carry(rng, in_size) for size, in_size in shapes]
+        return [self.rnn_cls(size, **self.rnn_kwargs).initialize_carry(rng, in_size) for size, in_size in shapes]
+
+    def setup(self):
+        self.rnns = [self.rnn_cls(size, **self.rnn_kwargs, name=f"rnn_{i}") for i, size in enumerate(self.layers)]
 
     @property
     def num_feature_axes(self) -> int:
@@ -212,56 +217,123 @@ class BPMultiLayerRNN(nn.RNNCellBase):
     @nn.compact
     def __call__(self, carries, x):
         """Call MLP."""
-        for i, size in enumerate(self.layers):
-            carries[i], x = self.rnn_cls(size, **self.rnn_kwargs)(carries[i], x)
+        for i, rnn in enumerate(self.rnns):
+            carries[i], x = rnn(carries[i], x)
         return carries, x
 
 
-class DFAMultiLayerRNN(nn.RNNCellBase):
-    layers: list
-    rnn_cls: nn.RNNCellBase = OnlineCTRNNCell
+class FAMultiLayerRNN(MultiLayerRNN):
+    """MultiLayer RNN with different modes of backpropagating error signals."""
+
+    kernel_init: nn.initializers.Initializer = nn.initializers.glorot_normal(in_axis=-1, out_axis=-2)
+    fa_type: str = "bp"
+
+    @nn.compact
+    def __call__(self, carries, x):
+        if self.fa_type == "bp":
+            return MultiLayerRNN.__call__(self, carries, x)
+        elif self.fa_type == "dfa":
+            Bs = [
+                self.variable(
+                    "falign",
+                    f"B{i}",
+                    self.kernel_init,
+                    self.make_rng() if self.has_rng("params") else None,
+                    (size, self.layers[-1]),
+                ).value
+                for i, size in enumerate(self.layers[:-1])
+            ]
+        else:
+            raise ValueError("unknown fa_type: " + self.fa_type)
+
+        def f(mdl, _carries, x, _Bs):
+            return MultiLayerRNN.__call__(mdl, _carries, x)
+
+        def fwd(mdl: MultiLayerRNN, _carries, x, _Bs):
+            """Forward pass with tmp for backward pass."""
+            vjps = []
+            for i, rnn in enumerate(mdl.rnns):
+                (_carries[i], x), vjp_func = jax.vjp(rnn.apply, rnn.variables, _carries[i], x)
+                vjps.append(vjp_func)
+
+            return (_carries, x), (vjps, _Bs)
+
+        def bwd(tmp, y_bar):
+            """Backward pass that may use feedback alignment."""
+            vjps, _Bs = tmp
+            grads = zeros_like_tree(self.variables["params"])
+            params_t, *inputs_t = vjps[-1]((y_bar[0][-1], y_bar[1]))
+            grads_inputs = [inputs_t[0]]
+            grads[f"rnn_{len(self.layers)-1}"] = params_t["params"]
+            for i, rnn in enumerate(self.rnns[:-1]):
+                y_t = _Bs[i] @ y_bar[1]
+                params_t, *inputs_t = vjps[i]((y_bar[0][i], y_t))
+                grads[f"rnn_{i}"] = params_t["params"]
+                grads_inputs.append(inputs_t[0])
+
+            return ({"params": grads}, grads_inputs, zeros_like_tree(inputs_t[1]), zeros_like_tree(_Bs))
+
+        fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
+
+        return fa_grad(self, carries, x, Bs)
+
+
+@dataclass
+class RNNEnsembleConfig:
+    num_modules: int
+    layers: tuple[int]
+    model: type = OnlineCTRNNCell
+    out_size: int | None = None
+    out_dist: str | None = None
+    output_layers: tuple[int] | None = None
+    fa_type: str = "bp"
     rnn_kwargs: dict = field(default_factory=dict)
+    skip_connection: bool = False
 
 
 class RNNEnsemble(nn.RNNCellBase):
     """Ensemble of RNN cells."""
 
-    num_modules: int
-    model: type = OnlineCTRNNCell
-    out_size: int | None = None
-    out_dist: str | None = None
-    output_layers: tuple[int] | None = None
-    kwargs: dict = field(default_factory=dict)
-    skip_connection: bool = False
+    config: RNNEnsembleConfig
 
     def setup(self):
-        self.rnns = [self.model(**self.kwargs, name=f"rnns_{i}") for i in range(self.num_modules)]
-        if self.output_layers:
+        self.rnns = [
+            FAMultiLayerRNN(
+                self.config.layers,
+                rnn_cls=self.config.model,
+                rnn_kwargs=self.config.rnn_kwargs,
+                fa_type=self.config.fa_type,
+                name=f"rnns_{i}",
+            )
+            for i in range(self.config.num_modules)
+        ]
+        if self.config.output_layers:
             self.mlps = [
-                MLP(self.output_layers, self.kwargs.get("f_align", False), name=f"mlps_{i}")
-                for i in range(self.num_modules)
+                MLP(self.config.output_layers, self.config.rnn_kwargs.get("f_align", False), name=f"mlps_{i}")
+                for i in range(self.config.num_modules)
             ]
-        if self.out_size is not None:
+        if self.config.out_size is not None:
             # Make distribution for each submodule
             self.dists = [
-                DistributionLayer(self.out_size, self.out_dist, name=f"dists_{i}") for i in range(self.num_modules)
+                DistributionLayer(self.config.out_size, self.config.out_dist, name=f"dists_{i}")
+                for i in range(self.config.num_modules)
             ]
 
     def _postprocessing(self, outs, x):
-        for i in range(self.num_modules):
+        for i in range(self.config.num_modules):
             out = outs[i]
             # Optional Skip connection
-            if self.skip_connection:
+            if self.config.skip_connection:
                 out = jnp.concatenate([x, out], axis=-1)
             # Outup FF layers
-            if self.output_layers:
+            if self.config.output_layers:
                 out = self.mlps[i](out)
-            if self.out_size is not None:
+            if self.config.out_size is not None:
                 # Make distribution for each submodule
                 outs[i] = self.dists[i](out)
 
         # Aggregate outputs
-        if not self.out_dist:
+        if not self.config.out_dist:
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
         else:
             # Last dim is batch in distrax
@@ -293,7 +365,7 @@ class RNNEnsemble(nn.RNNCellBase):
             h = self.initialize_carry(jax.random.key(0), x.shape)
         outs = []
         carry_out = []
-        for i in range(self.num_modules):
+        for i in range(self.config.num_modules):
             # Loop over rnn submodules
             carry, out = self.rnns[i](h[i], x, **call_args)
             carry_out.append(carry)
@@ -303,7 +375,7 @@ class RNNEnsemble(nn.RNNCellBase):
         outs = self._postprocessing(outs, x)
 
         if rng is not None:
-            outs = outs.sample(seed=rng) if self.out_dist else outs.mean(axis=0)
+            outs = outs.sample(seed=rng) if self.config.out_dist else outs.mean(axis=0)
         return carry_out, outs
 
     def _loss(self, hidden, loss_fn, target, x):
@@ -320,13 +392,20 @@ class RNNEnsemble(nn.RNNCellBase):
 
         # Compute parameter gradients for each RNN
         for i, (c, d) in enumerate(zip(carry, df_dh)):
-            grads["params"][f"rnns_{i}"] = self.model.rtrl_gradient(c, d, plasticity=self.kwargs["plasticity"])[0]
+            grads["params"][f"rnns_{i}"] = self.config.model.rtrl_gradient(
+                c, d, plasticity=self.config.rnn_kwargs["plasticity"]
+            )[0]
         return loss, grads
 
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize neuron states."""
-        return [self.model(**self.kwargs).initialize_carry(rng, input_shape) for _ in range(self.num_modules)]
+        return [
+            FAMultiLayerRNN(
+                self.config.layers, rnn_cls=self.config.model, rnn_kwargs=self.config.rnn_kwargs
+            ).initialize_carry(rng, input_shape)
+            for _ in range(self.config.num_modules)
+        ]
 
     @property
     def num_feature_axes(self) -> int:

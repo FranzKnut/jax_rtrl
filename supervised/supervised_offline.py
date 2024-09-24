@@ -1,3 +1,5 @@
+import os
+import sys
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -7,26 +9,22 @@ import flax.linen as nn
 
 import matplotlib.pyplot as plt
 
-from jax_rtrl.model.custom_grad import FADense
-from jax_rtrl.model.neural_networks import CTRNNCell
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+from jax_rtrl.supervised.datasets import sine
+from models.neural_networks import FADense, CTRNNCell
 
 key = jrand.PRNGKey(0)
 key, key_model, key_data, key_train = jrand.split(key, 4)
-x = jnp.linspace(0, 5 * np.pi, 100)[:, None]
-y = jnp.sin(x) + 2
-
-cell = CTRNNCell(16)
-carry = cell.initialize_carry(jrand.PRNGKey(0), (1,))
-params = cell.init(jrand.PRNGKey(0), carry, x[0])
+x, y = sine()
 
 model = nn.Sequential(
     [
-        nn.RNN(cell),
+        nn.RNN(CTRNNCell(32)),
         FADense(1),
     ]
 )
 
-params = model.init(key_model, x, mutable=True)
+params = model.init(key_model, x)
 
 
 def loss(p, __x, __y):
@@ -48,7 +46,7 @@ def train(_loss_fn, _params, data, _key, num_steps=300_000, lr=1e-4):
     _x, _y = data
     mask = jax.tree.map(lambda x: True, _params)
     mask["params"]["layers_0"]["cell"]["tau"] = False
-    optimizer = optax.adamaxw(lr, mask=mask)
+    optimizer = optax.adam(lr, mask=mask)
     opt_state = optimizer.init(_params)
 
     def step(carry, n):
