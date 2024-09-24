@@ -1,22 +1,15 @@
-"""Neural networks using the flax package."""
+"""Neural networks built with flax."""
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from typing import Callable, Tuple
 from chex import PRNGKey
-import distrax
-import flax.linen as nn
+import numpy as np
 import jax
 import jax.numpy as jnp
-import jax.random as jrandom
-import numpy as np
-
+import distrax
+import flax.linen as nn
 
 from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell, rtrl_gradient
-
-
-"""
-Neural network structure.
-"""
 
 
 class FADense(nn.Dense):
@@ -67,6 +60,44 @@ class FADense(nn.Dense):
         fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
 
         return fa_grad(self, x, B)
+
+
+class FAAffine(nn.Module):
+    """Affine Layer with feedback alignment."""
+
+    features: int
+    f_align: bool = True
+    offset: int = 0
+
+    @nn.compact
+    def __call__(self, x):
+        """Make use of randomly initialized Feedback Matrix B when f_align is True."""
+        a = self.param("a", nn.initializers.normal(), (self.features,))
+        b = self.param("b", nn.initializers.zeros, (self.features,))
+
+        def s(x):
+            return x[..., self.offset : self.features + self.offset]
+
+        def f(mdl, x, a, b):
+            return a * s(x) + b
+
+        def fwd(mdl, x, a, b):
+            """Forward pass with tmp for backward pass."""
+            return a * s(x) + b, (x, a)
+
+        # f_bwd :: (c, CT b) -> CT a
+        def bwd(res, y_bar):
+            """Backward pass that may use feedback alignment."""
+            _x, _a = res
+            grads = {"params": {"a": s(_x) * y_bar, "b": y_bar}}
+            x_bar = jnp.zeros_like(_x)
+            x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(
+                y_bar if not self.f_align else y_bar * _a
+            )
+            return (grads, x_bar, jnp.zeros_like(a), jnp.zeros_like(b))
+
+        fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
+        return fa_grad(self, x, a, b)
 
 
 class MLP(nn.Module):
@@ -334,199 +365,3 @@ class DistributionLayer(nn.Module):
         else:
             # Becomes deterministic
             return FADense(self.out_size, f_align=self.f_align)(x)
-
-
-class ConvEncoder(nn.Module):
-    """2D-Convolutional Encoder.
-
-    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
-
-    latent_size: int
-    c_hid: int = 8
-
-    @nn.compact
-    def __call__(self, x):
-        """Encode given Image."""
-        # Encode observation using CNN
-        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=4 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.gelu(x)
-        x = x.flatten()  # Image grid to single feature vector
-        return nn.Dense(features=self.latent_size)(x)
-
-
-class ConvDecoder(nn.Module):
-    """2D-Convolutional Decoder.
-
-    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
-
-    img_shape: tuple[int]
-    c_hid: int = 8
-    tanh_output: bool = False  # sigmoid otherwise
-
-    @nn.compact
-    def __call__(self, x):
-        """Decode Image from latent vector."""
-        xy_shape = np.array(self.img_shape[:2]) / (2 * 2)  # initial img shape depends on number of layers
-        if any(xy_shape != xy_shape.astype(int)):
-            raise ValueError("The img x- and y-shapes must be divisible by number of expanding layers.")
-
-        x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
-        x = nn.relu(x)
-        x = x.reshape(*[int(n) for n in xy_shape], -1)
-        x = nn.ConvTranspose(features=4 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3))(x)
-        x = nn.tanh(x) if self.tanh_output else nn.sigmoid(x)
-        return x
-
-
-@dataclass(frozen=True)
-class AutoencoderParams:
-    latent_size: int = 128
-    c_hid: int = 32
-
-
-class Autoencoder(nn.Module):
-    """Deterministic 2D-Autoencoder for dimension reduction."""
-
-    img_shape: tuple[int]
-    config: AutoencoderParams = field(default_factory=AutoencoderParams)
-
-    def setup(self) -> None:
-        """Initialize submodules."""
-        super().setup()
-        self.enc = ConvEncoder(self.config.latent_size, self.config.c_hid)
-        self.dec = ConvDecoder(self.img_shape, self.config.c_hid)
-
-    def encode(self, x, *_):
-        """Encode given Image."""
-        return self.enc(x)
-
-    def decode(self, latent):
-        """Decode Image from latent vector."""
-        return self.dec(latent)
-
-    def __call__(self, x, *_):
-        """Encode then decode. Returns prediction and latent vector."""
-        latent = self.enc(x)
-        pred = self.dec(latent)
-        return pred, latent
-
-
-class Autoencoder_RNN(nn.Module):
-    """Deterministic 2D-Autoencoder that also contains an RNN."""
-
-    img_shape: tuple[int]
-    latent_size: int = 128
-    num_units: int = 32
-    use_cnn: bool = True
-
-    @nn.compact
-    def __call__(self, x, a, carry=None):
-        """Take in an image, action and hidden state to predict next image."""
-        # Encode observation using CNN
-        obs_size = x.shape[-1]
-
-        if self.use_cnn:
-            x = ConvEncoder()(x)
-
-        # Action FC
-        a = nn.Dense(features=self.latent_size)(a)
-        a = nn.tanh(a)
-
-        # Encoded observation FC
-        e = nn.Dense(features=self.latent_size)(x)
-        x = nn.tanh(e)
-
-        # Concatenate
-        x = jnp.concatenate([x, a], axis=-1)
-
-        # Step LSTM
-        rnn = CTRNNCell(self.num_units)
-        if carry is None:
-            carry = rnn.initialize_carry(jax.random.key(0), x.shape)
-        carry, x = rnn(carry, x)
-
-        # Concatenate last LSTM state with latent
-        x = jnp.concatenate([x, e], axis=-1)
-        latent = nn.Dense(features=self.latent_size)(x)
-        if self.use_cnn:
-            pred = ConvDecoder(self.img_shape)(latent)
-        else:
-            pred = nn.Dense(features=obs_size)(latent)
-        return carry, pred, latent
-
-
-if __name__ == "__main__":
-    # Test encoder implementation
-    model = Autoencoder_RNN()
-
-    # Random key for initialization
-    rng = jrandom.PRNGKey(0)
-    # Example images as input
-    imgs = jrandom.normal(rng, (32, 32, 1))
-    # Example actions as input
-    a = jrandom.normal(rng, (3,))
-    print("Input shape: ", imgs.shape)
-
-    # Initialize parameters of encoder with random key and images
-    out, params = model.init_with_output(rng, imgs, a)
-    print("Output shapes: ")
-    for k in range(len(out)):
-        try:
-            print(k, out[k].shape)
-        except AttributeError:
-            # Assuming its a tuple
-            print(k, [o.shape for o in out[k]])
-
-
-class FAAffine(nn.Module):
-    """Affine Layer with feedback alignment."""
-
-    features: int
-    f_align: bool = True
-    offset: int = 0
-
-    @nn.compact
-    def __call__(self, x):
-        """Make use of randomly initialized Feedback Matrix B when f_align is True."""
-        a = self.param("a", nn.initializers.normal(), (self.features,))
-        b = self.param("b", nn.initializers.zeros, (self.features,))
-
-        def s(x):
-            return x[..., self.offset : self.features + self.offset]
-
-        def f(mdl, x, a, b):
-            return a * s(x) + b
-
-        def fwd(mdl, x, a, b):
-            """Forward pass with tmp for backward pass."""
-            return a * s(x) + b, (x, a)
-
-        # f_bwd :: (c, CT b) -> CT a
-        def bwd(res, y_bar):
-            """Backward pass that may use feedback alignment."""
-            _x, _a = res
-            grads = {"params": {"a": s(_x) * y_bar, "b": y_bar}}
-            x_bar = jnp.zeros_like(_x)
-            x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(
-                y_bar if not self.f_align else y_bar * _a
-            )
-            return (grads, x_bar, jnp.zeros_like(a), jnp.zeros_like(b))
-
-        fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        return fa_grad(self, x, a, b)
