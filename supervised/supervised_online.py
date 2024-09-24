@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -7,6 +8,12 @@ import flax.linen as nn
 
 import matplotlib.pyplot as plt
 
+from jax_rtrl.models.ctrnn.ctrnn import OnlineCTRNNCell
+from jax_rtrl.models.lru.online_lru import OnlineLRULayer
+from jax_rtrl.optimizers import OptimizerConfig
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+from jax_rtrl.models import CELL_TYPES
 from models.neural_networks import RNNEnsemble
 from supervised.training_utils import predict, train_rnn_online as train
 
@@ -21,15 +28,21 @@ class Model(nn.Module):
     num_modules: int = 1
     dt: float = 1
     plasticity: str = "rflo"
-    dropout_rate: float = 0
 
     @nn.nowrap
     def _make_rnn(self):
+        model_cls = CELL_TYPES[self.plasticity]
+        kwargs = {"num_units": self.hidden_size}
+        if model_cls == OnlineCTRNNCell:
+            kwargs = {**kwargs, "dt": self.dt, "plasticity": self.plasticity}
+        elif model_cls == OnlineLRULayer:
+            kwargs["d_output"] = self.outsize
         return RNNEnsemble(
+            model=CELL_TYPES[self.plasticity],
             out_size=self.outsize,
             num_modules=self.num_modules,
             out_dist=self.out_dist,
-            kwargs={"num_units": self.hidden_size, "dt": self.dt, "plasticity": self.plasticity},
+            kwargs=kwargs,
             output_layers=[self.outsize],
             name="rnn",
         )
@@ -74,7 +87,9 @@ if __name__ == "__main__":
             loss = jnp.mean(-y_hat.log_prob(__y))
         return loss, rnn_state
 
-    params, losses = train(loss, params, (x, y), key_train, h0)
+    params, losses = train(
+        loss, params, (x, y), key_train, h0, opt_config=OptimizerConfig(opt_name="adam", learning_rate=1e-3, gradient_clip=1)
+    )
 
     plt.figure(figsize=(10, 5))
 
@@ -85,7 +100,7 @@ if __name__ == "__main__":
     # Plot the trained model output
     plt.subplot(1, 2, 2)
 
-    y_hat = predict(params, x)
+    y_hat = predict(model, params, x)
     print(f"Final loss: {jnp.mean((y-y_hat)**2):.3f}")
     plt.plot(x, y, label="target")
     plt.plot(x, y_hat.squeeze(), label="trained")

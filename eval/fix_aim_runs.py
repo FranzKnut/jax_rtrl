@@ -38,8 +38,8 @@ for h in tqdm(hashes):
         if edit.get("obs_mask", None) is None:
             edit["obs_mask"] = "None"
 
-        if edit.get("agent_type", None) is None:
-            edit["agent_type"] = "rnn"
+        if edit.get("agent_type", None) in [None, "rnn"]:
+            edit["agent_type"] = "rflo"
 
         # WRITE CHANGES
         run["hparams"] = edit

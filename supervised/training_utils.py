@@ -6,7 +6,7 @@ from tqdm import trange
 from optimizers import OptimizerConfig, make_optimizer
 
 
-def train_rnn_online(_loss_fn, _params, data, _key, h0, num_steps=1_000, opt_config=OptimizerConfig(), param_post_update_fn=None):
+def train_rnn_online(_loss_fn, _params, data, _key, h0, num_steps=10_000, opt_config=OptimizerConfig(), param_post_update_fn=None):
     # We use Stochastic Gradient Descent with a constant learning rate
     _x, _y = data
     # mask = jax.tree.map(lambda x: True, _params)
@@ -50,13 +50,14 @@ def train_rnn_online(_loss_fn, _params, data, _key, h0, num_steps=1_000, opt_con
     (_params, *_), _losses = jax.lax.scan(
         run_episode, (_params, opt_state, _key, h0), jnp.arange(num_steps, dtype=jnp.int32)
     )
+    pbar.close()
     return _params, _losses
 
 
 def predict(model, params, x):
     """Predict a sequence of outputs given an input sequence."""
     def _step(carry, _x):
-        return model.apply(params, carry, _x)
+        return model.apply(params, _x, carry)
 
     h0 = model.initialize_carry(jax.random.PRNGKey(0), x[0].shape)
     outs = jax.lax.scan(_step, h0, x)[1]

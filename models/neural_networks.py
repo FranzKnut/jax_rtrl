@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import distrax
 import flax.linen as nn
 
-from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell, rtrl_gradient
+from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell
 
 
 class FADense(nn.Dense):
@@ -313,14 +313,14 @@ class RNNEnsemble(nn.RNNCellBase):
 
     @nn.nowrap
     def loss_and_grad(self, params, loss_fn, carry, x, target):
-        if self.model != OnlineCTRNNCell:
-            raise NotImplementedError("Only OnlineCTRNNCell is supported for asynchronuous gradient computation.")
+        # Compute gradient of loss wrt to network output
         loss, (grads, df_dh) = jax.value_and_grad(self.apply, argnums=[0, 1])(
-            params, [c[0] for c in carry], loss_fn, target, x, method=self._loss
+            params, [c[0].real for c in carry], loss_fn, target, x, method=self._loss
         )
 
+        # Compute parameter gradients for each RNN
         for i, (c, d) in enumerate(zip(carry, df_dh)):
-            grads["params"][f"rnns_{i}"] = rtrl_gradient(c, d, plasticity=self.kwargs["plasticity"])[0]
+            grads["params"][f"rnns_{i}"] = self.model.rtrl_gradient(c, d, plasticity=self.kwargs["plasticity"])[0]
         return loss, grads
 
     @nn.nowrap

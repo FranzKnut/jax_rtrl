@@ -6,8 +6,8 @@ import jax.random as jrand
 import jax.numpy as jnp
 import seaborn as sns
 
-from supervised.supervised_online import make_model
-from supervised.training_utils import train
+from supervised_online import make_model
+from training_utils import train_rnn_online
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--force", action="store_true")
@@ -22,7 +22,7 @@ if not os.path.exists(args.outfile) or args.force:
     y = jnp.sin(x) + 2
 
     rows = ["rtrl", "rflo"]
-    cols = [32, 64, 128, 256, 512]
+    cols = [32, 64, 128, 256]
     runtimes = pd.DataFrame(index=rows, columns=cols)
 
     for plast in rows:
@@ -34,7 +34,7 @@ if not os.path.exists(args.outfile) or args.force:
                 carry, y_hat = model.apply(p, __x, carry)
                 return jnp.sum((y_hat - __y) ** 2), carry
 
-            t = timeit.timeit(lambda: train(loss, params, (x, y), key_train, h0, num_steps=100), number=3)
+            t = timeit.timeit(lambda: train_rnn_online(loss, params, (x, y), key_train, h0, num_steps=100), number=3)
             runtimes.loc[plast, size] = t
 
     runtimes.to_csv(args.outfile)
@@ -46,5 +46,5 @@ runtimes = runtimes.unstack().reset_index()
 runtimes.columns = ["size", "plasticity", "time"]
 
 plot = sns.barplot(x=runtimes["size"], y=runtimes["time"], hue=runtimes["plasticity"])
-# plot.set_yscale('log')
-plot.figure.savefig("plots/timing.png")
+plot.set_yscale('log')
+plot.figure.savefig(os.path.join(os.path.dirname(__file__), "..", "plots", "timing.png"))

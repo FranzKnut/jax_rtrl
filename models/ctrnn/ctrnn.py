@@ -108,8 +108,9 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     h, jp, jx = carry
 
     # immediate jacobian (this step)
-    df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
-    df_dw = {"params": {"W": df_dw[0], "tau": df_dw[1]}}  # , "b": df_dw[1]
+    W, tau = params.values()
+    df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])((W, tau), h, x)
+    df_dw = {"W": df_dw[0], "tau": df_dw[1]}  # , "b": df_dw[1]
 
     # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
     dh_dh = df_dh * cell.dt  # + jnp.identity(num_units)
@@ -166,20 +167,6 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     return df_dw, dh_dx  # , hebb
 
 
-def rtrl_gradient(carry, df_dy, plasticity="rtrl"):
-    """Compute RTRL gradient."""
-    h, jp, jx = carry
-    if plasticity == "rflo":
-        grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
-    else:
-        grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
-    if len(df_dy.shape) > 1:
-        # has batch dim
-        grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
-    grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
-    return grads_p, grads_x
-
-
 # def rflo_tg(cell: CTRNNCell, carry, params, x):
 #     """Compute jacobian trace for RFLO."""
 #     h, jp, jx = carry
@@ -228,12 +215,13 @@ class OnlineCTRNNCell(CTRNNCell):
                 raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
             return traces
 
-        def f(mdl, h, x):
-            h, *traces = h
-            carry, out = CTRNNCell.__call__(mdl, h, x)
+        def f(mdl, carry, x):
+            h_next, out = CTRNNCell.__call__(mdl, carry[0], x)
             if force_trace_compute:
-                traces = _trace_update((carry, *traces), mdl.variables["params"], x)
-            return (carry, *traces), out
+                traces = _trace_update(carry, mdl.variables["params"], x)
+            else:
+                traces = carry[1:]
+            return (h_next, *traces), out
 
         def fwd(mdl, carry, x):
             """Forward pass with tmp for backward pass."""
@@ -249,13 +237,27 @@ class OnlineCTRNNCell(CTRNNCell):
             """Backward pass using RTRL."""
             # carry, jp, jx, hebb = tmp
             df_dy = y_bar[-1]
-            grads_p, grads_x = rtrl_gradient(tmp, df_dy, self.plasticity)
+            grads_p, grads_x = self.rtrl_gradient(tmp, df_dy, plasticity=self.plasticity)
             # grads_p['W'] += hebb
             carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
             return ({"params": grads_p}, carry, grads_x)
 
         f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
         return f_grad(self, carry, x)
+
+    @staticmethod
+    def rtrl_gradient(carry, df_dy, plasticity="rflo"):
+        """Compute RTRL gradient."""
+        h, jp, jx = carry
+        if plasticity == "rflo":
+            grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
+        else:
+            grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
+        if len(df_dy.shape) > 1:
+            # has batch dim
+            grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
+        grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
+        return grads_p, grads_x
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry with jacobian traces."""

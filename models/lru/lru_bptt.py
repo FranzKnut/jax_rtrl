@@ -1,3 +1,11 @@
+"""Linear Recurrent Units built with Jax.
+
+Stolen from the paper Real-Time Recurrent Learning using Trace Units in Reinforcement Learning
+by Elelimy et. al.
+NeurIPS 2024
+
+"""
+
 from flax import linen as nn
 import jax
 import jax.numpy as jnp
@@ -20,16 +28,12 @@ def get_lambda(nu_log, theta_log):
 
 
 class LRU(nn.Module):
-    r_max: jnp.float32 = 1.0
-    r_min: jnp.float32 = 0.0
-    max_phase: jnp.float32 = 6.28
+    r_max: float = 1.0
+    r_min: float = 0.0
+    max_phase: float = 6.28
 
     @nn.compact
     def __call__(self, carry, inputs):
-        """
-        carry: h_tminus1
-        inputs: (input_dim,)
-        """
         h_tminus1 = carry
         input_dim = inputs.shape[-1]
         hidden_dim = h_tminus1.shape[-1]
@@ -85,13 +89,13 @@ class LRULayer(nn.Module):
         online_lru = LRU()
         carry, h_t = online_lru(carry, x_t)
         C = C_real + 1j * C_img
-        y_t = (h_t @ C.transpose()).real
+        y_t = (h_t @ C.transpose()).real + D @ x_t
         return carry, y_t  # carry, output
 
 
 class BPTTLRUs(nn.Module):
+    num_units: int
     d_output: int
-    d_hidden: int
 
     @nn.compact
     def __call__(self, c, xs):
@@ -105,7 +109,7 @@ class BPTTLRUs(nn.Module):
         return model(d_output=self.d_output)(c, xs)
 
     def initialize_state(self, batch_size):
-        hidden_init = jnp.zeros((batch_size, self.d_hidden), dtype=jnp.complex64)
+        hidden_init = jnp.zeros((batch_size, self.num_units), dtype=jnp.complex64)
         return hidden_init
 
 
@@ -119,6 +123,6 @@ if __name__ == "__main__":
     init_x = jnp.zeros((seq_len, batch_size, d_input))  # batch_size,seq_len,d_input
 
     # BPTT Linear RTUs
-    bptt_lrtu = BPTTLRUs(d_hidden=d_hidden, d_output=1)
+    bptt_lrtu = BPTTLRUs(num_units=d_hidden, d_output=1)
     hidden_init = bptt_lrtu.initialize_state(batch_size)
     bptt_lrtu_params = bptt_lrtu.init(key, hidden_init, init_x)

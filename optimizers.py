@@ -25,7 +25,7 @@ class OptimizerConfig:
     decay_type: str | None = None
     lr_kwargs: dict = field(default_factory=dict, hash=False)
     weight_decay: float = 0.0
-    gradient_clip: float | None = None
+    gradient_clip: float | None = 1
     multi_step: int | None = None
 
 
