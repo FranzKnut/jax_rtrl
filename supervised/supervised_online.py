@@ -7,6 +7,7 @@ import jax.random as jrand
 import flax.linen as nn
 
 import matplotlib.pyplot as plt
+from supervised.datasets import sine, spirals
 
 from jax_rtrl.models.ctrnn.ctrnn import OnlineCTRNNCell
 from jax_rtrl.models.lru.online_lru import OnlineLRULayer
@@ -36,6 +37,8 @@ class Model(nn.Module):
             kwargs = {"dt": self.dt, "plasticity": self.plasticity}
         elif model_cls == OnlineLRULayer:
             kwargs = {"d_output": self.outsize}
+        else:
+            kwargs = {}
         return RNNEnsemble(
             RNNEnsembleConfig(
                 layers=(self.hidden_size,) * 2,
@@ -45,7 +48,7 @@ class Model(nn.Module):
                 out_dist=self.out_dist,
                 rnn_kwargs=kwargs,
                 output_layers=None,
-                fa_type="dfa"
+                fa_type="dfa",
             ),
             name="rnn",
         )
@@ -74,10 +77,9 @@ def make_model(initial_input, key, kwargs={}):
 
 if __name__ == "__main__":
     key = jrand.PRNGKey(1)
-    key, key_train = jrand.split(key)
+    key, key_data, key_train = jrand.split(key, 3)
 
-    x = jnp.linspace(0, 5 * np.pi, 100)[:, None]
-    y = jnp.sin(x) + 2
+    x, y = sine()
 
     model, params, h0 = make_model(x[0], key)
 
@@ -113,6 +115,6 @@ if __name__ == "__main__":
     plt.plot(x, y, label="target")
     plt.plot(x, y_hat.squeeze(), label="trained")
     plt.legend()
-    plt.show()
     os.makedirs("plots", exist_ok=True)
     plt.savefig("plots/sinewave.png")
+    plt.show()

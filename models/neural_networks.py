@@ -18,7 +18,7 @@ class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""
 
     f_align: bool = True
-    kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal(in_axis=-1, out_axis=-2)
 
     @nn.compact
     def __call__(self, x):
@@ -225,8 +225,8 @@ class MultiLayerRNN(nn.RNNCellBase):
 class FAMultiLayerRNN(MultiLayerRNN):
     """MultiLayer RNN with different modes of backpropagating error signals."""
 
-    kernel_init: nn.initializers.Initializer = nn.initializers.glorot_normal(in_axis=-1, out_axis=-2)
-    fa_type: str = "bp"
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal(in_axis=-1, out_axis=-2)
+    fa_type: str = "dfa"
 
     @nn.compact
     def __call__(self, carries, x, **kwargs):

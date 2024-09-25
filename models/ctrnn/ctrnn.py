@@ -162,7 +162,7 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     jtau += dh_dtau / tau
 
     df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jx
+    dh_dx = jnp.outer(df_dh, (W @ jnp.concatenate([jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))], axis=-1))[..., :x.shape[-1]])
     # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
     return df_dw, dh_dx  # , hebb
 
