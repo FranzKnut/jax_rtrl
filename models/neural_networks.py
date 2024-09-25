@@ -286,7 +286,7 @@ class RNNEnsembleConfig:
     out_size: int | None = None
     out_dist: str | None = None
     output_layers: tuple[int] | None = None
-    fa_type: str = "bp"
+    fa_type: str = "dfa"
     rnn_kwargs: dict = field(default_factory=dict)
     skip_connection: bool = False
 
@@ -416,7 +416,8 @@ class RNNEnsemble(nn.RNNCellBase):
     def clip_tau(params):
         """HACK: clip tau to > 1.0"""
         for k in params["params"]["rnn"]:
-            params["params"]["rnn"][k]["tau"] = jnp.clip(params["params"]["rnn"][k]["tau"], min=1.0)
+            for _l in params["params"]["rnn"][k]:
+                params["params"]["rnn"][k][_l]["tau"] = jnp.clip(params["params"]["rnn"][k][_l]["tau"], min=1.0)
         return params
 
 

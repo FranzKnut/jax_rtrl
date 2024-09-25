@@ -113,7 +113,7 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     df_dw = {"W": df_dw[0], "tau": df_dw[1]}  # , "b": df_dw[1]
 
     # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
-    dh_dh = df_dh * cell.dt  # + jnp.identity(num_units)
+    dh_dh = df_dh * cell.dt  # + jnp.identity(cell.num_units)
 
     # jacobian trace (previous step * dh_h)
     comm = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), jp)
