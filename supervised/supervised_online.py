@@ -44,7 +44,7 @@ class Model(nn.Module):
                 num_modules=self.num_modules,
                 out_dist=self.out_dist,
                 rnn_kwargs=kwargs,
-                output_layers=[self.outsize],
+                output_layers=None,
                 fa_type="dfa"
             ),
             name="rnn",
@@ -96,7 +96,7 @@ if __name__ == "__main__":
         (x, y),
         key_train,
         h0,
-        opt_config=OptimizerConfig(opt_name="adam", learning_rate=1e-3, gradient_clip=1),
+        opt_config=OptimizerConfig(opt_name="adam", learning_rate=1e-5, gradient_clip=1),
     )
 
     plt.figure(figsize=(10, 5))

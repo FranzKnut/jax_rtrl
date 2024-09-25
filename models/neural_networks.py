@@ -18,7 +18,7 @@ class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""
 
     f_align: bool = True
-    kernel_init: nn.initializers.Initializer = nn.initializers.glorot_normal(in_axis=-1, out_axis=-2)
+    kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
 
     @nn.compact
     def __call__(self, x):
@@ -203,7 +203,7 @@ class MultiLayerRNN(nn.RNNCellBase):
 
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
-        shapes = zip(self.layers, [input_shape, self.layers[:-1]])
+        shapes = zip(self.layers, [input_shape, *[(s,) for s in self.layers[:-1]]])
         return [self.rnn_cls(size, **self.rnn_kwargs).initialize_carry(rng, in_size) for size, in_size in shapes]
 
     def setup(self):
@@ -215,10 +215,10 @@ class MultiLayerRNN(nn.RNNCellBase):
         return 1
 
     @nn.compact
-    def __call__(self, carries, x):
+    def __call__(self, carries, x, **kwargs):
         """Call MLP."""
         for i, rnn in enumerate(self.rnns):
-            carries[i], x = rnn(carries[i], x)
+            carries[i], x = rnn(carries[i], x, **kwargs)
         return carries, x
 
 
@@ -229,9 +229,9 @@ class FAMultiLayerRNN(MultiLayerRNN):
     fa_type: str = "bp"
 
     @nn.compact
-    def __call__(self, carries, x):
+    def __call__(self, carries, x, **kwargs):
         if self.fa_type == "bp":
-            return MultiLayerRNN.__call__(self, carries, x)
+            return MultiLayerRNN.__call__(self, carries, x, **kwargs)
         elif self.fa_type == "dfa":
             Bs = [
                 self.variable(
@@ -247,13 +247,13 @@ class FAMultiLayerRNN(MultiLayerRNN):
             raise ValueError("unknown fa_type: " + self.fa_type)
 
         def f(mdl, _carries, x, _Bs):
-            return MultiLayerRNN.__call__(mdl, _carries, x)
+            return MultiLayerRNN.__call__(mdl, _carries, x, **kwargs)
 
         def fwd(mdl: MultiLayerRNN, _carries, x, _Bs):
             """Forward pass with tmp for backward pass."""
             vjps = []
             for i, rnn in enumerate(mdl.rnns):
-                (_carries[i], x), vjp_func = jax.vjp(rnn.apply, rnn.variables, _carries[i], x)
+                (_carries[i], x), vjp_func = jax.vjp(rnn.apply, rnn.variables, _carries[i], x, **kwargs)
                 vjps.append(vjp_func)
 
             return (_carries, x), (vjps, _Bs)
@@ -262,16 +262,16 @@ class FAMultiLayerRNN(MultiLayerRNN):
             """Backward pass that may use feedback alignment."""
             vjps, _Bs = tmp
             grads = zeros_like_tree(self.variables["params"])
-            params_t, *inputs_t = vjps[-1]((y_bar[0][-1], y_bar[1]))
-            grads_inputs = [inputs_t[0]]
-            grads[f"rnn_{len(self.layers)-1}"] = params_t["params"]
-            for i, rnn in enumerate(self.rnns[:-1]):
-                y_t = _Bs[i] @ y_bar[1]
+            grads_inputs = []
+            for i in range(len(self.rnns)):
+                y_t = _Bs[i] @ y_bar[1] if i < len(self.rnns) - 1 else y_bar[1]
                 params_t, *inputs_t = vjps[i]((y_bar[0][i], y_t))
                 grads[f"rnn_{i}"] = params_t["params"]
                 grads_inputs.append(inputs_t[0])
+                if i == 0:
+                    x_grad = inputs_t[1]
 
-            return ({"params": grads}, grads_inputs, zeros_like_tree(inputs_t[1]), zeros_like_tree(_Bs))
+            return ({"params": grads}, grads_inputs, x_grad, zeros_like_tree(_Bs))
 
         fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
 
@@ -384,10 +384,10 @@ class RNNEnsemble(nn.RNNCellBase):
         return loss_fn(outs, target)
 
     @nn.nowrap
-    def loss_and_grad(self, params, loss_fn, carry, x, target):
+    def loss_and_grad(self, params, loss_fn, carry, hidden, x, target):
         # Compute gradient of loss wrt to network output
         loss, (grads, df_dh) = jax.value_and_grad(self.apply, argnums=[0, 1])(
-            params, [c[0].real for c in carry], loss_fn, target, x, method=self._loss
+            params, [c[-1][0].real for c in carry], loss_fn, target, x, method=self._loss
         )
 
         # Compute parameter gradients for each RNN
