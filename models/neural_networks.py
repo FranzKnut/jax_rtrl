@@ -226,7 +226,7 @@ class FAMultiLayerRNN(MultiLayerRNN):
     """MultiLayer RNN with different modes of backpropagating error signals."""
 
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal(in_axis=-1, out_axis=-2)
-    fa_type: str = "dfa"
+    fa_type: str = "bp"
 
     @nn.compact
     def __call__(self, carries, x, **kwargs):
@@ -286,7 +286,7 @@ class RNNEnsembleConfig:
     out_size: int | None = None
     out_dist: str | None = None
     output_layers: tuple[int] | None = None
-    fa_type: str = "dfa"
+    fa_type: str = "bp"
     rnn_kwargs: dict = field(default_factory=dict)
     skip_connection: bool = False
 
