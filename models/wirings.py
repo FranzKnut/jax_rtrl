@@ -1,5 +1,6 @@
 """RNN wirings for JAX."""
 
+import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
@@ -45,16 +46,18 @@ def random(output_size: int, input_size: int, key=None, sparsity=0.5, **_):
     return mask
 
 
-def ncp(num_units: int, input_size: int, interneurons: int, key=None, sparsity=0.3):
+def ncp(num_units: int, input_size: int, output_neurons: int = None, key=None, sparsity=0.3):
     """Neural Circuit Policies (NCP) wiring."""
-    assert num_units >= interneurons, f"num_units ({num_units}) must be greater equal interneurons ({interneurons})"
-    output_size = num_units - interneurons
+    if output_neurons is None:
+        output_neurons = num_units // 2
+    assert num_units >= output_neurons, f"num_units ({num_units}) must be greater equal interneurons ({output_neurons})"
+    interneurons = num_units - output_neurons
     if key is None:
         key = jrandom.PRNGKey(0)
     mask = jnp.zeros((num_units, input_size))
     # interneurons receive from inputs and interneurons
-    mask = mask.at[-interneurons:, :-output_size].set(
-        jrandom.bernoulli(key, 1 - sparsity, shape=(interneurons, input_size - output_size))
+    mask = mask.at[-interneurons:, :-output_neurons].set(
+        jrandom.bernoulli(key, 1 - sparsity, shape=(interneurons, input_size - output_neurons))
     )
     # all neurons do receive from interneurons
     mask = mask.at[:, -interneurons:].set(jrandom.bernoulli(key, 1 - sparsity, shape=(num_units, interneurons)))
@@ -67,6 +70,19 @@ def ncp(num_units: int, input_size: int, interneurons: int, key=None, sparsity=0
     # for j, line in enumerate(mask):
     #     print(state_strings[j] + ' ' + str(line))
     return mask
+
+
+def diagonal(num_units: int, input_size: int, **_):
+    """Diagonally connected hidden units."""
+    return jnp.concatenate([jnp.ones((num_units, input_size - num_units)), jnp.eye(num_units)], axis=1)
+
+
+def block_diagonal(num_units: int, input_size: int, num_blocks: int = 4, **_):
+    """Unconnected blocks for hidden units and fully connected input."""
+    assert num_units % num_blocks == 0, f"num_units ({num_units}) must be divisible by num_blocks ({num_blocks})"
+    input_mask = jnp.ones((num_units, input_size - num_units))
+    _blocks = [jnp.ones((num_units // num_blocks, num_units // num_blocks)) for _ in range(num_blocks)]
+    return jnp.concatenate([input_mask, jax.scipy.linalg.block_diag(*_blocks)], axis=1)
 
 
 def make_mask_initializer(wiring_name: str, bias=True, **kwargs):
