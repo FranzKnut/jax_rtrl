@@ -86,6 +86,28 @@ def tree_stack(trees):
     return treedef_list[0].unflatten(result_leaves)
 
 
+def restore_params_and_config(path):
+    """Restore params and config from checkpoint."""
+    path = os.path.abspath(path)
+    hparams_file_path = os.path.join(path, "hparams.json")
+    orbax_path = os.path.join(path, "ckpt")
+
+    checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    params = checkpointer.restore(
+        orbax_path,
+        restore_args=jax.tree_map(
+            lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray), checkpointer.metadata(orbax_path)
+        ),
+    )
+
+    if os.path.exists(hparams_file_path):
+        with open(hparams_file_path) as f:
+            restored_hparams = json.load(f)
+    else:
+        restored_hparams = {}
+    return params, restored_hparams
+
+
 def checkpointing(path, fresh=False, hparams: dict = None):
     """Set up checkpointing at given path.
 
@@ -116,16 +138,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
         if fresh:
             print("Overwriting existing checkpoint")
         else:
-            restored_params = checkpointer.restore(
-                orbax_path,
-                restore_args=jax.tree_map(
-                    lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray), checkpointer.metadata(orbax_path)
-                ),
-            )
-            print("Restored model from checkpoint")
-            if os.path.exists(hparams_file_path):
-                with open(hparams_file_path) as f:
-                    restored_hparams = json.load(f)
+            restored_params, restored_hparams = restore_params_and_config(path)
 
     if (not exists or fresh) and hparams is not None:
         os.makedirs(path, exist_ok=True)
