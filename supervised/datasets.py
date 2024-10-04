@@ -111,7 +111,7 @@ def sine(length=100, offset=2, num_periods=3):
 # Gym Simulations ---------------------------------------------------------------
 
 
-def rollouts(name, with_time=False):
+def rollouts(data_folder, with_time=False):
     """Load a dataset from the BulletEnv simulator.
 
     :param name: Environment name
@@ -119,8 +119,7 @@ def rollouts(name, with_time=False):
     :param act_in_obs: If True, the actions are included in the observations
     :return:
     """
-    path = "artifacts/rollouts/" + name
-    files = sorted([os.path.join(path, d) for d in os.listdir(path) if d.endswith(".npz")])
+    files = sorted([os.path.join(data_folder, d) for d in os.listdir(data_folder) if d.endswith(".npz")])
 
     all_x = []
     if with_time:

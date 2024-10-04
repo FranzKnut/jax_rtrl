@@ -11,7 +11,7 @@ import flax.linen as nn
 
 from jax_rtrl.models.jax_util import zeros_like_tree
 
-from .ctrnn.ctrnn import CTRNNCell, OnlineCTRNNCell
+from .ctrnn import CTRNNCell, OnlineCTRNNCell
 
 
 class FADense(nn.Dense):

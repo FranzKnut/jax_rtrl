@@ -9,8 +9,8 @@ import flax.linen as nn
 import matplotlib.pyplot as plt
 from supervised.datasets import sine, spirals
 
-from jax_rtrl.models.ctrnn.ctrnn import OnlineCTRNNCell
-from jax_rtrl.models.lru.online_lru import OnlineLRULayer
+from models.ctrnn import OnlineCTRNNCell
+from models.lru import OnlineLRULayer
 from jax_rtrl.optimizers import OptimizerConfig
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))

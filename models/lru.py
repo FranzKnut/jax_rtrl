@@ -13,8 +13,6 @@ import flax
 from typing import Any, Tuple
 from functools import partial
 
-from jax_rtrl.models.lru.params_init import gamma_log_init, matrix_init, nu_log_init, theta_log_init
-
 PRNGKey = Any
 Shape = Tuple[int, ...]
 Dtype = Any
@@ -24,6 +22,30 @@ Array = Any
 def get_lambda(nu_log, theta_log):
     Lambda = jnp.exp(-jnp.exp(nu_log) + 1j * jnp.exp(theta_log))
     return Lambda
+
+
+def nu_log_init(key, shape, r_max=1, r_min=0):
+    u1 = jax.random.uniform(key, shape=shape)
+    nu_log = jnp.log(-0.5 * jnp.log(u1 * (r_max**2 - r_min**2) + r_min**2))
+    return nu_log
+
+
+def theta_log_init(key, shape, max_phase=6.28):
+    u2 = jax.random.uniform(key, shape=shape)
+    theta_log = jnp.log(max_phase * u2)
+    return theta_log
+
+
+def gamma_log_init(key, shape, nu_log, theta_log):
+    nu = jnp.exp(nu_log)
+    theta = jnp.exp(theta_log)
+    diag_lambda = jnp.exp(-nu + 1j * theta)
+    return jnp.log(jnp.sqrt(1 - jnp.abs(diag_lambda) ** 2))
+
+
+# Glorot initialization
+def matrix_init(key, shape, dtype=jnp.float32, normalization=1):
+    return jax.random.normal(key=key, shape=shape, dtype=dtype) / normalization
 
 
 class LRUCell(nn.Module):
@@ -72,9 +94,14 @@ class LRUCell(nn.Module):
 
 class OnlineLRUCell(nn.RNNCellBase):
     num_units: int
+    plasticity: str = "bptt"
 
     @nn.compact
     def __call__(self, carry, x_t, force_trace_compute=False):
+        model_fn = LRUCell(self.num_units)
+        if self.plasticity == "bptt":
+            return model_fn(carry, x_t)
+            
         def _trace_update(carry, _p, x_t):
             h, grad_memory = carry
             Lambda = get_lambda(_p["nu_log"], _p["theta_log"])
@@ -110,7 +137,7 @@ class OnlineLRUCell(nn.RNNCellBase):
             return self.rtrl_gradient(residuals, y_t)
 
         online_lru_cell_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        model_fn = LRUCell(self.num_units)
+        
         # carry, out = online_lru_cell_grad(model_fn, carry, x_t)
         return online_lru_cell_grad(model_fn, carry, x_t)  # carry, output
 
