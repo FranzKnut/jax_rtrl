@@ -309,7 +309,7 @@ class RNNEnsemble(nn.RNNCellBase):
         ]
         if self.config.output_layers:
             self.mlps = [
-                MLP(self.config.output_layers, self.config.rnn_kwargs.get("f_align", False), name=f"mlps_{i}")
+                MLP(self.config.output_layers, f_align=self.config.rnn_kwargs.get("f_align", False), name=f"mlps_{i}")
                 for i in range(self.config.num_modules)
             ]
         if self.config.out_size is not None:
