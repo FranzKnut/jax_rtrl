@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as np
 from flax import linen as nn
-from .layers import SequenceLayer
+from .layers import S5SequenceLayer
 
 
 class StackedEncoderModel(nn.Module):
@@ -38,7 +38,7 @@ class StackedEncoderModel(nn.Module):
         """
         self.encoder = nn.Dense(self.d_model)
         self.layers = [
-            SequenceLayer(
+            S5SequenceLayer(
                 ssm=self.ssm,
                 dropout=self.dropout,
                 d_model=self.d_model,

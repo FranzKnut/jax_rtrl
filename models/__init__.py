@@ -1,18 +1,17 @@
 import flax
 import flax.linen
 import jax
-from jax_rtrl.models.lru.lru_bptt import LRULayer
-from models.lru import OnlineLRUCell, OnlineLRULayer
+from models.lru import OnlineLRULayer
+from models.s5.layers import S5SequenceLayer
 from .ctrnn import CTRNNCell, OnlineCTRNNCell
-from .neural_networks import FADense
-from .neural_networks import MLP
 
 CELL_TYPES = {
     "ctrnn": CTRNNCell,
     "rflo": OnlineCTRNNCell,
     "rtrl": OnlineCTRNNCell,
-    "lru": LRULayer,
+    "lru": OnlineLRULayer,
     "lru_rtrl": OnlineLRULayer,
+    "s5": S5SequenceLayer,
 }
 
 

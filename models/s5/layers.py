@@ -2,7 +2,7 @@ from flax import linen as nn
 import jax
 
 
-class SequenceLayer(nn.Module):
+class S5SequenceLayer(nn.Module):
     """ Defines a single S5 layer, with S5 SSM, nonlinearity,
             dropout, batch/layer norm, etc.
         Args:
