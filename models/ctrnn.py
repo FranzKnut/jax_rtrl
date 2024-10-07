@@ -162,7 +162,12 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     jtau += dh_dtau / tau
 
     df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jnp.outer(df_dh, (W @ jnp.concatenate([jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))], axis=-1))[..., :x.shape[-1]])
+    dh_dx = jnp.outer(
+        df_dh,
+        (W @ jnp.concatenate([jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))], axis=-1))[
+            ..., : x.shape[-1]
+        ],
+    )
     # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
     return df_dw, dh_dx  # , hebb
 
@@ -203,8 +208,12 @@ class OnlineCTRNNCell(CTRNNCell):
 
     @nn.compact
     def __call__(self, carry, x, force_trace_compute=False):  # noqa
+
         if carry is None:
             carry = self.initialize_carry(self.make_rng(), x.shape)
+            
+        if self.plasticity == "bptt":
+            return CTRNNCell.__call__(self, carry, x)
 
         def _trace_update(carry, _p, x):
             if self.plasticity == "rtrl":
@@ -262,6 +271,9 @@ class OnlineCTRNNCell(CTRNNCell):
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry with jacobian traces."""
         h = super().initialize_carry(rng, input_shape)
+        if self.plasticity == "bptt":
+            return h
+
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
         params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
