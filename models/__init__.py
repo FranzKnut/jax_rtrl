@@ -6,7 +6,7 @@ from models.s5.layers import S5SequenceLayer
 from .ctrnn import CTRNNCell, OnlineCTRNNCell
 
 CELL_TYPES = {
-    "ctrnn": CTRNNCell,
+    "bptt": CTRNNCell,
     "rflo": OnlineCTRNNCell,
     "rtrl": OnlineCTRNNCell,
     "lru": OnlineLRULayer,
