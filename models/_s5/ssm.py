@@ -1,22 +1,41 @@
+from dataclasses import dataclass
 from functools import partial
+from typing import Optional
 import jax
 import jax.numpy as np
 from flax import linen as nn
 from jax.nn.initializers import lecun_normal, normal
+from jax.scipy.linalg import block_diag
 
-from .ssm_init import init_CV, init_VinvB, init_log_steps, trunc_standard_normal
+from .ssm_init import init_CV, init_VinvB, init_log_steps, make_DPLR_HiPPO, trunc_standard_normal
+
+
+@dataclass
+class S5Config:
+    # Model Parameters
+    d_model: int = 128
+    blocks: int = 8
+    C_init: str = "trunc_standard_normal"
+    discretization: str = "zoh"
+    mode: str = "pool"
+    activation_fn: str = "half_glu1"
+    conj_sym: bool = True
+    clip_eigs: bool = False
+    bidirectional: bool = False
+    dt_min: float = 0.001
+    dt_max: float = 0.1
 
 
 # Discretization functions
 def discretize_bilinear(Lambda, B_tilde, Delta):
-    """ Discretize a diagonalized, continuous-time linear SSM
-        using bilinear transform method.
-        Args:
-            Lambda (complex64): diagonal state matrix              (P,)
-            B_tilde (complex64): input matrix                      (P, H)
-            Delta (float32): discretization step sizes             (P,)
-        Returns:
-            discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+    """Discretize a diagonalized, continuous-time linear SSM
+    using bilinear transform method.
+    Args:
+        Lambda (complex64): diagonal state matrix              (P,)
+        B_tilde (complex64): input matrix                      (P, H)
+        Delta (float32): discretization step sizes             (P,)
+    Returns:
+        discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
     """
     Identity = np.ones(Lambda.shape[0])
 
@@ -27,30 +46,30 @@ def discretize_bilinear(Lambda, B_tilde, Delta):
 
 
 def discretize_zoh(Lambda, B_tilde, Delta):
-    """ Discretize a diagonalized, continuous-time linear SSM
-        using zero-order hold method.
-        Args:
-            Lambda (complex64): diagonal state matrix              (P,)
-            B_tilde (complex64): input matrix                      (P, H)
-            Delta (float32): discretization step sizes             (P,)
-        Returns:
-            discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
+    """Discretize a diagonalized, continuous-time linear SSM
+    using zero-order hold method.
+    Args:
+        Lambda (complex64): diagonal state matrix              (P,)
+        B_tilde (complex64): input matrix                      (P, H)
+        Delta (float32): discretization step sizes             (P,)
+    Returns:
+        discretized Lambda_bar (complex64), B_bar (complex64)  (P,), (P,H)
     """
     Identity = np.ones(Lambda.shape[0])
     Lambda_bar = np.exp(Lambda * Delta)
-    B_bar = (1/Lambda * (Lambda_bar-Identity))[..., None] * B_tilde
+    B_bar = (1 / Lambda * (Lambda_bar - Identity))[..., None] * B_tilde
     return Lambda_bar, B_bar
 
 
 # Parallel scan operations
 @jax.vmap
 def binary_operator(q_i, q_j):
-    """ Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
-        Args:
-            q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
-            q_j: tuple containing A_j and Bu_j at position j       (P,), (P,)
-        Returns:
-            new element ( A_out, Bu_out )
+    """Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
+    Args:
+        q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
+        q_j: tuple containing A_j and Bu_j at position j       (P,), (P,)
+    Returns:
+        new element ( A_out, Bu_out )
     """
     A_i, b_i = q_i
     A_j, b_j = q_j
@@ -58,41 +77,38 @@ def binary_operator(q_i, q_j):
 
 
 def apply_ssm(Lambda_bar, B_bar, C_tilde, input_sequence, conj_sym, bidirectional):
-    """ Compute the LxH output of discretized SSM given an LxH input.
-        Args:
-            Lambda_bar (complex64): discretized diagonal state matrix    (P,)
-            B_bar      (complex64): discretized input matrix             (P, H)
-            C_tilde    (complex64): output matrix                        (H, P)
-            input_sequence (float32): input sequence of features         (L, H)
-            conj_sym (bool):         whether conjugate symmetry is enforced
-            bidirectional (bool):    whether bidirectional setup is used,
-                                  Note for this case C_tilde will have 2P cols
-        Returns:
-            ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
+    """Compute the LxH output of discretized SSM given an LxH input.
+    Args:
+        Lambda_bar (complex64): discretized diagonal state matrix    (P,)
+        B_bar      (complex64): discretized input matrix             (P, H)
+        C_tilde    (complex64): output matrix                        (H, P)
+        input_sequence (float32): input sequence of features         (L, H)
+        conj_sym (bool):         whether conjugate symmetry is enforced
+        bidirectional (bool):    whether bidirectional setup is used,
+                              Note for this case C_tilde will have 2P cols
+    Returns:
+        ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
     """
-    Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0],
-                                            Lambda_bar.shape[0]))
+    Lambda_elements = Lambda_bar * np.ones((input_sequence.shape[0], Lambda_bar.shape[0]))
     Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
 
     _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
 
     if bidirectional:
-        _, xs2 = jax.lax.associative_scan(binary_operator,
-                                          (Lambda_elements, Bu_elements),
-                                          reverse=True)
+        _, xs2 = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements), reverse=True)
         xs = np.concatenate((xs, xs2), axis=-1)
 
     if conj_sym:
-        return jax.vmap(lambda x: 2*(C_tilde @ x).real)(xs)
+        return jax.vmap(lambda x: 2 * (C_tilde @ x).real)(xs)
     else:
         return jax.vmap(lambda x: (C_tilde @ x).real)(xs)
 
 
 class S5SSM(nn.Module):
-    Lambda_re_init: np.DeviceArray
-    Lambda_im_init: np.DeviceArray
-    V: np.DeviceArray
-    Vinv: np.DeviceArray
+    Lambda_re_init: jax.Array
+    Lambda_im_init: jax.Array
+    V: jax.Array
+    Vinv: jax.Array
 
     H: int
     P: int
@@ -138,13 +154,13 @@ class S5SSM(nn.Module):
 
     def setup(self):
         """Initializes parameters once and performs discretization each time
-           the SSM is applied to a sequence
+        the SSM is applied to a sequence
         """
 
         if self.conj_sym:
             # Need to account for case where we actually sample real B and C, and then multiply
             # by the half sized Vinv and possibly V
-            local_P = 2*self.P
+            local_P = 2 * self.P
         else:
             local_P = self.P
 
@@ -159,12 +175,7 @@ class S5SSM(nn.Module):
         # Initialize input to state (B) matrix
         B_init = lecun_normal()
         B_shape = (local_P, self.H)
-        self.B = self.param("B",
-                            lambda rng, shape: init_VinvB(B_init,
-                                                          rng,
-                                                          shape,
-                                                          self.Vinv),
-                            B_shape)
+        self.B = self.param("B", lambda rng, shape: init_VinvB(B_init, rng, shape, self.Vinv), B_shape)
         B_tilde = self.B[..., 0] + 1j * self.B[..., 1]
 
         # Initialize state to output (C) matrix
@@ -175,10 +186,9 @@ class S5SSM(nn.Module):
             C_init = lecun_normal()
             C_shape = (self.H, local_P, 2)
         elif self.C_init in ["complex_normal"]:
-            C_init = normal(stddev=0.5 ** 0.5)
+            C_init = normal(stddev=0.5**0.5)
         else:
-            raise NotImplementedError(
-                   "C_init method {} not implemented".format(self.C_init))
+            raise NotImplementedError("C_init method {} not implemented".format(self.C_init))
 
         if self.C_init in ["complex_normal"]:
             if self.bidirectional:
@@ -191,21 +201,15 @@ class S5SSM(nn.Module):
 
         else:
             if self.bidirectional:
-                self.C1 = self.param("C1",
-                                     lambda rng, shape: init_CV(C_init, rng, shape, self.V),
-                                     C_shape)
-                self.C2 = self.param("C2",
-                                     lambda rng, shape: init_CV(C_init, rng, shape, self.V),
-                                     C_shape)
+                self.C1 = self.param("C1", lambda rng, shape: init_CV(C_init, rng, shape, self.V), C_shape)
+                self.C2 = self.param("C2", lambda rng, shape: init_CV(C_init, rng, shape, self.V), C_shape)
 
                 C1 = self.C1[..., 0] + 1j * self.C1[..., 1]
                 C2 = self.C2[..., 0] + 1j * self.C2[..., 1]
                 self.C_tilde = np.concatenate((C1, C2), axis=-1)
 
             else:
-                self.C = self.param("C",
-                                    lambda rng, shape: init_CV(C_init, rng, shape, self.V),
-                                    C_shape)
+                self.C = self.param("C", lambda rng, shape: init_CV(C_init, rng, shape, self.V), C_shape)
 
                 self.C_tilde = self.C[..., 0] + 1j * self.C[..., 1]
 
@@ -213,9 +217,7 @@ class S5SSM(nn.Module):
         self.D = self.param("D", normal(stddev=1.0), (self.H,))
 
         # Initialize learnable discretization timescale value
-        self.log_step = self.param("log_step",
-                                   init_log_steps,
-                                   (self.P, self.dt_min, self.dt_max))
+        self.log_step = self.param("log_step", init_log_steps, (self.P, self.dt_min, self.dt_max))
         step = self.step_rescale * np.exp(self.log_step[:, 0])
 
         # Discretize
@@ -226,7 +228,17 @@ class S5SSM(nn.Module):
         else:
             raise NotImplementedError("Discretization method {} not implemented".format(self.discretization))
 
-    def __call__(self, input_sequence):
+    def initialize_carry(self, rng, shape):
+        """Initialize the carry state of the SSM
+        Args:
+            rng (jax.random.PRNGKey): random key
+            shape (tuple): shape of the input sequence
+        Returns:
+            carry (tuple): initial state of the SSM
+        """
+        return np.zeros((self.P,) + shape[:-1])
+
+    def __call__(self, seq_or_carry, xs=None):
         """
         Compute the LxH output of the S5 SSM given an LxH input sequence
         using a parallel scan.
@@ -235,45 +247,66 @@ class S5SSM(nn.Module):
         Returns:
             output sequence (float32): (L, H)
         """
-        ys = apply_ssm(self.Lambda_bar,
-                       self.B_bar,
-                       self.C_tilde,
-                       input_sequence,
-                       self.conj_sym,
-                       self.bidirectional)
+        if xs is not None:
+            ys = self.Lambda_bar * seq_or_carry + self.B_bar @ xs
+            ys = (self.C_tilde @ ys).real
+
+        else:
+            ys = apply_ssm(
+                self.Lambda_bar,
+                self.B_bar,
+                self.C_tilde,
+                seq_or_carry,
+                self.conj_sym,
+                self.bidirectional,
+            )
 
         # Add feedthrough matrix output Du;
-        Du = jax.vmap(lambda u: self.D * u)(input_sequence)
+        Du = jax.vmap(lambda u: self.D * u)(seq_or_carry)
         return ys + Du
 
 
-def init_S5SSM(H,
-               P,
-               Lambda_re_init,
-               Lambda_im_init,
-               V,
-               Vinv,
-               C_init,
-               discretization,
-               dt_min,
-               dt_max,
-               conj_sym,
-               clip_eigs,
-               bidirectional
-               ):
-    """Convenience function that will be used to initialize the SSM.
-       Same arguments as defined in S5SSM above."""
-    return partial(S5SSM,
-                   H=H,
-                   P=P,
-                   Lambda_re_init=Lambda_re_init,
-                   Lambda_im_init=Lambda_im_init,
-                   V=V,
-                   Vinv=Vinv,
-                   C_init=C_init,
-                   discretization=discretization,
-                   dt_min=dt_min,
-                   dt_max=dt_max,
-                   conj_sym=conj_sym,
-                   clip_eigs=clip_eigs,
-                   bidirectional=bidirectional)
+def init_S5SSM(hidden_size: int, config: S5Config, **kwargs):
+    """Convenience function that will be used to initialize the SSM."""
+    P = hidden_size
+    H = config.d_model
+    block_size = int(P / config.blocks)
+
+    # Initialize state matrix A using approximation to HiPPO-LegS matrix
+    Lambda, _, B, V, B_orig = make_DPLR_HiPPO(block_size)
+
+    if config.conj_sym:
+        block_size = block_size // 2
+        P = P // 2
+
+    Lambda = Lambda[:block_size]
+    V = V[:, :block_size]
+    Vc = V.conj().T
+
+    # If initializing state matrix A as block-diagonal, put HiPPO approximation
+    # on each block
+    Lambda = (Lambda * np.ones((config.blocks, block_size))).ravel()
+    V = block_diag(*([V] * config.blocks))
+    Vinv = block_diag(*([Vc] * config.blocks))
+
+    print("Lambda.shape={}".format(Lambda.shape))
+    print("V.shape={}".format(V.shape))
+    print("Vinv.shape={}".format(Vinv.shape))
+
+    return partial(
+        S5SSM,
+        H=H,
+        P=P,
+        Lambda_re_init=Lambda.real,
+        Lambda_im_init=Lambda.imag,
+        V=V,
+        Vinv=Vinv,
+        C_init=config.C_init,
+        discretization=config.discretization,
+        dt_min=config.dt_min,
+        dt_max=config.dt_max,
+        conj_sym=config.conj_sym,
+        clip_eigs=config.clip_eigs,
+        bidirectional=config.bidirectional,
+        **kwargs,
+    )

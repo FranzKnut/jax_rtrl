@@ -23,7 +23,7 @@ class StackedEncoderModel(nn.Module):
     """
     ssm: nn.Module
     d_model: int
-    n_layers: int
+    n_layers: int = 1
     activation: str = "gelu"
     dropout: float = 0.0
     training: bool = True

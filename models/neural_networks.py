@@ -308,7 +308,7 @@ class RNNEnsemble(nn.RNNCellBase):
             for i in range(self.config.num_modules)
         ]
         if self.config.output_layers:
-            self.mlps = [
+            self.mlps_out = [
                 MLP(self.config.output_layers, f_align=self.config.rnn_kwargs.get("f_align", False), name=f"mlps_{i}")
                 for i in range(self.config.num_modules)
             ]
@@ -327,7 +327,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 out = jnp.concatenate([x, out], axis=-1)
             # Outup FF layers
             if self.config.output_layers:
-                out = self.mlps[i](out)
+                out = self.mlps_out[i](out)
             if self.config.out_size is not None:
                 # Make distribution for each submodule
                 outs[i] = self.dists[i](out)

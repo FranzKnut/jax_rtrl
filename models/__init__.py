@@ -1,8 +1,8 @@
+from .s5 import StackedEncoderModel
 import flax
 import flax.linen
 import jax
 from models.lru import OnlineLRULayer
-from models.s5.layers import S5SequenceLayer
 from .ctrnn import CTRNNCell, OnlineCTRNNCell
 
 CELL_TYPES = {
@@ -11,7 +11,8 @@ CELL_TYPES = {
     "rtrl": OnlineCTRNNCell,
     "lru": OnlineLRULayer,
     "lru_rtrl": OnlineLRULayer,
-    "s5": S5SequenceLayer,
+    "s5": StackedEncoderModel,
+    "s5_rtrl": StackedEncoderModel,
 }
 
 
