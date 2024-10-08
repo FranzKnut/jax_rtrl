@@ -289,9 +289,9 @@ def init_S5SSM(hidden_size: int, config: S5Config, **kwargs):
     V = block_diag(*([V] * config.blocks))
     Vinv = block_diag(*([Vc] * config.blocks))
 
-    print("Lambda.shape={}".format(Lambda.shape))
-    print("V.shape={}".format(V.shape))
-    print("Vinv.shape={}".format(Vinv.shape))
+    # print("Lambda.shape={}".format(Lambda.shape))
+    # print("V.shape={}".format(V.shape))
+    # print("Vinv.shape={}".format(Vinv.shape))
 
     return partial(
         S5SSM,

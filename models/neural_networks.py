@@ -285,6 +285,7 @@ class RNNEnsembleConfig:
     model: type = OnlineCTRNNCell
     out_size: int | None = None
     out_dist: str | None = None
+    input_layers: tuple[int] | None = None  # TODO
     output_layers: tuple[int] | None = None
     fa_type: str = "bp"
     rnn_kwargs: dict = field(default_factory=dict)
@@ -334,7 +335,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
         # Aggregate outputs
         if not self.config.out_dist:
-            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=0), *outs)
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
         else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)

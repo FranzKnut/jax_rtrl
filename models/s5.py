@@ -14,7 +14,7 @@ from jax.scipy.linalg import block_diag
 @dataclass
 class S5Config:
     # Model Parameters
-    d_model: int = 128
+    state_size: int = 128
     blocks: int = 8
     C_init: str = "trunc_standard_normal"
     discretization: str = "zoh"
@@ -288,8 +288,10 @@ def apply_ssm(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, resets, conj_s
     Returns:
         ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
     """
-    Lambda_elements = Lambda_bar * jnp.ones((input_sequence.shape[0], Lambda_bar.shape[0]))
-    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence)
+    Lambda_elements = Lambda_bar * jnp.ones((*input_sequence.shape[:-1], Lambda_bar.shape[0])).reshape(
+        -1, Lambda_bar.shape[0]
+    )
+    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence.reshape(-1, input_sequence.shape[-1]))
 
     Lambda_elements = jnp.concatenate(
         [
@@ -300,7 +302,7 @@ def apply_ssm(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, resets, conj_s
 
     Bu_elements = jnp.concatenate(
         [
-            hidden,
+            hidden.reshape(-1, hidden.shape[-1]),
             Bu_elements,
         ]
     )
@@ -318,9 +320,9 @@ def apply_ssm(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, resets, conj_s
     xs = xs[1:]
 
     if conj_sym:
-        return xs[np.newaxis, -1], jax.vmap(lambda x: 2 * (C_tilde @ x).real)(xs)
+        return xs[..., -1, :], jax.vmap(lambda x: 2 * (C_tilde @ x).real)(xs).reshape(input_sequence.shape)
     else:
-        return xs[np.newaxis, -1], jax.vmap(lambda x: (C_tilde @ x).real)(xs)
+        return xs[..., -1, :], jax.vmap(lambda x: (C_tilde @ x).real)(xs).reshape(input_sequence.shape)
 
 
 class S5SSM(nn.Module):
@@ -458,17 +460,25 @@ class S5SSM(nn.Module):
             output sequence (float32): (L, H)
         """
         hidden, ys = apply_ssm(
-            self.Lambda_bar, self.B_bar, self.C_tilde, hidden, input_sequence, resets, self.conj_sym, self.bidirectional
+            self.Lambda_bar,
+            self.B_bar,
+            self.C_tilde,
+            hidden,
+            input_sequence,
+            resets,
+            self.conj_sym,
+            self.bidirectional,
         )
         # Add feedthrough matrix output Du;
-        Du = jax.vmap(lambda u: self.D * u)(input_sequence)
+        input_time_dim = input_sequence.reshape(-1, input_sequence.shape[-1])
+        Du = jax.vmap(lambda u: self.D * u)(input_time_dim).reshape(input_sequence.shape)
         return hidden, ys + Du
 
 
-def init_S5SSM(hidden_size: int, config: S5Config):
+def init_S5SSM(d_model: int, config: S5Config):
     """Convenience function that will be used to initialize the SSM."""
-    P = hidden_size
-    H = config.d_model
+    P = config.state_size
+    H = d_model
     block_size = int(P / config.blocks)
 
     # Initialize state matrix A using approximation to HiPPO-LegS matrix
@@ -488,9 +498,9 @@ def init_S5SSM(hidden_size: int, config: S5Config):
     V = block_diag(*([V] * config.blocks))
     Vinv = block_diag(*([Vc] * config.blocks))
 
-    print("Lambda.shape={}".format(Lambda.shape))
-    print("V.shape={}".format(V.shape))
-    print("Vinv.shape={}".format(Vinv.shape))
+    # print("Lambda.shape={}".format(Lambda.shape))
+    # print("V.shape={}".format(V.shape))
+    # print("Vinv.shape={}".format(Vinv.shape))
 
     return partial(
         S5SSM,
@@ -628,6 +638,5 @@ class StackedEncoderModel(nn.Module):
     @nn.nowrap
     def initialize_carry(self, rng, input_shape):
         # Use a dummy key since the default state init fn is just zeros.
-        return [
-            jnp.zeros((1, *input_shape[:-1], self.d_model), dtype=jnp.complex64) for _ in range(self.n_layers)
-        ]
+        local_P = self.config.state_size // 2 if self.config.conj_sym else self.config.state_size
+        return [jnp.zeros((*input_shape[:-1], local_P), dtype=jnp.complex64) for _ in range(self.n_layers)]
