@@ -44,7 +44,6 @@ class StackedEncoderModel(nn.Module):
                 d_model=self.d_model,
                 activation=self.activation,
                 training=self.training,
-                prenorm=self.prenorm,
                 batchnorm=self.batchnorm,
                 bn_momentum=self.bn_momentum,
                 step_rescale=self.step_rescale,

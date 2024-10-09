@@ -15,6 +15,17 @@ from optimizers import OptimizerConfig, make_multi_transform
 
 @dataclass
 class S5Config(ModelConfig):
+    """S5 Configuration
+
+    Parameters
+    ----------
+    activation  (string):   Type of activation function to use
+    prenorm     (bool):     apply prenorm if true or postnorm if false
+    step_rescale  (float32):  allows for uniformly changing the timescale parameter,
+                            e.g. after training on a different resolution for
+                            the speech commands benchmark
+    """
+
     # Model Parameters
     state_size: int = 256
     n_layers: int = 2
@@ -29,31 +40,28 @@ class S5Config(ModelConfig):
     dt_min: float = 0.001
     dt_max: float = 0.1
     kwargs: dict = field(default_factory=dict)
+    do_norm: bool = False
+    prenorm: bool = False
+    do_gtrxl_norm: bool = False
+    step_rescale: float = 1.0
 
 
 class SequenceLayer(nn.Module):
     """Defines a single S5 layer, with S5 SSM, nonlinearity, etc.
     Args:
-        ssm         (nn.Module): the SSM to be used (i.e. S5 ssm)
         d_model     (int32):    this is the feature size of the layer inputs and outputs
                                 we usually refer to this size as H
-        activation  (string):   Type of activation function to use
-        prenorm     (bool):     apply prenorm if true or postnorm if false
-        step_rescale  (float32):  allows for uniformly changing the timescale parameter,
-                                e.g. after training on a different resolution for
-                                the speech commands benchmark
+        config      (S5Config): the SSM config to be used
+
+
     """
 
     d_model: int
     config: S5Config
-    do_norm: bool = True
-    prenorm: bool = True
-    do_gtrxl_norm: bool = True
-    step_rescale: float = 1.0
 
     def setup(self):
         """Initializes the ssm, layer norm and dense layers"""
-        self.seq = init_S5SSM(self.d_model, self.config)(step_rescale=self.step_rescale)
+        self.seq = init_S5SSM(self.d_model, self.config)(step_rescale=self.config.step_rescale)
 
         if self.config.activation_fn in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model)
@@ -73,12 +81,12 @@ class SequenceLayer(nn.Module):
             output sequence (float32): (L, d_model)
         """
         skip = x
-        if self.prenorm and self.do_norm:
+        if self.config.prenorm and self.config.do_norm:
             x = self.norm(x)
         hidden, x = self.seq(hidden, x, d)
         # hidden, x = jax.vmap(self.seq, in_axes=1, out_axes=1)(hidden, x, d)
         # hidden = jnp.swapaxes(hidden, 1, 0)
-        if self.do_gtrxl_norm:
+        if self.config.do_gtrxl_norm:
             x = self.norm(x)
 
         if self.config.activation_fn in ["full_glu"]:
@@ -97,7 +105,7 @@ class SequenceLayer(nn.Module):
             raise NotImplementedError("Activation: {} not implemented".format(self.config.activation_fn))
 
         x = skip + x
-        if not self.prenorm and self.do_norm:
+        if not self.config.prenorm and self.config.do_norm:
             x = self.norm(x)
         return hidden, x
 
@@ -597,9 +605,6 @@ class StackedEncoderModel(nn.Module):
 
     d_model: int
     config: S5Config
-    do_norm: bool = True
-    prenorm: bool = True
-    do_gtrxl_norm: bool = True
 
     def setup(self):
         """
@@ -610,9 +615,6 @@ class StackedEncoderModel(nn.Module):
             SequenceLayer(
                 config=self.config,
                 d_model=self.d_model,
-                do_norm=self.do_norm,
-                prenorm=self.prenorm,
-                do_gtrxl_norm=self.do_gtrxl_norm,
             )
             for _ in range(self.config.n_layers)
         ]
