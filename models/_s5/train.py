@@ -3,8 +3,15 @@ from jax import random
 import jax.numpy as np
 import wandb
 
-from .train_helpers import create_train_state, reduce_lr_on_plateau,\
-    linear_warmup, cosine_annealing, constant_lr, train_epoch, validate
+from .train_helpers import (
+    create_train_state,
+    reduce_lr_on_plateau,
+    linear_warmup,
+    cosine_annealing,
+    constant_lr,
+    train_epoch,
+    validate,
+)
 from ...supervised.dataloading import Datasets
 from .seq_model import BatchClassificationModel, RetrievalModel
 from .ssm import init_S5SSM
@@ -21,9 +28,9 @@ def train(args):
 
     if args.USE_WANDB:
         # Make wandb config dictionary
-        wandb.init(project=args.wandb_project, job_type='model_training', config=vars(args), entity=args.wandb_entity)
+        wandb.init(project=args.wandb_project, job_type="model_training", config=vars(args), entity=args.wandb_entity)
     else:
-        wandb.init(mode='offline')
+        wandb.init(mode="offline")
 
     ssm_size = args.ssm_size_base
     ssm_lr = args.ssm_lr_base
@@ -66,22 +73,23 @@ def train(args):
 
     # Create dataset...
     init_rng, key = random.split(init_rng, num=2)
-    trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = \
-      create_dataset_fn(args.dir_name, seed=args.jax_seed, bsz=args.bsz)
+    trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = create_dataset_fn(
+        args.dir_name, seed=args.jax_seed, bsz=args.bsz
+    )
 
     print(f"[*] Starting S5 Training on `{args.dataset}` =>> Initializing...")
 
-    
-
-    ssm_init_fn = init_S5SSM(H=args.d_model,
-                             P=ssm_size,
-                             C_init=args.C_init,
-                             discretization=args.discretization,
-                             dt_min=args.dt_min,
-                             dt_max=args.dt_max,
-                             conj_sym=args.conj_sym,
-                             clip_eigs=args.clip_eigs,
-                             bidirectional=args.bidirectional)
+    ssm_init_fn = init_S5SSM(
+        H=args.d_model,
+        P=ssm_size,
+        C_init=args.C_init,
+        discretization=args.discretization,
+        dt_min=args.dt_min,
+        dt_max=args.dt_max,
+        conj_sym=args.conj_sym,
+        clip_eigs=args.clip_eigs,
+        bidirectional=args.bidirectional,
+    )
 
     if retrieval:
         # Use retrieval head for AAN task
@@ -117,41 +125,43 @@ def train(args):
         )
 
     # initialize training state
-    state = create_train_state(model_cls,
-                               init_rng,
-                               padded,
-                               retrieval,
-                               in_dim=in_dim,
-                               bsz=args.bsz,
-                               seq_len=seq_len,
-                               weight_decay=args.weight_decay,
-                               batchnorm=args.batchnorm,
-                               opt_config=args.opt_config,
-                               ssm_lr=ssm_lr,
-                               lr=lr,
-                               dt_global=args.dt_global)
+    state = create_train_state(
+        model_cls,
+        init_rng,
+        padded,
+        retrieval,
+        in_dim=in_dim,
+        bsz=args.bsz,
+        seq_len=seq_len,
+        weight_decay=args.weight_decay,
+        batchnorm=args.batchnorm,
+        opt_config=args.opt_config,
+        ssm_lr=ssm_lr,
+        lr=lr,
+        dt_global=args.dt_global,
+    )
 
     # Training Loop over epochs
     best_loss, best_acc, best_epoch = 100000000, -100000000.0, 0  # This best loss is val_loss
     count, best_val_loss = 0, 100000000  # This line is for early stopping purposes
     lr_count, opt_acc = 0, -100000000.0  # This line is for learning rate decay
     step = 0  # for per step learning rate decay
-    steps_per_epoch = int(train_size/args.bsz)
+    steps_per_epoch = int(train_size / args.bsz)
     for epoch in range(args.epochs):
         print(f"[*] Starting Training Epoch {epoch + 1}...")
 
         if epoch < args.warmup_end:
-            print("using linear warmup for epoch {}".format(epoch+1))
+            print("using linear warmup for epoch {}".format(epoch + 1))
             decay_function = linear_warmup
             end_step = steps_per_epoch * args.warmup_end
 
         elif args.cosine_anneal:
-            print("using cosine annealing for epoch {}".format(epoch+1))
+            print("using cosine annealing for epoch {}".format(epoch + 1))
             decay_function = cosine_annealing
             # for per step learning rate decay
             end_step = steps_per_epoch * args.epochs - (steps_per_epoch * args.warmup_end)
         else:
-            print("using constant lr for epoch {}".format(epoch+1))
+            print("using constant lr for epoch {}".format(epoch + 1))
             decay_function = constant_lr
             end_step = None
 
@@ -160,31 +170,16 @@ def train(args):
         lr_params = (decay_function, ssm_lr, lr, step, end_step, args.opt_config, args.lr_min)
 
         train_rng, skey = random.split(train_rng)
-        state, train_loss, step = train_epoch(state,
-                                              skey,
-                                              model_cls,
-                                              trainloader,
-                                              seq_len,
-                                              in_dim,
-                                              args.batchnorm,
-                                              lr_params)
+        state, train_loss, step = train_epoch(
+            state, skey, model_cls, trainloader, seq_len, in_dim, args.batchnorm, lr_params
+        )
 
         if valloader is not None:
             print(f"[*] Running Epoch {epoch + 1} Validation...")
-            val_loss, val_acc = validate(state,
-                                         model_cls,
-                                         valloader,
-                                         seq_len,
-                                         in_dim,
-                                         args.batchnorm)
+            val_loss, val_acc = validate(state, model_cls, valloader, seq_len, in_dim, args.batchnorm)
 
             print(f"[*] Running Epoch {epoch + 1} Test...")
-            test_loss, test_acc = validate(state,
-                                           model_cls,
-                                           testloader,
-                                           seq_len,
-                                           in_dim,
-                                           args.batchnorm)
+            test_loss, test_acc = validate(state, model_cls, testloader, seq_len, in_dim, args.batchnorm)
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
             print(
@@ -196,18 +191,10 @@ def train(args):
         else:
             # else use test set as validation set (e.g. IMDB)
             print(f"[*] Running Epoch {epoch + 1} Test...")
-            val_loss, val_acc = validate(state,
-                                         model_cls,
-                                         testloader,
-                                         seq_len,
-                                         in_dim,
-                                         args.batchnorm)
+            val_loss, val_acc = validate(state, model_cls, testloader, seq_len, in_dim, args.batchnorm)
 
             print(f"\n=>> Epoch {epoch + 1} Metrics ===")
-            print(
-                f"\tTrain Loss: {train_loss:.5f}  --Test Loss: {val_loss:.5f} --"
-                f" Test Accuracy: {val_acc:.4f}"
-            )
+            print(f"\tTrain Loss: {train_loss:.5f}  --Test Loss: {val_loss:.5f} --" f" Test Accuracy: {val_acc:.4f}")
 
         # For early stopping purposes
         if val_loss < best_val_loss:
@@ -229,16 +216,26 @@ def train(args):
             if speech:
                 # Evaluate on resolution 2 val and test sets
                 print(f"[*] Running Epoch {epoch + 1} Res 2 Validation...")
-                val2_loss, val2_acc = validate(state,
-                                               model_cls,
-                                               aux_dataloaders['valloader2'],
-                                               int(seq_len // 2),
-                                               in_dim,
-                                               args.batchnorm,
-                                               step_rescale=2.0)
+                val2_loss, val2_acc = validate(
+                    state,
+                    model_cls,
+                    aux_dataloaders["valloader2"],
+                    int(seq_len // 2),
+                    in_dim,
+                    args.batchnorm,
+                    step_rescale=2.0,
+                )
 
                 print(f"[*] Running Epoch {epoch + 1} Res 2 Test...")
-                test2_loss, test2_acc = validate(state, model_cls, aux_dataloaders['testloader2'], int(seq_len // 2), in_dim, args.batchnorm, step_rescale=2.0)
+                test2_loss, test2_acc = validate(
+                    state,
+                    model_cls,
+                    aux_dataloaders["testloader2"],
+                    int(seq_len // 2),
+                    in_dim,
+                    args.batchnorm,
+                    step_rescale=2.0,
+                )
                 print(f"\n=>> Epoch {epoch + 1} Res 2 Metrics ===")
                 print(
                     f"\tVal2 Loss: {val2_loss:.5f} --Test2 Loss: {test2_loss:.5f} --"
@@ -248,7 +245,9 @@ def train(args):
 
         # For learning rate decay purposes:
         input = lr, ssm_lr, lr_count, val_acc, opt_acc
-        lr, ssm_lr, lr_count, opt_acc = reduce_lr_on_plateau(input, factor=args.reduce_factor, patience=args.lr_patience, lr_min=args.lr_min)
+        lr, ssm_lr, lr_count, opt_acc = reduce_lr_on_plateau(
+            input, factor=args.reduce_factor, patience=args.lr_patience, lr_min=args.lr_min
+        )
 
         # Print best accuracy & loss so far...
         print(
@@ -274,8 +273,8 @@ def train(args):
                         "count": count,
                         "Learning rate count": lr_count,
                         "Opt acc": opt_acc,
-                        "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
-                        "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
+                        "lr": state.opt_state.inner_states["regular"].inner_state.hyperparams["learning_rate"],
+                        "ssm_lr": state.opt_state.inner_states["ssm"].inner_state.hyperparams["learning_rate"],
                     }
                 )
             else:
@@ -289,8 +288,8 @@ def train(args):
                         "count": count,
                         "Learning rate count": lr_count,
                         "Opt acc": opt_acc,
-                        "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
-                        "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
+                        "lr": state.opt_state.inner_states["regular"].inner_state.hyperparams["learning_rate"],
+                        "ssm_lr": state.opt_state.inner_states["ssm"].inner_state.hyperparams["learning_rate"],
                     }
                 )
 
@@ -303,8 +302,8 @@ def train(args):
                     "count": count,
                     "Learning rate count": lr_count,
                     "Opt acc": opt_acc,
-                    "lr": state.opt_state.inner_states['regular'].inner_state.hyperparams['learning_rate'],
-                    "ssm_lr": state.opt_state.inner_states['ssm'].inner_state.hyperparams['learning_rate']
+                    "lr": state.opt_state.inner_states["regular"].inner_state.hyperparams["learning_rate"],
+                    "ssm_lr": state.opt_state.inner_states["ssm"].inner_state.hyperparams["learning_rate"],
                 }
             )
         wandb.run.summary["Best Val Loss"] = best_loss

@@ -250,7 +250,8 @@ def create_train_state(model_cls,
             ssm_fn,
         )
 
-    fn_is_complex = lambda x: x.dtype in [np.complex64, np.complex128]
+    def fn_is_complex(x):
+        return x.dtype in [np.complex64, np.complex128]
     param_sizes = map_nested_fn(lambda k, param: param.size * (2 if fn_is_complex(param) else 1))(params)
     print(f"[*] Trainable Parameters: {sum(jax.tree_leaves(param_sizes))}")
 
@@ -362,7 +363,7 @@ def train_epoch(state, rng, model, trainloader, seq_len, in_dim, batchnorm, lr_p
 def validate(state, model, testloader, seq_len, in_dim, batchnorm, step_rescale=1.0):
     """Validation function that loops over batches"""
     model = model(training=False, step_rescale=step_rescale)
-    losses, accuracies, preds = np.array([]), np.array([]), np.array([])
+    losses, accuracies = np.array([]), np.array([])
     for batch_idx, batch in enumerate(tqdm(testloader)):
         inputs, labels, integration_timesteps = prep_batch(batch, seq_len, in_dim)
         loss, acc, pred = eval_step(inputs, labels, integration_timesteps, state, model, batchnorm)

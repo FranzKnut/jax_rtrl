@@ -9,16 +9,18 @@ from jax.nn.initializers import lecun_normal, normal
 from jax import random
 from jax.numpy.linalg import eigh
 from jax.scipy.linalg import block_diag
+from models.jax_util import ModelConfig
 
 
 @dataclass
-class S5Config:
+class S5Config(ModelConfig):
     # Model Parameters
     state_size: int = 128
+    n_layers: int = 2
     blocks: int = 8
     C_init: str = "trunc_standard_normal"
     discretization: str = "zoh"
-    mode: str = "pool"
+    # mode: str = "pool"
     activation_fn: str = "half_glu1"
     conj_sym: bool = True
     clip_eigs: bool = False
@@ -53,10 +55,10 @@ class SequenceLayer(nn.Module):
         """Initializes the ssm, layer norm and dense layers"""
         self.seq = init_S5SSM(self.d_model, self.config)(step_rescale=self.step_rescale)
 
-        if self.activation in ["full_glu"]:
+        if self.config.activation_fn in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model)
             self.out2 = nn.Dense(self.d_model)
-        elif self.activation in ["half_glu1", "half_glu2"]:
+        elif self.config.activation_fn in ["half_glu1", "half_glu2"]:
             self.out2 = nn.Dense(self.d_model)
 
         self.norm = nn.LayerNorm()
@@ -79,20 +81,20 @@ class SequenceLayer(nn.Module):
         if self.do_gtrxl_norm:
             x = self.norm(x)
 
-        if self.activation in ["full_glu"]:
+        if self.config.activation_fn in ["full_glu"]:
             x = nn.gelu(x)
             x = self.out1(x) * jax.nn.sigmoid(self.out2(x))
-        elif self.activation in ["half_glu1"]:
+        elif self.config.activation_fn in ["half_glu1"]:
             x = nn.gelu(x)
             x = x * jax.nn.sigmoid(self.out2(x))
-        elif self.activation in ["half_glu2"]:
+        elif self.config.activation_fn in ["half_glu2"]:
             # Only apply GELU to the gate input
             x1 = nn.gelu(x)
             x = x * jax.nn.sigmoid(self.out2(x1))
-        elif self.activation in ["gelu"]:
+        elif self.config.activation_fn in ["gelu"]:
             x = nn.gelu(x)
         else:
-            raise NotImplementedError("Activation: {} not implemented".format(self.activation))
+            raise NotImplementedError("Activation: {} not implemented".format(self.config.activation_fn))
 
         x = skip + x
         if not self.prenorm and self.do_norm:
@@ -595,8 +597,6 @@ class StackedEncoderModel(nn.Module):
 
     d_model: int
     config: S5Config
-    n_layers: int = 1
-    activation: str = "gelu"
     do_norm: bool = True
     prenorm: bool = True
     do_gtrxl_norm: bool = True
@@ -610,12 +610,12 @@ class StackedEncoderModel(nn.Module):
             SequenceLayer(
                 config=self.config,
                 d_model=self.d_model,
-                activation=self.activation,
+                activation=self.config.activation_fn,
                 do_norm=self.do_norm,
                 prenorm=self.prenorm,
                 do_gtrxl_norm=self.do_gtrxl_norm,
             )
-            for _ in range(self.n_layers)
+            for _ in range(self.config.n_layers)
         ]
 
     def __call__(self, hidden, x, d=None):
@@ -639,4 +639,4 @@ class StackedEncoderModel(nn.Module):
     def initialize_carry(self, rng, input_shape):
         # Use a dummy key since the default state init fn is just zeros.
         local_P = self.config.state_size // 2 if self.config.conj_sym else self.config.state_size
-        return [jnp.zeros((*input_shape[:-1], local_P), dtype=jnp.complex64) for _ in range(self.n_layers)]
+        return [jnp.zeros((*input_shape[:-1], local_P), dtype=jnp.complex64) for _ in range(self.config.n_layers)]

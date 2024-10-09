@@ -65,7 +65,7 @@ def create_lra_imdb_classification_dataset(
     :return:
     """
     print("[*] Generating LRA-text (IMDB) Classification Dataset")
-    from s5.dataloaders.lra import IMDB
+    from .dataloaders.lra import IMDB
 
     name = "imdb"
 
@@ -98,7 +98,7 @@ def create_lra_listops_classification_dataset(
     See abstract template.
     """
     print("[*] Generating LRA-listops Classification Dataset")
-    from s5.dataloaders.lra import ListOps
+    from .dataloaders.lra import ListOps
 
     name = "listops"
     dir_name = "./raw_datasets/lra_release/lra_release/listops-1000"
@@ -132,7 +132,7 @@ def create_lra_path32_classification_dataset(
     See abstract template.
     """
     print("[*] Generating LRA-Pathfinder32 Classification Dataset")
-    from s5.dataloaders.lra import PathFinder
+    from .dataloaders.lra import PathFinder
 
     name = "pathfinder"
     resolution = 32
@@ -167,7 +167,7 @@ def create_lra_pathx_classification_dataset(
     See abstract template.
     """
     print("[*] Generating LRA-PathX Classification Dataset")
-    from s5.dataloaders.lra import PathFinder
+    from .dataloaders.lra import PathFinder
 
     name = "pathfinder"
     resolution = 128
@@ -205,7 +205,7 @@ def create_lra_image_classification_dataset(
     """
 
     print("[*] Generating LRA-listops Classification Dataset")
-    from s5.dataloaders.basic import CIFAR10
+    from .dataloaders.basic import CIFAR10
 
     name = "cifar"
 
@@ -243,7 +243,7 @@ def create_lra_aan_classification_dataset(
     See abstract template.
     """
     print("[*] Generating LRA-AAN Classification Dataset")
-    from s5.dataloaders.lra import AAN
+    from .dataloaders.lra import AAN
 
     name = "aan"
 
@@ -285,11 +285,11 @@ def create_speechcommands35_classification_dataset(
     See abstract template.
     """
     print("[*] Generating SpeechCommands35 Classification Dataset")
-    from s5.dataloaders.basic import SpeechCommands
+    from .dataloaders.basic import SpeechCommands
 
     name = "sc"
 
-    dir_name = f"./raw_datasets/speech_commands/0.0.2/"
+    dir_name = "./raw_datasets/speech_commands/0.0.2/"
     os.makedirs(dir_name, exist_ok=True)
 
     kwargs = {
@@ -340,7 +340,7 @@ def create_cifar_classification_dataset(
     """
 
     print("[*] Generating CIFAR (color) Classification Dataset")
-    from s5.dataloaders.basic import CIFAR10
+    from .dataloaders.basic import CIFAR10
 
     name = "cifar"
 
@@ -379,7 +379,7 @@ def create_mnist_classification_dataset(
     """
 
     print("[*] Generating MNIST Classification Dataset")
-    from s5.dataloaders.basic import MNIST
+    from .dataloaders.basic import MNIST
 
     name = "mnist"
 
@@ -414,7 +414,7 @@ def create_pmnist_classification_dataset(
     """
 
     print("[*] Generating permuted-MNIST Classification Dataset")
-    from s5.dataloaders.basic import MNIST
+    from .dataloaders.basic import MNIST
 
     name = "mnist"
 

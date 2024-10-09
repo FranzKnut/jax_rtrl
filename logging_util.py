@@ -3,13 +3,16 @@
 from argparse import Namespace
 import collections
 import contextlib
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from operator import attrgetter
 import os
+from re import M
 import traceback
 from typing import Callable
 from dacite import from_dict
+from git import Repo
 import numpy as np
+import simple_parsing
 from typing_extensions import override
 
 from PIL import Image
@@ -30,7 +33,18 @@ class ExceptionPrinter(contextlib.AbstractContextManager):
         return False
 
 
-def wandb_wrapper(project_name, func, hparams, params_type):
+@dataclass
+class LoggableConfig(simple_parsing.Serializable):
+    decode_into_subclasses = True  # do not alter
+
+    logging: str | None = "aim"
+    repo: str | None = None
+    project_name: str | None = "default"
+    debug: bool | int = False
+    log_code: bool = False
+
+
+def wandb_wrapper(project_name, func, hparams: LoggableConfig):
     """Init wandb and evaluate function."""
     global wandb
     import wandb
@@ -42,7 +56,10 @@ def wandb_wrapper(project_name, func, hparams, params_type):
     ), ExceptionPrinter():
         # If called by wandb.agent,
         # this config will be set by Sweep Controller
-        hparams = from_dict(params_type, update_nested_dict(asdict(hparams), wandb.config))
+        hparams = LoggableConfig.from_dict(
+            update_nested_dict(asdict(hparams), wandb.config),
+            drop_extra_fields=False,
+        )
         if hparams.log_code:
             wandb.run.log_code()
 
@@ -88,7 +105,7 @@ class DummyLogger(dict, object):
         """
         pass
 
-    def log_file(self, name: str, path: str):
+    def log_model(self, name: str, path: str):
         """Save a file as an artifact.
 
         Parameters
@@ -217,9 +234,9 @@ class AimLogger(DummyLogger):
         self.run.finalize()
 
     @override
-    def log_file(self, name, path):
+    def log_model(self, name, path):
         """Save a file."""
-        self.run.log_artifact(path, name)
+        self.run.log_artifact(path, name=name)
 
     @override
     def log_img(self, name, img, step=None, caption="", pil_mode="RGB", format="png"):
@@ -279,9 +296,9 @@ class WandbLogger(DummyLogger):
             )
 
     @override
-    def log_file(self, name, path):
+    def log_model(self, name, path):
         """Upload a file to wandb."""
-        raise NotImplementedError()
+        wandb.log_model(path, name=name)
 
     @override
     def log_video(self, name, frames, step=None, fps=30, caption=""):
@@ -291,22 +308,18 @@ class WandbLogger(DummyLogger):
 
 def with_logger(
     func: Callable,
-    hparams: dict,
-    project_name: str,
-    logger_name: str = "aim",
-    aim_repo: str = None,
+    hparams: LoggableConfig,
     run_name="",
-    hparams_type=None,
 ):
     """Wrap training function with logger."""
-    if logger_name == "wandb":
+    if hparams.logging == "wandb":
 
         def pick_fun_and_run(_hparams, logger):
             return func(_hparams, logger=logger)
 
-        return wandb_wrapper(project_name, pick_fun_and_run, hparams, params_type=hparams_type)
-    elif logger_name == "aim":
-        logger = AimLogger(project_name, repo=aim_repo, hparams=hparams, run_name=run_name)
+        return wandb_wrapper(hparams.project_name, pick_fun_and_run, hparams)
+    elif hparams.logging == "aim":
+        logger = AimLogger(hparams.project_name, repo=hparams.repo, hparams=hparams, run_name=run_name)
         try:
             return func(hparams, logger=logger)
         finally:

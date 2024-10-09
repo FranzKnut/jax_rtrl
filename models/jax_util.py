@@ -1,5 +1,6 @@
 """Utility functions for JAX models."""
 
+from dataclasses import dataclass
 from functools import partial
 import os
 import json
@@ -11,6 +12,7 @@ import optax
 import orbax.checkpoint
 from jax.tree_util import tree_map, tree_reduce
 import jax.tree_util as jtu
+from simple_parsing import Serializable
 
 
 class JAX_RNG:
@@ -189,3 +191,8 @@ def make_validate(_model, test_data, **kwargs):
         return mse_loss(y_hat, test_data)
 
     return _validate
+
+
+@dataclass
+class ModelConfig(Serializable):
+    decode_into_subclasses: bool = True
