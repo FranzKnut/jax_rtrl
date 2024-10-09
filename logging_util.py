@@ -170,6 +170,7 @@ class AimLogger(DummyLogger):
 
         self.run = aim.Run(experiment=name, repo=repo, run_hash=run_hash, log_system_params=True)
         self.run_artifacts_dir = os.path.join("artifacts/aim", self.run.hash)
+        self.run.set_artifacts_uri("file:///"+self.run_artifacts_dir)
         hparams = hparams or {}
         if isinstance(hparams, Namespace):
             hparams = vars(hparams)
@@ -266,7 +267,7 @@ class WandbLogger(DummyLogger):
     """Wandb-like interface for aim."""
 
     @override
-    def log(self, metrics, step=None):
+    def log(self, metrics, step=None, context=None):
         """Log metrics to wandb."""
         wandb.log(metrics, step=step)
 
