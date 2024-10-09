@@ -1,6 +1,8 @@
 """Util for creating optax optimizers."""
 
 from dataclasses import dataclass, field
+from functools import partial
+from token import OP
 import optax
 
 
@@ -17,6 +19,7 @@ class OptimizerConfig:
         weight_decay (float): The weight decay for the optimizer.
         gradient_clip (float): The value to clip the gradients.
         multi_step (int): number of steps to accumulate.
+        reduce_on_plateau (bool): Reduce learning rate on plateau.
     """
 
     opt_name: str = "adam"
@@ -27,6 +30,28 @@ class OptimizerConfig:
     weight_decay: float = 0.0
     gradient_clip: float | None = None
     multi_step: int | None = None
+    reduce_on_plateau: bool = False
+
+
+def label_subtrees(params, subtrees):
+    """Make Prefix subtree.
+
+    Parameters
+    ----------
+    params : tree
+    subtrees : list of subtree names
+
+    Returns
+    -------
+    tree
+        A subtree with the same structure as params,
+        but with the name matching subtrees replaced by their name.
+    """
+    for k, v in params.items():
+        if k in subtrees:
+            return k
+        else:
+            return label_subtrees(v, subtrees)
 
 
 def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientTransformation:
@@ -59,18 +84,6 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
         learning_rate = -learning_rate
     else:
         weight_decay = -weight_decay
-
-    # def decay_mask(tree):
-    #     mask = jax.tree.map(lambda _: False, tree)  # Initialize all False
-
-    #     # Only set some leaves to true for RNNs
-    #     if isinstance(tree, BaseRNNCell):
-    #         mask = eqx.tree_at(lambda x: x.w,  # HERE the leaves for decay are selected
-    #                            mask, True)
-    #     # elif isinstance(tree, Linear):
-    #     #     mask = eqx.tree_at(lambda x: x.W,  # HERE the leaves for decay are selected,
-    #     #                        mask, True)
-    #     return mask
 
     if config.decay_type == "cosine_warmup":
         """Args:
@@ -107,7 +120,9 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
                 Defaults to 1.0.
 
         """
-        learning_rate = optax.cosine_decay_schedule(learning_rate, decay_steps=config.lr_kwargs["decay_steps"], alpha=config.lr_kwargs.get("alpha", 0))
+        learning_rate = optax.cosine_decay_schedule(
+            learning_rate, decay_steps=config.lr_kwargs["decay_steps"], alpha=config.lr_kwargs.get("alpha", 0)
+        )
     elif config.decay_type == "exponential":
         """Args:
             init_value: the initial learning rate.
@@ -131,19 +146,58 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
     elif config.decay_type is not None:
         raise ValueError(f"Decay type {config.decay_type} unknown.")
 
+    if weight_decay and config.opt_name in ["adam"]:
+        raise ValueError(f"Weight decay not supported for {config.opt_name}, use adamw.")
+
     @optax.inject_hyperparams
     def _make_opt(learning_rate):
+        _opt = getattr(optax, config.opt_name)
         # Create optimizer from optax chain
         optimizer = optax.chain(
             # Weight decay
-            optax.add_decayed_weights(weight_decay),  # , mask=decay_mask
+            optax.add_decayed_weights(weight_decay)
+            if config.opt_name not in ["adam", "adamw"]
+            else optax.identity(),  # , mask=decay_mask
             # Gradient clipping
             optax.clip_by_global_norm(config.gradient_clip) if config.gradient_clip else optax.identity(),
             # Optimizer
-            getattr(optax, config.opt_name)(learning_rate, **config.kwargs),
+            _opt(learning_rate, **config.kwargs)
+            if config.opt_name not in ["adamw"]
+            else _opt(learning_rate, **config.kwargs, weight_decay=weight_decay),
+            # Reduce on Plateau
+            optax.contrib.reduce_on_plateau(
+                patience=config.lr_kwargs.get("patience", 20),
+                factor=config.lr_kwargs.get("factor", 1.0),
+                min_scale=config.lr_kwargs.get("min_scale", 1e-6),
+                accumulation_size=config.lr_kwargs.get("accumulation_size", 10),
+            )
+            if config.reduce_on_plateau
+            else optax.identity(),
         )
         if config.multi_step:
             optimizer = optax.MultiSteps(optimizer, every_k_schedule=config.multi_step)
         return optimizer
 
-    return _make_opt(learning_rate=learning_rate)
+    return _make_opt(learning_rate)
+
+
+def make_multi_transform(configs: dict, label_fn: callable = None):
+    """Make optax multi_transform for given (nested) dict of configs.
+
+    keys in configs should match subtrees in params.
+
+    Parameters
+    ----------
+    configs : dict
+        A nested dict of optimizer configs.
+    params : dict, optional
+        A nested dict of parameters.
+
+    Returns
+    -------
+        optax optimizer
+    """
+
+    optimizers = {k: make_optimizer(v) for k, v in configs.items()}
+    label_fn = label_fn or partial(label_subtrees, subtrees=list(configs.keys()))
+    return optax.multi_transform(optimizers, label_fn)

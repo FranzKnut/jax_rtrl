@@ -1,4 +1,5 @@
-from .s5 import StackedEncoderModel
+from optimizers import OptimizerConfig, make_optimizer
+from .s5 import StackedEncoderModel, make_opt_s5
 import flax
 import flax.linen
 import jax
@@ -22,3 +23,11 @@ def init_model(model: flax.linen.Module, sample_input, is_rnn: bool, rng_key=Non
         carry = model.initialize_carry(rng_key, sample_input.shape)
         return model.init(rng_key, carry, sample_input)
     return model.init(rng_key, sample_input)
+
+
+def make_optimizer_for_model(model_name: str, config: OptimizerConfig):
+    """Make optax optimizer for given model name and config."""
+    if "s5" in model_name:
+        return make_opt_s5(config)
+    else:
+        return make_optimizer(config)

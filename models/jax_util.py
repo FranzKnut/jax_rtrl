@@ -196,3 +196,18 @@ def make_validate(_model, test_data, **kwargs):
 @dataclass
 class ModelConfig(Serializable):
     decode_into_subclasses: bool = True
+
+
+def map_nested_fn(fn):
+    """
+    Recursively apply `fn to the key-value pairs of a nested dict / pytree.
+    We use this for some of the optax definitions below.
+    """
+
+    def map_fn(nested_dict):
+        return {
+            k: (map_fn(v) if hasattr(v, "keys") else fn(k, v))
+            for k, v in nested_dict.items()
+        }
+
+    return map_fn

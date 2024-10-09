@@ -49,7 +49,11 @@ def wandb_wrapper(project_name, func, hparams: LoggableConfig):
     logger = WandbLogger()
 
     with wandb.init(
-        project=project_name, config=hparams, mode="disabled" if hparams.debug else "online", dir="logs/"
+        project=project_name,
+        config=hparams,
+        mode="disabled" if hparams.debug else "online",
+        dir="logs/",
+        save_code=False,
     ), ExceptionPrinter():
         # If called by wandb.agent,
         # this config will be set by Sweep Controller
@@ -167,7 +171,7 @@ class AimLogger(DummyLogger):
 
         self.run = aim.Run(experiment=name, repo=repo, run_hash=run_hash, log_system_params=True)
         self.run_artifacts_dir = os.path.join("artifacts/aim", self.run.hash)
-        self.run.set_artifacts_uri("file:///"+self.run_artifacts_dir)
+        self.run.set_artifacts_uri("file:///" + self.run_artifacts_dir)
         hparams = hparams or {}
         if isinstance(hparams, Namespace):
             hparams = vars(hparams)
@@ -234,7 +238,8 @@ class AimLogger(DummyLogger):
     @override
     def log_model(self, name, path):
         """Save a file."""
-        self.run.log_artifact(path, name=name)
+        # FIXME: aim file logging buggy, should be on disc anyway
+        # self.run.log_artifact(path, name=name)
 
     @override
     def log_img(self, name, img, step=None, caption="", pil_mode="RGB", format="png"):

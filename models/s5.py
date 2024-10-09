@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from chex import ArrayDevice
 import jax
@@ -9,13 +9,14 @@ from jax.nn.initializers import lecun_normal, normal
 from jax import random
 from jax.numpy.linalg import eigh
 from jax.scipy.linalg import block_diag
-from models.jax_util import ModelConfig
+from models.jax_util import ModelConfig, map_nested_fn
+from optimizers import OptimizerConfig, make_multi_transform
 
 
 @dataclass
 class S5Config(ModelConfig):
     # Model Parameters
-    state_size: int = 128
+    state_size: int = 256
     n_layers: int = 2
     blocks: int = 8
     C_init: str = "trunc_standard_normal"
@@ -45,7 +46,6 @@ class SequenceLayer(nn.Module):
 
     d_model: int
     config: S5Config
-    activation: str = "gelu"
     do_norm: bool = True
     prenorm: bool = True
     do_gtrxl_norm: bool = True
@@ -610,7 +610,6 @@ class StackedEncoderModel(nn.Module):
             SequenceLayer(
                 config=self.config,
                 d_model=self.d_model,
-                activation=self.config.activation_fn,
                 do_norm=self.do_norm,
                 prenorm=self.prenorm,
                 do_gtrxl_norm=self.do_gtrxl_norm,
@@ -640,3 +639,21 @@ class StackedEncoderModel(nn.Module):
         # Use a dummy key since the default state init fn is just zeros.
         local_P = self.config.state_size // 2 if self.config.conj_sym else self.config.state_size
         return [jnp.zeros((*input_shape[:-1], local_P), dtype=jnp.complex64) for _ in range(self.config.n_layers)]
+
+
+def make_opt_s5(opt_config=OptimizerConfig(), ssm_factor=1.0):
+    ssm_fn = map_nested_fn(
+        lambda k, _: "ssm"
+        if k in ["B", "Lambda_re", "Lambda_im", "log_step", "norm"]
+        else ("none" if k in [] else "regular")
+    )
+    return make_multi_transform(
+        {
+            "none": replace(opt_config, learning_rate=0.0),
+            "ssm": replace(
+                opt_config, opt_name="adam", learning_rate=ssm_factor * opt_config.learning_rate, weight_decay=0.0
+            ),
+            "regular": opt_config,
+        },
+        ssm_fn,
+    )

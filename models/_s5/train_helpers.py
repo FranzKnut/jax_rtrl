@@ -2,6 +2,7 @@ from functools import partial
 import jax
 import jax.numpy as np
 from jax.nn import one_hot
+from models.jax_util import map_nested_fn
 from tqdm import tqdm
 from flax.training import train_state
 import optax
@@ -63,21 +64,6 @@ def update_learning_rate_per_step(lr_params, state):
         state.opt_state.inner_states['none'].inner_state.hyperparams['learning_rate'] = np.array(ssm_lr_val, dtype=np.float32)
 
     return state, step
-
-
-def map_nested_fn(fn):
-    """
-    Recursively apply `fn to the key-value pairs of a nested dict / pytree.
-    We use this for some of the optax definitions below.
-    """
-
-    def map_fn(nested_dict):
-        return {
-            k: (map_fn(v) if hasattr(v, "keys") else fn(k, v))
-            for k, v in nested_dict.items()
-        }
-
-    return map_fn
 
 
 def create_train_state(model_cls,
