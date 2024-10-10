@@ -301,7 +301,9 @@ class WandbLogger(DummyLogger):
     @override
     def log_model(self, name, path):
         """Upload a file to wandb."""
-        wandb.log_model(path, name=name)
+        artifact = wandb.Artifact(name, "model")
+        artifact.add_dir(path)
+        wandb.log_artifact(artifact)
 
     @override
     def log_video(self, name, frames, step=None, fps=30, caption=""):
