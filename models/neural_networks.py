@@ -11,8 +11,6 @@ import flax.linen as nn
 
 from jax_rtrl.models.jax_util import zeros_like_tree
 
-from .ctrnn import CTRNNCell, OnlineCTRNNCell
-
 
 class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""
@@ -198,7 +196,7 @@ class MultiLayerRNN(nn.RNNCellBase):
     """Multilayer RNN."""
 
     layers: list
-    rnn_cls: nn.RNNCellBase = CTRNNCell
+    rnn_cls: nn.RNNCellBase
     rnn_kwargs: dict = field(default_factory=dict)
 
     @nn.nowrap
@@ -282,7 +280,7 @@ class FAMultiLayerRNN(MultiLayerRNN):
 class RNNEnsembleConfig:
     num_modules: int
     layers: tuple[int]
-    model: type = OnlineCTRNNCell
+    model: type = nn.RNNCellBase
     out_size: int | None = None
     out_dist: str | None = None
     input_layers: tuple[int] | None = None  # TODO

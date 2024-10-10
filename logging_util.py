@@ -74,7 +74,7 @@ class DummyLogger(dict, object):
         """Return name of logger."""
         return "DummyLogger"
 
-    def log(self, metrics: dict, step: int = None):
+    def log(self, metrics: dict, step: int = None, **kwargs):
         """Log a dictionary of metrics (per step).
 
         Parameters

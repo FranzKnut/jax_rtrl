@@ -101,7 +101,7 @@ class OnlineLRUCell(nn.RNNCellBase):
         model_fn = LRUCell(self.num_units)
         if self.plasticity == "bptt":
             return model_fn(carry, x_t)
-            
+
         def _trace_update(carry, _p, x_t):
             h, grad_memory = carry
             Lambda = get_lambda(_p["nu_log"], _p["theta_log"])
@@ -137,7 +137,7 @@ class OnlineLRUCell(nn.RNNCellBase):
             return self.rtrl_gradient(residuals, y_t)
 
         online_lru_cell_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        
+
         # carry, out = online_lru_cell_grad(model_fn, carry, x_t)
         return online_lru_cell_grad(model_fn, carry, x_t)  # carry, output
 
@@ -178,10 +178,11 @@ class OnlineLRULayer(nn.RNNCellBase):
 
     num_units: int
     d_output: int
+    plasticity: str = "bptt"
 
     @nn.compact
     def __call__(self, carry, x_t, **args):
-        h_tminus1, _ = carry
+        h_tminus1 = carry if self.plasticity == "bptt" else carry[0]
         hidden_dim = h_tminus1.shape[-1]
 
         C_real = self.param(
@@ -198,7 +199,7 @@ class OnlineLRULayer(nn.RNNCellBase):
 
         D = self.param("D", matrix_init, (self.d_output, x_t.shape[-1]))
 
-        online_lru = OnlineLRUCell(self.num_units)
+        online_lru = OnlineLRUCell(self.num_units, self.plasticity)
         carry, h_t = online_lru(carry, x_t, **args)
         C = C_real + 1j * C_img
         y_t = (h_t @ C.transpose()).real + D @ x_t
@@ -211,12 +212,13 @@ class OnlineLRULayer(nn.RNNCellBase):
 
     def initialize_carry(self, rng, input_shape):
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
-        d_input = input_shape[-1]
         hidden_init = jnp.zeros((*batch_size, self.num_units), dtype=jnp.complex64)
+        if self.plasticity == "bptt":
+            return hidden_init
         memory_grad_init = (
             jnp.zeros((*batch_size, self.num_units), dtype=jnp.complex64),
             jnp.zeros((*batch_size, self.num_units), dtype=jnp.complex64),
-            jnp.zeros((*batch_size, self.num_units, d_input), dtype=jnp.complex64),
+            jnp.zeros((*batch_size, self.num_units, input_shape[-1]), dtype=jnp.complex64),
         )
         return (hidden_init, memory_grad_init)
 
