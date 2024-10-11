@@ -297,6 +297,17 @@ class WandbLogger(DummyLogger):
                     for k, v in all_param_norms.items()
                 }
             )
+            
+    @override
+    def log_params(self, params_dict):
+        """Log the given hyperparameters.
+
+        Parameters
+        ----------
+        params_dict : dict
+            Dict of hyperparameters.
+        """
+        wandb.run.config.update(params_dict, allow_val_change=True)
 
     @override
     def log_model(self, name, path):
