@@ -41,32 +41,6 @@ class LoggableConfig(simple_parsing.Serializable):
     log_code: bool = False
 
 
-def wandb_wrapper(project_name, func, hparams: LoggableConfig):
-    """Init wandb and evaluate function."""
-    global wandb
-    import wandb
-
-    logger = WandbLogger()
-
-    with wandb.init(
-        project=project_name,
-        config=hparams,
-        mode="disabled" if hparams.debug else "online",
-        dir="logs/",
-        save_code=False,
-    ), ExceptionPrinter():
-        # If called by wandb.agent,
-        # this config will be set by Sweep Controller
-        hparams = LoggableConfig.from_dict(
-            update_nested_dict(asdict(hparams), wandb.config),
-            drop_extra_fields=False,
-        )
-        if hparams.log_code:
-            wandb.run.log_code()
-
-        return func(hparams, logger=logger)
-
-
 class DummyLogger(dict, object):
     """Dummy Logger that does nothing besides acting as dictionary."""
 
@@ -297,7 +271,7 @@ class WandbLogger(DummyLogger):
                     for k, v in all_param_norms.items()
                 }
             )
-            
+
     @override
     def log_params(self, params_dict):
         """Log the given hyperparameters.
@@ -320,6 +294,32 @@ class WandbLogger(DummyLogger):
     def log_video(self, name, frames, step=None, fps=30, caption=""):
         """Log a video to wandb."""
         wandb.log({name: wandb.Video(frames, fps=fps, caption=caption)}, step=step)
+
+
+def wandb_wrapper(project_name, func, hparams: LoggableConfig):
+    """Init wandb and evaluate function."""
+    global wandb
+    import wandb
+
+    logger = WandbLogger()
+
+    with wandb.init(
+        project=project_name,
+        config=hparams,
+        mode="disabled" if hparams.debug else "online",
+        dir="logs/",
+        save_code=False,
+    ), ExceptionPrinter():
+        # If called by wandb.agent,
+        # this config will be set by Sweep Controller
+        hparams = LoggableConfig.from_dict(
+            update_nested_dict(asdict(hparams), wandb.config),
+            drop_extra_fields=False,
+        )
+        if hparams.log_code:
+            wandb.run.log_code()
+
+        return func(hparams, logger=logger)
 
 
 def with_logger(
