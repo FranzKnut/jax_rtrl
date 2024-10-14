@@ -15,7 +15,7 @@ from typing_extensions import override
 from PIL import Image
 import jax.tree_util as jtu
 from jax_rtrl.models.jax_util import tree_stack
-from .models.jax_util import leaf_norms, tree_norm
+from models.jax_util import leaf_norms, tree_norm
 
 
 class ExceptionPrinter(contextlib.AbstractContextManager):
@@ -312,8 +312,8 @@ def wandb_wrapper(project_name, func, hparams: LoggableConfig):
     ), ExceptionPrinter():
         # If called by wandb.agent,
         # this config will be set by Sweep Controller
-        hparams = LoggableConfig.from_dict(
-            update_nested_dict(asdict(hparams), wandb.config),
+        hparams = hparams.from_dict(
+            update_nested_dict(hparams.to_dict(), wandb.config),
             drop_extra_fields=False,
         )
         if hparams.log_code:
