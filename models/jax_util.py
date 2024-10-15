@@ -128,6 +128,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
+        _params = jax.tree_map(lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params)
         return checkpointer.save(orbax_path, _params, force=True)
 
     restored_params = None

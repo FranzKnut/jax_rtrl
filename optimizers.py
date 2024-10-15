@@ -169,7 +169,7 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
                 patience=config.lr_kwargs.get("patience", 20),
                 factor=config.lr_kwargs.get("factor", 1.0),
                 min_scale=config.lr_kwargs.get("min_scale", 1e-6),
-                accumulation_size=config.lr_kwargs.get("accumulation_size", 10),
+                accumulation_size=config.lr_kwargs.get("accumulation_size", 100),
             )
             if config.reduce_on_plateau
             else optax.identity(),
