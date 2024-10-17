@@ -166,8 +166,8 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
             else _opt(learning_rate, **config.kwargs, weight_decay=weight_decay),
             # Reduce on Plateau
             optax.contrib.reduce_on_plateau(
-                patience=config.lr_kwargs.get("patience", 20),
-                factor=config.lr_kwargs.get("factor", 0.1),
+                patience=config.lr_kwargs.get("patience", 100),
+                factor=config.lr_kwargs.get("factor", 0.5),
                 min_scale=config.lr_kwargs.get("min_scale", 1e-6),
                 accumulation_size=config.lr_kwargs.get("accumulation_size", 10),
             )
