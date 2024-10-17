@@ -16,7 +16,17 @@ CELL_TYPES = {
     "lru_rtrl": OnlineLRULayer,
     "s5": StackedEncoderModel,
     "s5_rtrl": StackedEncoderModel,
+    "linear": StackedEncoderModel,
 }
+def init_layer(layer_cls, **kwargs):
+    if layer_cls == "LRU":
+        layer = LRU
+    if layer_cls == "RNN":
+        layer = RNN
+    if layer_cls == "GRU":
+        layer = GRU
+    return partial(layer, **kwargs)
+
 
 
 def init_model(model: flax.linen.Module, sample_input, is_rnn: bool, rng_key=None):

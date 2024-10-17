@@ -2,9 +2,9 @@ from flax import linen as nn
 import jax.numpy as jnp
 from typing import Any, Tuple
 
-from online_lru.rtus.rtus_utils import act_options
-from online_lru.rtus.linear_rtus import RealTimeLinearRTUs
-from online_lru.rtus.non_linear_rtus import RealTimeNonLinearRTUs
+from models.rtus.rtus_utils import act_options
+from models.rtus.linear_rtus import RealTimeLinearRTUs
+from models.rtus.non_linear_rtus import RealTimeNonLinearRTUs
 
 
 PRNGKey = Any

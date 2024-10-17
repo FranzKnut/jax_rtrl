@@ -263,7 +263,12 @@ def binary_operator(q_i, q_j):
     return A_j * A_i, A_j * b_i + b_j
 
 
-# Parallel scan operations
+@jax.vmap
+def binary_operator_diag_spatial(q_i, q_j):
+    """Same as above but stop the gradient for the recurrent connection"""
+    A_i, b_i = q_i
+    A_j, b_j = q_j
+    return A_j * A_i, jax.lax.stop_gradient(A_j * b_i) + b_j
 
 
 @jax.vmap
@@ -282,57 +287,6 @@ def binary_operator_reset(q_i, q_j):
         (A_j * b_i + b_j) * (1 - c_j) + b_j * c_j,
         c_i * (1 - c_j) + c_j,
     )
-
-
-def apply_ssm(Lambda_bar, B_bar, C_tilde, hidden, input_sequence, resets, conj_sym, bidirectional):
-    """Compute the LxH output of discretized SSM given an LxH input.
-    Args:
-        Lambda_bar (complex64): discretized diagonal state matrix    (P,)
-        B_bar      (complex64): discretized input matrix             (P, H)
-        C_tilde    (complex64): output matrix                        (H, P)
-        input_sequence (float32): input sequence of features         (L, H)
-        reset      (bool): input sequence of features                (L,)
-        conj_sym (bool):         whether conjugate symmetry is enforced
-        bidirectional (bool):    whether bidirectional setup is used,
-                              Note for this case C_tilde will have 2P cols
-    Returns:
-        ys (float32): the SSM outputs (S5 layer preactivations)      (L, H)
-    """
-    Lambda_elements = Lambda_bar * jnp.ones((*input_sequence.shape[:-1], Lambda_bar.shape[0])).reshape(
-        -1, Lambda_bar.shape[0]
-    )
-    Bu_elements = jax.vmap(lambda u: B_bar @ u)(input_sequence.reshape(-1, input_sequence.shape[-1]))
-
-    Lambda_elements = jnp.concatenate(
-        [
-            jnp.ones((1, Lambda_bar.shape[0])),
-            Lambda_elements,
-        ]
-    )
-
-    Bu_elements = jnp.concatenate(
-        [
-            hidden.reshape(-1, hidden.shape[-1]),
-            Bu_elements,
-        ]
-    )
-
-    if resets is None:
-        _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
-    else:
-        resets = jnp.concatenate(
-            [
-                jnp.zeros(1),
-                resets,
-            ]
-        )
-        _, xs, _ = jax.lax.associative_scan(binary_operator_reset, (Lambda_elements, Bu_elements, resets))
-    xs = xs[1:]
-
-    if conj_sym:
-        return xs[..., -1, :], jax.vmap(lambda x: 2 * (C_tilde @ x).real)(xs).reshape(input_sequence.shape)
-    else:
-        return xs[..., -1, :], jax.vmap(lambda x: (C_tilde @ x).real)(xs).reshape(input_sequence.shape)
 
 
 class S5SSM(nn.Module):
@@ -469,16 +423,44 @@ class S5SSM(nn.Module):
         Returns:
             output sequence (float32): (L, H)
         """
-        hidden, ys = apply_ssm(
-            self.Lambda_bar,
-            self.B_bar,
-            self.C_tilde,
-            hidden,
-            input_sequence,
-            resets,
-            self.conj_sym,
-            self.bidirectional,
+        Lambda_elements = self.Lambda_bar * jnp.ones((*input_sequence.shape[:-1], self.Lambda_bar.shape[0])).reshape(
+            -1, self.Lambda_bar.shape[0]
         )
+        Bu_elements = jax.vmap(lambda u: self.B_bar @ u)(input_sequence.reshape(-1, input_sequence.shape[-1]))
+
+        Lambda_elements = jnp.concatenate(
+            [
+                jnp.ones((1, self.Lambda_bar.shape[0])),
+                Lambda_elements,
+            ]
+        )
+
+        Bu_elements = jnp.concatenate(
+            [
+                hidden.reshape(-1, hidden.shape[-1]),
+                Bu_elements,
+            ]
+        )
+
+        if resets is None:
+            _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
+        else:
+            resets = jnp.concatenate(
+                [
+                    jnp.zeros(1),
+                    resets,
+                ]
+            )
+            _, xs, _ = jax.lax.associative_scan(binary_operator_reset, (Lambda_elements, Bu_elements, resets))
+        xs = xs[1:]
+
+        if self.conj_sym:
+            hidden = xs[..., -1, :]
+            ys = jax.vmap(lambda x: 2 * (self.C_tilde @ x).real)(xs).reshape(input_sequence.shape)
+        else:
+            hidden = xs[..., -1, :]
+            ys = jax.vmap(lambda x: (self.C_tilde @ x).real)(xs).reshape(input_sequence.shape)
+
         # Add feedthrough matrix output Du;
         input_time_dim = input_sequence.reshape(-1, input_sequence.shape[-1])
         Du = jax.vmap(lambda u: self.D * u)(input_time_dim).reshape(input_sequence.shape)
