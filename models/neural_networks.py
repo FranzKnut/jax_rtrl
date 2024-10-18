@@ -202,7 +202,7 @@ class MultiLayerRNN(nn.RNNCellBase):
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
-        shapes = zip(self.layers, [input_shape, *[(s,) for s in self.layers[:-1]]])
+        shapes = zip(self.layers, [input_shape[-1:], *[(s,) for s in self.layers[:-1]]])
         return [self.rnn_cls(size, **self.rnn_kwargs).initialize_carry(rng, batch_size+in_size) for size, in_size in shapes]
 
     def setup(self):
