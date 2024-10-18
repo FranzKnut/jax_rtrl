@@ -93,12 +93,12 @@ class LRUCell(nn.Module):
 
 
 class OnlineLRUCell(nn.RNNCellBase):
-    num_units: int
+    d_hidden: int
     plasticity: str = "bptt"
 
     @nn.compact
     def __call__(self, carry, x_t, force_trace_compute=False):
-        model_fn = LRUCell(self.num_units)
+        model_fn = LRUCell(self.d_hidden)
         if self.plasticity == "bptt":
             return model_fn(carry, x_t)
 
@@ -176,8 +176,8 @@ class OnlineLRULayer(nn.RNNCellBase):
     OnlineLRU layer with linear projection afterwards
     """
 
-    num_units: int
     d_output: int
+    d_hidden: int = 256
     plasticity: str = "bptt"
 
     @nn.compact
@@ -199,7 +199,7 @@ class OnlineLRULayer(nn.RNNCellBase):
 
         D = self.param("D", matrix_init, (self.d_output, x_t.shape[-1]))
 
-        online_lru = OnlineLRUCell(self.num_units, self.plasticity)
+        online_lru = OnlineLRUCell(self.d_hidden, self.plasticity)
         carry, h_t = online_lru(carry, x_t, **args)
         C = C_real + 1j * C_img
         y_t = (h_t @ C.transpose()).real + D @ x_t
@@ -212,13 +212,13 @@ class OnlineLRULayer(nn.RNNCellBase):
 
     def initialize_carry(self, rng, input_shape):
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
-        hidden_init = jnp.zeros((*batch_size, self.num_units), dtype=jnp.complex64)
+        hidden_init = jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64)
         if self.plasticity == "bptt":
             return hidden_init
         memory_grad_init = (
-            jnp.zeros((*batch_size, self.num_units), dtype=jnp.complex64),
-            jnp.zeros((*batch_size, self.num_units), dtype=jnp.complex64),
-            jnp.zeros((*batch_size, self.num_units, input_shape[-1]), dtype=jnp.complex64),
+            jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64),
+            jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64),
+            jnp.zeros((*batch_size, self.d_hidden, input_shape[-1]), dtype=jnp.complex64),
         )
         return (hidden_init, memory_grad_init)
 
@@ -230,7 +230,7 @@ if __name__ == "__main__":
     batch_size = 2
 
     inputs = jnp.ones((batch_size, input_dim), dtype=jnp.float32)
-    model = OnlineLRULayer(num_units=d_hidden, d_output=1)
+    model = OnlineLRULayer(d_hidden=d_hidden, d_output=1)
     h_init, grad_momory_init = model.initialize_carry(None, (batch_size, input_dim))
     params = model.init(jax.random.PRNGKey(0), (h_init, grad_momory_init), inputs[0])
     print(params)

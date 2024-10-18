@@ -45,9 +45,6 @@ def make_rnn_ensemble_config(
     match = re.search(r"(rflo|rtrl)", model_name)
     if match:
         kwargs["plasticity"] = match.group(1)
-
-    if model_name in ["lru", "lru_rtrl"]:
-        kwargs["d_output"] = hidden_size
     elif model_name in ["s5", "s5_rtrl"]:
         kwargs = {"config": S5Config(**kwargs)}
     return RNNEnsembleConfig(
