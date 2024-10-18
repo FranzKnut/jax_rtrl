@@ -108,6 +108,30 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
             decay_steps=config.lr_kwargs["decay_steps"],
             warmup_steps=config.lr_kwargs["warmup_steps"],
         )
+
+    elif config.decay_type == "warmup":
+        """Schedule with linear transition from ``init_value`` to ``end_value``.
+
+        Args:
+            init_value: initial value for the scalar to be annealed.
+            end_value: end value of the scalar to be annealed.
+            transition_steps: number of steps over which annealing takes place. The
+                scalar starts changing at ``transition_begin`` steps and completes the
+                transition by ``transition_begin + transition_steps`` steps. If
+                ``transition_steps <= 0``, then the entire annealing process is disabled
+                and the value is held fixed at ``init_value``.
+            transition_begin: must be positive. After how many steps to start annealing
+                (before this many steps the scalar value is held fixed at ``init_value``).
+
+        Returns:
+            schedule
+            A function that maps step counts to values.
+        """
+        learning_rate = optax.linear_schedule(
+            init_value=learning_rate * config.lr_kwargs["initial_multiplier"],
+            end_value=learning_rate,
+            transition_steps=config.lr_kwargs["warmup_steps"],
+        )
     elif config.decay_type == "cosine":
         """Args:
             init_value: An initial value for the learning rate.
@@ -209,7 +233,7 @@ def get_current_lrs(opt_state, opt_config: OptimizerConfig):
     lrs = {}
     for k, s in opt_state.inner_states.items():
         reduce_on_plateau_lr = s[0][3][3].scale if opt_config.reduce_on_plateau else 1
-        lrs["lr_"+k] = s[0][1]["learning_rate"] * reduce_on_plateau_lr
+        lrs["lr_" + k] = s[0][1]["learning_rate"] * reduce_on_plateau_lr
     # reduce_on_plateau_lr = opt_state[3][3].scale if opt_config.reduce_on_plateau else 1
     # current_lr = opt_state[1]["learning_rate"] * reduce_on_plateau_lr
     return lrs
