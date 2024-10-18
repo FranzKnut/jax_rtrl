@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import partial
 from chex import ArrayDevice
 import jax
@@ -9,8 +9,7 @@ from jax.nn.initializers import lecun_normal, normal
 from jax import random
 from jax.numpy.linalg import eigh
 from jax.scipy.linalg import block_diag
-from models.jax_util import ModelConfig, map_nested_fn
-from optimizers import OptimizerConfig, make_multi_transform
+from models.jax_util import ModelConfig
 
 
 @dataclass
