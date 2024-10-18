@@ -1,8 +1,9 @@
 """Util for creating optax optimizers."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from token import OP
+from models.jax_util import map_nested_fn
 import optax
 
 
@@ -201,3 +202,39 @@ def make_multi_transform(configs: dict, label_fn: callable = None):
     optimizers = {k: make_optimizer(v) for k, v in configs.items()}
     label_fn = label_fn or partial(label_subtrees, subtrees=list(configs.keys()))
     return optax.multi_transform(optimizers, label_fn)
+
+
+def get_current_lrs(opt_state, opt_config: OptimizerConfig):
+    """Get current learning rate from optimizer state."""
+    lrs = {}
+    for k, s in opt_state.inner_states.items():
+        reduce_on_plateau_lr = s[0][3][3].scale if opt_config.reduce_on_plateau else 1
+        lrs["lr_"+k] = s[0][1]["learning_rate"] * reduce_on_plateau_lr
+    # reduce_on_plateau_lr = opt_state[3][3].scale if opt_config.reduce_on_plateau else 1
+    # current_lr = opt_state[1]["learning_rate"] * reduce_on_plateau_lr
+    return lrs
+
+
+def make_optimizer_for_model(model_name: str, config: OptimizerConfig, no_decay_lr_factor=1.0):
+    """Make optax optimizer for given model name and config."""
+    if "s5" in model_name:
+        no_decay_params = ["B", "Lambda_re", "Lambda_im", "log_step", "norm"]
+    elif "lru" in model_name:
+        no_decay_params = ["B_re", "B_im", "nu_log", "theta_log", "gamma_log"]
+    elif model_name in ["rflo", "bptt"]:
+        no_decay_params = ["W", "tau"]
+    else:
+        return make_optimizer(config)
+
+    print("Making optimizer for", model_name, "model, no_decay_params:", no_decay_params)
+    ssm_fn = map_nested_fn(lambda k, _: "no_decay" if k in no_decay_params else ("none" if k in [] else "regular"))
+    return make_multi_transform(
+        {
+            "none": replace(config, learning_rate=0.0),
+            "no_decay": replace(
+                config, opt_name="adam", learning_rate=no_decay_lr_factor * config.learning_rate, weight_decay=0.0
+            ),
+            "regular": config,
+        },
+        ssm_fn,
+    )

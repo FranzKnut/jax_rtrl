@@ -623,21 +623,3 @@ class StackedEncoderModel(nn.Module):
         # Use a dummy key since the default state init fn is just zeros.
         local_P = self.config.state_size // 2 if self.config.conj_sym else self.config.state_size
         return [jnp.zeros((*input_shape[:-1], local_P), dtype=jnp.complex64) for _ in range(self.config.n_layers)]
-
-
-def make_opt_s5(opt_config=OptimizerConfig(), ssm_factor=1.0):
-    ssm_fn = map_nested_fn(
-        lambda k, _: "ssm"
-        if k in ["B", "Lambda_re", "Lambda_im", "log_step", "norm"]
-        else ("none" if k in [] else "regular")
-    )
-    return make_multi_transform(
-        {
-            "none": replace(opt_config, learning_rate=0.0),
-            "ssm": replace(
-                opt_config, opt_name="adam", learning_rate=ssm_factor * opt_config.learning_rate, weight_decay=0.0
-            ),
-            "regular": opt_config,
-        },
-        ssm_fn,
-    )
