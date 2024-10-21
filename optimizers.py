@@ -102,7 +102,7 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
                 Defaults to 1.0.
         """
         learning_rate = optax.warmup_cosine_decay_schedule(
-            learning_rate * config.lr_kwargs["initial_multiplier"],
+            learning_rate * config.lr_kwargs.get("initial_multiplier", 0),
             peak_value=learning_rate,
             end_value=learning_rate * config.lr_kwargs["end_multiplier"],
             decay_steps=config.lr_kwargs["decay_steps"],
@@ -151,7 +151,7 @@ def make_optimizer(config=OptimizerConfig(), direction="min") -> optax.GradientT
     elif config.decay_type == "exponential":
         """Args:
             init_value: the initial learning rate.
-            transition_steps: must be positive. See the decay computation above.
+            transition_steps: must be positive. See optax docs for decay computation.
             decay_rate: must not be zero. The decay rate.
             transition_begin: must be positive. After how many steps to start annealing
                 (before this many steps the scalar value is held fixed at `init_value`).

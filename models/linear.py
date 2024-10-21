@@ -3,7 +3,19 @@ import jax
 import jax.numpy as jnp
 from jax import random
 from flax import linen as nn
-from flax.core.frozen_dict import unfreeze
+
+
+def binary_operator(q_i, q_j):
+    """Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
+    Args:
+        q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
+        q_j: tuple containing A_j and Bu_j at position j       (P,), (P,)
+    Returns:
+        new element ( A_out, Bu_out )
+    """
+    A_i, b_i = q_i
+    A_j, b_j = q_j
+    return A_j * A_i, A_j * b_i + b_j
 
 
 def matrix_init(key, shape, dtype=jnp.float32, normalization=1):
@@ -171,11 +183,3 @@ class LinearRNN(nn.Module):
             axis=0,
         )
         return grad
-
-
-@jax.vmap
-def binary_operator_diag(q_i, q_j):
-    """Binary operator for parallel scan of linear recurrence"""
-    A_i, b_i = q_i
-    A_j, b_j = q_j
-    return A_j * A_i, A_j * b_i + b_j

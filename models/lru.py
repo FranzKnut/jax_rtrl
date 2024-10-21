@@ -13,6 +13,9 @@ import flax
 from typing import Any, Tuple
 from functools import partial
 
+from models.linear import binary_operator
+from models.seq_util import binary_operator_reset
+
 PRNGKey = Any
 Shape = Tuple[int, ...]
 Dtype = Any
@@ -22,6 +25,13 @@ Array = Any
 def get_lambda(nu_log, theta_log):
     Lambda = jnp.exp(-jnp.exp(nu_log) + 1j * jnp.exp(theta_log))
     return Lambda
+
+
+def get_B_norm(B_real, B_img, gamma_log):
+    """
+    Get modulated input to hidden matrix gamma B.
+    """
+    return (B_real + 1j * B_img) * jnp.exp(jnp.expand_dims(gamma_log, axis=-1))
 
 
 def nu_log_init(key, shape, r_max=1, r_min=0):
@@ -64,8 +74,9 @@ class LRUCell(nn.Module):
         self.gamma_log = self.param("gamma_log", gamma_log_init, (self.d_hidden,), self.nu_log, self.theta_log)
 
     @nn.compact
-    def __call__(self, carry, inputs):
+    def __call__(self, carry, inputs, resets=None):
         h_tminus1 = carry
+        batch_dim = inputs.shape[0] if len(inputs.shape) > 1 else 0
         input_dim = inputs.shape[-1]
         hidden_dim = h_tminus1.shape[-1]
 
@@ -82,11 +93,20 @@ class LRUCell(nn.Module):
         )
 
         Lambda = get_lambda(self.nu_log, self.theta_log)
-        B = B_real + 1j * B_img
-        B_norm = B * jnp.exp(jnp.expand_dims(self.gamma_log, axis=-1))
-        h_t = (Lambda * h_tminus1) + (inputs @ B_norm.transpose())
+        B_norm = get_B_norm(B_real, B_img, self.gamma_log)
 
-        return h_t, h_t
+        # Running the LRU + output projection
+        # For details on parallel scan, check discussion in Smith et al (2022).
+        inputs = jnp.reshape(inputs, (-1, input_dim))
+        Lambda_elements = jnp.repeat(Lambda[None, ...], inputs.shape[0], axis=0)
+        Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs.reshape(-1, input_dim))
+        if resets is None:
+            _, hidden_states = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
+        else:
+            _, hidden_states, _ = jax.lax.associative_scan(
+                binary_operator_reset, (Lambda_elements, Bu_elements, resets)
+            )
+        return hidden_states[-1], hidden_states[-1] if batch_dim == 0 else hidden_states
 
     def to_lambda(self, x):
         return get_lambda(self.nu_log, self.theta_log)
@@ -97,10 +117,10 @@ class OnlineLRUCell(nn.RNNCellBase):
     plasticity: str = "bptt"
 
     @nn.compact
-    def __call__(self, carry, x_t, force_trace_compute=False):
+    def __call__(self, carry, x_t, d=None, force_trace_compute=False):
         model_fn = LRUCell(self.d_hidden)
         if self.plasticity == "bptt":
-            return model_fn(carry, x_t)
+            return model_fn(carry, x_t, resets=d)
 
         def _trace_update(carry, _p, x_t):
             h, grad_memory = carry
@@ -119,7 +139,7 @@ class OnlineLRUCell(nn.RNNCellBase):
 
         def f(mdl, carry, x_t):
             h, *traces = carry
-            h_next, out = mdl(h, x_t)
+            h_next, out = mdl(h, x_t, resets=d)
             if force_trace_compute:
                 traces = _trace_update(carry, mdl.variables["params"], x_t)
             return (h_next, *traces), out
@@ -137,8 +157,6 @@ class OnlineLRUCell(nn.RNNCellBase):
             return self.rtrl_gradient(residuals, y_t)
 
         online_lru_cell_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-
-        # carry, out = online_lru_cell_grad(model_fn, carry, x_t)
         return online_lru_cell_grad(model_fn, carry, x_t)  # carry, output
 
     @staticmethod
@@ -181,7 +199,7 @@ class OnlineLRULayer(nn.RNNCellBase):
     plasticity: str = "bptt"
 
     @nn.compact
-    def __call__(self, carry, x_t, **args):
+    def __call__(self, carry, x_t, resets=None, **args):
         h_tminus1 = carry if self.plasticity == "bptt" else carry[0]
         hidden_dim = h_tminus1.shape[-1]
 
@@ -202,8 +220,7 @@ class OnlineLRULayer(nn.RNNCellBase):
         online_lru = OnlineLRUCell(self.d_hidden, self.plasticity)
         carry, h_t = online_lru(carry, x_t, **args)
         C = C_real + 1j * C_img
-        y_t = (h_t @ C.transpose()).real + D @ x_t
-
+        y_t = (h_t @ C.transpose()).real + x_t @ D.transpose()
         return carry, y_t  # carry, output
 
     @staticmethod

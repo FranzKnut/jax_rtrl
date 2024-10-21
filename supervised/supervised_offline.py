@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from jax_rtrl.supervised.datasets import sine
-from models.neural_networks import FADense, CTRNNCell
+from models.mlp import FADense, CTRNNCell
 
 key = jrand.PRNGKey(0)
 key, key_model, key_data, key_train = jrand.split(key, 4)

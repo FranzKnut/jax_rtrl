@@ -1,5 +1,6 @@
 import os
 import sys
+from models.seq_models import RNNEnsembleConfig
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -15,7 +16,7 @@ from jax_rtrl.optimizers import OptimizerConfig
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from jax_rtrl.models import CELL_TYPES
-from models.neural_networks import RNNEnsemble, RNNEnsembleConfig
+from models.seq_models import RNNEnsemble
 from supervised.training_utils import predict, train_rnn_online as train
 
 # jax.config.update("jax_disable_jit", True)

@@ -1,6 +1,6 @@
 import re
 
-from .neural_networks import RNNEnsembleConfig
+from .seq_models import RNNEnsembleConfig
 from .s5 import StackedEncoderModel, S5Config
 import flax
 import flax.linen

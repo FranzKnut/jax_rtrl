@@ -1,3 +1,3 @@
 from .models.ctrnn import OnlineCTRNNCell
-from .models.neural_networks import FADense
-from .models.neural_networks import MLP
+from .models.mlp import FADense
+from .models.mlp import MLP

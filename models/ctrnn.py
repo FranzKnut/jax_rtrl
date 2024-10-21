@@ -208,10 +208,9 @@ class OnlineCTRNNCell(CTRNNCell):
 
     @nn.compact
     def __call__(self, carry, x, force_trace_compute=False):  # noqa
-
         if carry is None:
             carry = self.initialize_carry(self.make_rng(), x.shape)
-            
+
         if self.plasticity == "bptt":
             return CTRNNCell.__call__(self, carry, x)
 
