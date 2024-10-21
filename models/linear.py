@@ -3,19 +3,7 @@ import jax
 import jax.numpy as jnp
 from jax import random
 from flax import linen as nn
-
-
-def binary_operator(q_i, q_j):
-    """Binary operator for parallel scan of linear recurrence. Assumes a diagonal matrix A.
-    Args:
-        q_i: tuple containing A_i and Bu_i at position i       (P,), (P,)
-        q_j: tuple containing A_j and Bu_j at position j       (P,), (P,)
-    Returns:
-        new element ( A_out, Bu_out )
-    """
-    A_i, b_i = q_i
-    A_j, b_j = q_j
-    return A_j * A_i, A_j * b_i + b_j
+from models.seq_util import binary_operator
 
 
 def matrix_init(key, shape, dtype=jnp.float32, normalization=1):
@@ -150,7 +138,7 @@ class LinearRNN(nn.Module):
             # with tA_{t+1} = (diag A * rho'(x_t)) 1^T * tA_t + 1 rho(x_t)^T
             rho_x_elements = jax.vmap(lambda x: jnp.outer(jnp.ones((self.d_hidden,)), x))(self.act_fun(hidden_states))
             _, self.traces_A.value = jax.lax.associative_scan(
-                partial(binary_operator_diag),
+                partial(binary_operator),
                 (A_rho_prime_elements_N, rho_x_elements),
             )
 
@@ -158,7 +146,7 @@ class LinearRNN(nn.Module):
             # with tB_{t+1} = (diag A * rho'(x_t)) 1^T * tB_t + 1 rho(x_t)^T
             u_elements = jax.vmap(lambda u: jnp.outer(jnp.ones((self.d_hidden,)), u))(inputs)
             _, self.traces_B.value = jax.lax.associative_scan(
-                partial(binary_operator_diag), (A_rho_prime_elements_H, u_elements)
+                partial(binary_operator), (A_rho_prime_elements_H, u_elements)
             )
         return output
 

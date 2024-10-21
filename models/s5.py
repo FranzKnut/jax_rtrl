@@ -250,11 +250,6 @@ def discretize_zoh(Lambda, B_tilde, Delta):
 
 # Parallel scan operations
 class S5SSM(nn.Module):
-    Lambda_re_init: ArrayDevice
-    Lambda_im_init: ArrayDevice
-    V: ArrayDevice
-    Vinv: ArrayDevice
-
     H: int
     P: int
     C_init: str
@@ -265,6 +260,7 @@ class S5SSM(nn.Module):
     clip_eigs: bool = False
     bidirectional: bool = False
     step_rescale: float = 1.0
+    blocks: int = 8
 
     """ The S5 SSM
         Args:
@@ -302,6 +298,8 @@ class S5SSM(nn.Module):
         the SSM is applied to a sequence
         """
 
+        Lambda, V, Vinv = init_hippo(self.P, self.blocks, self.conj_sym)
+
         if self.conj_sym:
             # Need to account for case where we actually sample real B and C, and then multiply
             # by the half sized Vinv and possibly V
@@ -310,8 +308,8 @@ class S5SSM(nn.Module):
             local_P = self.P
 
         # Initialize diagonal state to state matrix Lambda (eigenvalues)
-        self.Lambda_re = self.param("Lambda_re", lambda rng, shape: self.Lambda_re_init, (None,))
-        self.Lambda_im = self.param("Lambda_im", lambda rng, shape: self.Lambda_im_init, (None,))
+        self.Lambda_re = self.param("Lambda_re", lambda rng, shape: Lambda.real, (None,))
+        self.Lambda_im = self.param("Lambda_im", lambda rng, shape: Lambda.imag, (None,))
         if self.clip_eigs:
             self.Lambda = np.clip(self.Lambda_re, None, -1e-4) + 1j * self.Lambda_im
         else:
@@ -320,7 +318,7 @@ class S5SSM(nn.Module):
         # Initialize input to state (B) matrix
         B_init = lecun_normal()
         B_shape = (local_P, self.H)
-        self.B = self.param("B", lambda rng, shape: init_VinvB(B_init, rng, shape, self.Vinv), B_shape)
+        self.B = self.param("B", lambda rng, shape: init_VinvB(B_init, rng, shape, Vinv), B_shape)
         B_tilde = self.B[..., 0] + 1j * self.B[..., 1]
 
         # Initialize state to output (C) matrix
@@ -346,15 +344,15 @@ class S5SSM(nn.Module):
 
         else:
             if self.bidirectional:
-                self.C1 = self.param("C1", lambda rng, shape: init_CV(C_init, rng, shape, self.V), C_shape)
-                self.C2 = self.param("C2", lambda rng, shape: init_CV(C_init, rng, shape, self.V), C_shape)
+                self.C1 = self.param("C1", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape)
+                self.C2 = self.param("C2", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape)
 
                 C1 = self.C1[..., 0] + 1j * self.C1[..., 1]
                 C2 = self.C2[..., 0] + 1j * self.C2[..., 1]
                 self.C_tilde = np.concatenate((C1, C2), axis=-1)
 
             else:
-                self.C = self.param("C", lambda rng, shape: init_CV(C_init, rng, shape, self.V), C_shape)
+                self.C = self.param("C", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape)
 
                 self.C_tilde = self.C[..., 0] + 1j * self.C[..., 1]
 
@@ -427,16 +425,15 @@ class S5SSM(nn.Module):
         return hidden, ys + Du
 
 
-def init_S5SSM(d_model: int, config: S5Config):
+def init_hippo(state_size, blocks, conj_sym):
     """Convenience function that will be used to initialize the SSM."""
-    P = config.state_size
-    H = d_model
-    block_size = int(P / config.blocks)
+    P = state_size
+    block_size = int(P / blocks)
 
     # Initialize state matrix A using approximation to HiPPO-LegS matrix
     Lambda, _, B, V, B_orig = make_DPLR_HiPPO(block_size)
 
-    if config.conj_sym:
+    if conj_sym:
         block_size = block_size // 2
         P = P // 2
 
@@ -446,22 +443,21 @@ def init_S5SSM(d_model: int, config: S5Config):
 
     # If initializing state matrix A as block-diagonal, put HiPPO approximation
     # on each block
-    Lambda = (Lambda * np.ones((config.blocks, block_size))).ravel()
-    V = block_diag(*([V] * config.blocks))
-    Vinv = block_diag(*([Vc] * config.blocks))
+    Lambda = (Lambda * np.ones((blocks, block_size))).ravel()
+    V = block_diag(*([V] * blocks))
+    Vinv = block_diag(*([Vc] * blocks))
 
     # print("Lambda.shape={}".format(Lambda.shape))
     # print("V.shape={}".format(V.shape))
     # print("Vinv.shape={}".format(Vinv.shape))
+    return Lambda, V, Vinv
 
+
+def init_S5SSM(d_model, config: S5Config):
     return partial(
         S5SSM,
-        H=H,
-        P=P,
-        Lambda_re_init=Lambda.real,
-        Lambda_im_init=Lambda.imag,
-        V=V,
-        Vinv=Vinv,
+        H=d_model,
+        P=config.state_size,
         C_init=config.C_init,
         discretization=config.discretization,
         dt_min=config.dt_min,
@@ -469,6 +465,7 @@ def init_S5SSM(d_model: int, config: S5Config):
         conj_sym=config.conj_sym,
         clip_eigs=config.clip_eigs,
         bidirectional=config.bidirectional,
+        blocks=config.blocks,
         **config.kwargs,
     )
 
