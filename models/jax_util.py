@@ -10,8 +10,7 @@ import jax.numpy as jnp
 import jax.random as jrandom
 import optax
 import orbax.checkpoint
-from jax.tree_util import tree_map, tree_reduce
-import jax.tree_util as jtu
+from jax.tree_util import tree_map
 from simple_parsing import Serializable
 
 
@@ -45,18 +44,6 @@ def preprocess_img(img):
     import dm_pix as pix
 
     return pix.rgb_to_grayscale(jnp.array(img / 255.0, dtype=jnp.float32))
-
-
-def tree_norm(tree, **kwargs):
-    """Sum of the norm of all elements in the tree."""
-    return tree_reduce(lambda x, y: x + jnp.linalg.norm(y, **kwargs), tree, initializer=0)
-
-
-def leaf_norms(tree):
-    """Return Dict of leaf names and their norms."""
-    flattened, _ = jtu.tree_flatten_with_path(tree)
-    flattened = {jtu.keystr(k): v for k, v in flattened}
-    return {k: tree_reduce(lambda x, y: x + jnp.linalg.norm(y), v, initializer=0) for k, v in flattened.items()}
 
 
 @partial(jax.jit, static_argnames=["batch_size"])
