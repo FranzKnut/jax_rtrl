@@ -104,7 +104,7 @@ class LRUCell(nn.Module):
             _, hidden_states = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
         else:
             _, hidden_states, _ = jax.lax.associative_scan(
-                binary_operator_reset, (Lambda_elements, Bu_elements, resets)
+                binary_operator_reset, (Lambda_elements, Bu_elements, resets.astype(jnp.int32))
             )
         return hidden_states[-1], hidden_states[-1] if batch_dim == 0 else hidden_states
 
