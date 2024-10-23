@@ -1,7 +1,7 @@
 """Plot data that was downloaded from wandb."""
 
-from functools import reduce
 import os
+from eval.eval_util import pull_fields
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -11,44 +11,12 @@ BY = ["agent_type", "obs_mask"]
 SPLIT_PLOTS_BY = "env_name"
 
 df = pd.read_csv("eval/data/wandb_runs.csv", index_col=0)
-# data = data[data["Sweep"].isin(sweeps)]
-# df = df[df["env_name_full"].isin(table_env_names)]
+df = df.dropna(subset=VAL_FIELD)
 
-
-def gen_dict_extract(var, key):
-    if hasattr(var, "items"):
-        for k, v in var.items():
-            if k == key:
-                yield v
-            if isinstance(v, dict):
-                for result in gen_dict_extract(v, key):
-                    yield result
-            elif isinstance(v, list):
-                for d in v:
-                    for result in gen_dict_extract(d, key):
-                        yield result
-
-
-def deep_get(dictionary, keys, default=None):
-    generator = gen_dict_extract(dictionary, keys)
-    try:
-        return next(generator)
-    except StopIteration:
-        return default
-
-
-def make_pull_fields(names=[]):
-    def _pull_fields(cfg):
-        """Pull relevant fields from the config field."""
-        cfg = eval(cfg)
-
-        return pd.Series({n: deep_get(cfg, n) for n in names})
-
-    return _pull_fields
-
-
+SWEEPS = ["olx8u5gy", "bkngzbt9"]
+# df = df[df["Sweep"].isin(SWEEPS)]
 # COLUMNS PRESENT IN DF ARE OVERWRITTEN!
-df = df.assign(**df.config.apply(make_pull_fields(FIELDS)))
+df = pull_fields(df, FIELDS)
 
 df[BY] = df[BY].fillna("none")
 
@@ -58,14 +26,13 @@ def mask_fn(row):
     return (
         True
         # & row["agent_type"] == "rflo"
-        # & (row["seed"] in [1, 2, 3, 4, 5])
+        & (row["seed"] in [1, 2, 3, 4, 5])
     )
 
 
 df = df[df.apply(mask_fn, axis=1)]
 
 all_by = BY + [SPLIT_PLOTS_BY, "seed"]
-df = df.dropna(subset=VAL_FIELD)
 df = df.sort_values("created_at").groupby(all_by).tail(1)
 
 print(df.groupby(BY)[VAL_FIELD].count())
