@@ -17,12 +17,11 @@ class SequenceLayer(nn.Module):
     dropout: float = 0.0  # dropout probability
     norm: str = "layer"  # which normalization to use
     training: bool = True  # in training mode (dropout in trainign mode only)
+    glu: bool = True  # use Gated Linear Unit Structure
 
     @nn.compact
     def __call__(self, hidden, inputs, **kwargs):
         """Applies, layer norm, seq model, dropout and GLU in that order."""
-        out1 = nn.Dense(self.d_output)
-        out2 = nn.Dense(self.d_output)
         if self.norm in ["layer"]:
             normalization = nn.LayerNorm()
         else:
@@ -32,7 +31,10 @@ class SequenceLayer(nn.Module):
         x = normalization(inputs)  # pre normalization
         hidden, x = self.seq(hidden, x, **kwargs)  # call seq model
         x = drop(nn.gelu(x))
-        x = out1(x) * jax.nn.sigmoid(out2(x))  # GLU
+        x = nn.Dense(self.d_output)(x)
+        if self.glu:
+            # Gated Linear Unit
+            x *= jax.nn.sigmoid(nn.Dense(self.d_output)(x))
         x = drop(x)
         return hidden, inputs + x  # skip connection
 
@@ -43,13 +45,11 @@ class MultiLayerRNN(nn.RNNCellBase):
     layers: list
     rnn_cls: nn.RNNCellBase
     rnn_kwargs: dict = field(default_factory=dict)
+    glu: bool = True
 
     def make_rnns(self):
         return [
-            SequenceLayer(
-                self.rnn_cls(size, **self.rnn_kwargs, name=f"rnn_{i}"),
-                size,
-            )
+            SequenceLayer(self.rnn_cls(size, **self.rnn_kwargs, name=f"rnn_{i}"), size, norm="layer", glu=self.glu)
             for i, size in enumerate(self.layers)
         ]
 
@@ -145,6 +145,7 @@ class FAMultiLayerRNN(MultiLayerRNN):
 class RNNEnsembleConfig:
     num_modules: int
     layers: tuple[int]
+    glu: bool = True
     model: type = nn.RNNCellBase
     out_size: int | None = None
     out_dist: str | None = None
@@ -168,6 +169,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 rnn_kwargs=self.config.rnn_kwargs,
                 fa_type=self.config.fa_type,
                 name=f"ensembles_{i}",
+                glu=self.config.glu,
             )
             for i in range(self.config.num_modules)
         ]

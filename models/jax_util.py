@@ -133,6 +133,11 @@ def mae_loss(y_hat, y):
     return jnp.mean(jnp.abs(y - y_hat))
 
 
+def log_penalty(x):
+    """Log penalty for sparsity."""
+    return jnp.log(1 + x**2)
+
+
 def g_slow_loss(x_before, x_t, x_next):
     """Change in first derivative error.
 
@@ -173,9 +178,6 @@ def map_nested_fn(fn):
     """
 
     def map_fn(nested_dict):
-        return {
-            k: (map_fn(v) if hasattr(v, "keys") else fn(k, v))
-            for k, v in nested_dict.items()
-        }
+        return {k: (map_fn(v) if hasattr(v, "keys") else fn(k, v)) for k, v in nested_dict.items()}
 
     return map_fn

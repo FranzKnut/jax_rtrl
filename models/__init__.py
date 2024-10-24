@@ -39,6 +39,7 @@ def make_rnn_ensemble_config(
     model_kwargs=None,
     output_layers=None,
     skip_connection=False,
+    glu=True,
 ):
     model_cls = CELL_TYPES[model_name]
     kwargs = model_kwargs or {}
@@ -56,4 +57,5 @@ def make_rnn_ensemble_config(
         output_layers=output_layers,
         skip_connection=skip_connection,
         model=model_cls,
+        glu=glu,
     )
