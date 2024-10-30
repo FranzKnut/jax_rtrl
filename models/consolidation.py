@@ -59,7 +59,7 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
         dL_dtheta: The gradient of the loss with respect to the parameter.
         dtheta_dt: The update that was applied to the parameter.
     """
-    return state.replace(omega=jax.tree.map(lambda o, g, d: o + g * d, state.omega, dL_dtheta, dtheta_dt))
+    return state.replace(omega=jax.tree.map(lambda o, g, d: o - g * d, state.omega, dL_dtheta, dtheta_dt))
 
 
 def compute_weight_consolidation_loss(state: WeightConsolidationState, theta):
