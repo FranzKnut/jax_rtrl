@@ -1,11 +1,12 @@
+"""Timing of RTRL and RFLO for different hidden sizes."""
 import argparse
 import os
 import timeit
-import pandas as pd
-import jax.random as jrand
-import jax.numpy as jnp
-import seaborn as sns
 
+import jax.numpy as jnp
+import jax.random as jrand
+import pandas as pd
+import seaborn as sns
 from supervised_online import make_model
 from training_utils import train_rnn_online
 

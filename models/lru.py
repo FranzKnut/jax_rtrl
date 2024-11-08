@@ -6,15 +6,16 @@ NeurIPS 2024
 
 """
 
-from flax import linen as nn
+from functools import partial
+from typing import Any, Tuple
+
+import flax
 import jax
 import jax.numpy as jnp
-import flax
-from typing import Any, Tuple
-from functools import partial
+from flax import linen as nn
 
-from models.linear import binary_operator
-from models.seq_util import binary_operator_reset
+from .linear import binary_operator
+from .seq_util import binary_operator_reset
 
 PRNGKey = Any
 Shape = Tuple[int, ...]

@@ -1,21 +1,24 @@
+"""S5 model implementation in JAX."""
 from dataclasses import dataclass, field
 from functools import partial
-from chex import ArrayDevice
+
 import jax
-import jax.numpy as np
 import jax.numpy as jnp
+import jax.numpy as np
+from chex import ArrayDevice
 from flax import linen as nn
-from jax.nn.initializers import lecun_normal, normal
 from jax import random
+from jax.nn.initializers import lecun_normal, normal
 from jax.numpy.linalg import eigh
 from jax.scipy.linalg import block_diag
-from models.jax_util import ModelConfig
-from models.seq_util import binary_operator, binary_operator_reset
+
+from .jax_util import ModelConfig
+from .seq_util import binary_operator, binary_operator_reset
 
 
 @dataclass
 class S5Config(ModelConfig):
-    """S5 Configuration
+    """S5 Configuration.
 
     Parameters
     ----------

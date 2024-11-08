@@ -8,13 +8,13 @@ packages = [{include = "models"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-flax = "^0.9.0"
-plotly = "^5.24.0"
+flax = "^0.10.1"
+plotly = "^5.24.1"
 dacite = "^1.8.1"
-simple-parsing = "^0.1.5"
+simple-parsing = "^0.1.6"
 distrax = "^0.1.5"
-tqdm = "^4.66.5"
-poethepoet = "^0.28.0"
+tqdm = "^4.67.0"
+poethepoet = "^0.29.0"
 
 
 [build-system]

@@ -1,23 +1,25 @@
 import os
 import sys
-from models.seq_models import RNNEnsembleConfig
-import numpy as np
+
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import jax.random as jrand
-import flax.linen as nn
-
 import matplotlib.pyplot as plt
-from supervised.datasets import sine, spirals
-
+import numpy as np
 from models.ctrnn import OnlineCTRNNCell
 from models.lru import OnlineLRULayer
+from models.seq_models import RNNEnsembleConfig
+from supervised.datasets import sine, spirals
+
 from jax_rtrl.optimizers import OptimizerConfig
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from jax_rtrl.models import CELL_TYPES
 from models.seq_models import RNNEnsemble
-from supervised.training_utils import predict, train_rnn_online as train
+from supervised.training_utils import predict
+from supervised.training_utils import train_rnn_online as train
+
+from jax_rtrl.models import CELL_TYPES
 
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_debug_nans", True)

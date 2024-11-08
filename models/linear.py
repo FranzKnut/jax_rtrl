@@ -1,9 +1,11 @@
 from functools import partial
+
 import jax
 import jax.numpy as jnp
-from jax import random
 from flax import linen as nn
-from models.seq_util import binary_operator
+from jax import random
+
+from .seq_util import binary_operator
 
 
 def matrix_init(key, shape, dtype=jnp.float32, normalization=1):
@@ -15,10 +17,7 @@ def truncated_normal_matrix_init(key, shape, dtype=jnp.float_, normalization=1):
 
 
 class LinearRNN(nn.Module):
-    """
-    RNN layer that updates internal elegibility traces to allow online
-    learning.
-    """
+    """RNN layer that updates internal elegibility traces to allow online learning."""
 
     d_hidden: int  # hidden state dimension
     d_model: int  # input and output dimensions

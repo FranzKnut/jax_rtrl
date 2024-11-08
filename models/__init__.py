@@ -1,12 +1,14 @@
+"""Module for model definitions and utilities."""
 import re
 
-from .seq_models import RNNEnsembleConfig
-from .s5 import StackedEncoderModel, S5Config
 import flax
 import flax.linen
 import jax
-from models.lru import OnlineLRULayer
+
 from .ctrnn import CTRNNCell, OnlineCTRNNCell
+from .lru import OnlineLRULayer
+from .s5 import S5Config, StackedEncoderModel
+from .seq_models import RNNEnsembleConfig
 
 CELL_TYPES = {
     "bptt": CTRNNCell,

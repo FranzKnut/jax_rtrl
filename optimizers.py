@@ -3,8 +3,10 @@
 from dataclasses import dataclass, field, replace
 from functools import partial
 from token import OP
-from models.jax_util import map_nested_fn
+
 import optax
+
+from .models.jax_util import map_nested_fn
 
 
 @dataclass(frozen=True)

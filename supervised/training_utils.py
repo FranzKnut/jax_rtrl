@@ -1,13 +1,15 @@
+"""Supervised training loops."""
 import jax
-from jax import numpy as jnp
 import optax
+from jax import numpy as jnp
+from optimizers import OptimizerConfig, make_optimizer
 from tqdm import trange
 
-from optimizers import OptimizerConfig, make_optimizer
 
-
-def train_rnn_online(_loss_fn, _params, data, _key, h0, num_steps=10_000, opt_config=OptimizerConfig(), param_post_update_fn=None):
-    # We use Stochastic Gradient Descent with a constant learning rate
+def train_rnn_online(
+    _loss_fn, _params, data, _key, h0, num_steps=10_000, opt_config=OptimizerConfig(), param_post_update_fn=None
+):
+    """Train RNN using Stochastic Gradient Descent with a constant learning rate."""
     _x, _y = data
     # mask = jax.tree.map(lambda x: True, _params)
     # mask['params']['cell']['tau'] = False
@@ -56,6 +58,7 @@ def train_rnn_online(_loss_fn, _params, data, _key, h0, num_steps=10_000, opt_co
 
 def predict(model, params, x):
     """Predict a sequence of outputs given an input sequence."""
+
     def _step(carry, _x):
         return model.apply(params, _x, carry)
 

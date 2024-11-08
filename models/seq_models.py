@@ -1,16 +1,19 @@
-from chex import PRNGKey
+"""Sequence models implemented with Flax."""
 from dataclasses import dataclass, field
 from typing import Tuple
+
 import distrax
-from flax import linen as nn
 import jax
 import jax.numpy as jnp
-from models.jax_util import zeros_like_tree
-from models.mlp import MLP, DistributionLayer, FADense
+from chex import PRNGKey
+from flax import linen as nn
+
+from .jax_util import zeros_like_tree
+from .mlp import MLP, DistributionLayer, FADense
 
 
 class SequenceLayer(nn.Module):
-    """Single layer, with one LRU module, GLU, dropout and batch/layer norm"""
+    """Single layer, with one LRU module, GLU, dropout and batch/layer norm."""
 
     seq: nn.Module  # seq module
     d_output: int  # output layer sizes
@@ -21,7 +24,7 @@ class SequenceLayer(nn.Module):
 
     @nn.compact
     def __call__(self, hidden, inputs, **kwargs):
-        """Applies, layer norm, seq model, dropout and GLU in that order."""
+        """Apply, layer norm, seq model, dropout and GLU in that order."""
         if self.norm in ["layer"]:
             normalization = nn.LayerNorm()
         else:
