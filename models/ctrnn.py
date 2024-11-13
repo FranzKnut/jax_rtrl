@@ -162,9 +162,9 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     jtau += dh_dtau / tau
 
     df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jnp.outer(
+    dh_dx = jax.vmap(jnp.outer)(
         df_dh,
-        (W @ jnp.concatenate([jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))], axis=-1))[
+        (jnp.concatenate([jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))], axis=-1) @ W.T)[
             ..., : x.shape[-1]
         ],
     )

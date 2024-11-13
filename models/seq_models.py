@@ -288,3 +288,18 @@ class RNNEnsemble(nn.RNNCellBase):
             for _l in params["params"]["rnn"][k]:
                 params["params"]["rnn"][k][_l]["tau"] = jnp.clip(params["params"]["rnn"][k][_l]["tau"], min=1.0)
         return params
+
+
+# Here we call vmap to parallelize across a batch of input sequences
+def make_batched_model(model):
+    return nn.vmap(
+        model,
+        in_axes=0,
+        out_axes=0,
+        variable_axes={
+            "params": None,
+            "dropout": None,
+        },
+        methods=["__call__"],
+        split_rngs={"params": False, "dropout": True},
+    )
