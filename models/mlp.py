@@ -2,11 +2,12 @@
 
 from dataclasses import field
 from typing import Callable
-import numpy as np
-import jax
-import jax.numpy as jnp
+
 import distrax
 import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import numpy as np
 
 
 class FADense(nn.Dense):
@@ -101,7 +102,8 @@ class MLP(nn.Module):
     """MLP built with Flax.
 
     activation_fn is applied after every layer except the last one.
-    If f_align is true, each layer uses feedback alignment instead of backpropagation."""
+    If f_align is true, each layer uses feedback alignment instead of backpropagation.
+    """
 
     layers: list
     activation_fn: Callable = jax.nn.relu

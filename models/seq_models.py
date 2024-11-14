@@ -1,4 +1,5 @@
 """Sequence models implemented with Flax."""
+
 from dataclasses import dataclass, field
 from typing import Tuple
 
@@ -50,14 +51,9 @@ class MultiLayerRNN(nn.RNNCellBase):
     rnn_kwargs: dict = field(default_factory=dict)
     glu: bool = True
 
-    def make_rnns(self):
-        return [
-            SequenceLayer(self.rnn_cls(size, **self.rnn_kwargs, name=f"rnn_{i}"), size, norm="layer", glu=self.glu)
-            for i, size in enumerate(self.layers)
-        ]
-
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+        """Initialize the carry (hidden state) for the RNN layers."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
         shapes = zip(self.layers, [self.layers[:1], *[(s,) for s in self.layers[:-1]]])
         return [
@@ -66,6 +62,7 @@ class MultiLayerRNN(nn.RNNCellBase):
         ]
 
     def setup(self):
+        """Initialize submodules."""
         self.rnns = [
             SequenceLayer(
                 self.rnn_cls(size, **self.rnn_kwargs, name=f"rnn_{i}"),
@@ -96,6 +93,7 @@ class FAMultiLayerRNN(MultiLayerRNN):
 
     @nn.compact
     def __call__(self, carries, x, **kwargs):
+        """Call the MultiLayerRNN with the given carries and input x."""
         if self.fa_type == "bp":
             return MultiLayerRNN.__call__(self, carries, x, **kwargs)
         elif self.fa_type == "dfa":
@@ -146,6 +144,8 @@ class FAMultiLayerRNN(MultiLayerRNN):
 
 @dataclass
 class RNNEnsembleConfig:
+    """Configuration for RNNEnsemble."""
+
     num_modules: int
     layers: tuple[int]
     glu: bool = True
@@ -165,6 +165,7 @@ class RNNEnsemble(nn.RNNCellBase):
     config: RNNEnsembleConfig
 
     def setup(self):
+        """Initialize submodules."""
         self.ensembles = [
             FAMultiLayerRNN(
                 self.config.layers,
@@ -254,6 +255,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
     @nn.nowrap
     def loss_and_grad(self, params, loss_fn, carry, hidden, x, target):
+        """Compute loss and gradient asynchronuously."""
         # Compute gradient of loss wrt to network output
         loss, (grads, df_dh) = jax.value_and_grad(self.apply, argnums=[0, 1])(
             params, [c[-1][0].real for c in carry], loss_fn, target, x, method=self._loss
@@ -283,22 +285,25 @@ class RNNEnsemble(nn.RNNCellBase):
 
     @staticmethod
     def clip_tau(params):
-        """HACK: clip tau to > 1.0"""
+        """HACK: clip tau to > 1.0."""
         for k in params["params"]["rnn"]:
             for _l in params["params"]["rnn"][k]:
                 params["params"]["rnn"][k][_l]["tau"] = jnp.clip(params["params"]["rnn"][k][_l]["tau"], min=1.0)
         return params
 
 
-# Here we call vmap to parallelize across a batch of input sequences
-def make_batched_model(model):
+def make_batched_model(model, batch_size=None):
+    """Map methods to vmap with flax to parallelize across a batch of input sequences."""
     return nn.vmap(
         model,
         in_axes=0,
         out_axes=0,
+        axis_size=batch_size,
         variable_axes={
             "params": None,
-            "dropout": None,
+            "falign": None,
+            "mask": None,
+            "wiring": None,
         },
         methods=["__call__"],
         split_rngs={"params": False, "dropout": True},
