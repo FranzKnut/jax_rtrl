@@ -1,9 +1,9 @@
 """Linear Recurrent Units built with Jax.
 
+author: jlemmel
 Stolen from the paper Real-Time Recurrent Learning using Trace Units in Reinforcement Learning
 by Elelimy et. al.
 NeurIPS 2024
-
 """
 
 from functools import partial
@@ -24,42 +24,46 @@ Array = Any
 
 
 def get_lambda(nu_log, theta_log):
+    """Construct lambda from nu and theta."""
     Lambda = jnp.exp(-jnp.exp(nu_log) + 1j * jnp.exp(theta_log))
     return Lambda
 
 
 def get_B_norm(B_real, B_img, gamma_log):
-    """
-    Get modulated input to hidden matrix gamma B.
-    """
+    """Get modulated input to hidden matrix gamma B."""
     return (B_real + 1j * B_img) * jnp.exp(jnp.expand_dims(gamma_log, axis=-1))
 
 
 def nu_log_init(key, shape, r_max=1, r_min=0):
+    """Initialize nu log as log(-0.5 log(x (r_max^2 - r_min^2) + r_min^2), x ~ U[0, 1]."""
     u1 = jax.random.uniform(key, shape=shape)
     nu_log = jnp.log(-0.5 * jnp.log(u1 * (r_max**2 - r_min**2) + r_min**2))
     return nu_log
 
 
 def theta_log_init(key, shape, max_phase=6.28):
+    """Initialize theta log as log(max_phase * x), x ~ U[0, 1]."""
     u2 = jax.random.uniform(key, shape=shape)
     theta_log = jnp.log(max_phase * u2)
     return theta_log
 
 
 def gamma_log_init(key, shape, nu_log, theta_log):
+    """Initialize gamma log from nu and theta."""
     nu = jnp.exp(nu_log)
     theta = jnp.exp(theta_log)
     diag_lambda = jnp.exp(-nu + 1j * theta)
     return jnp.log(jnp.sqrt(1 - jnp.abs(diag_lambda) ** 2))
 
 
-# Glorot initialization
 def matrix_init(key, shape, dtype=jnp.float32, normalization=1):
+    """Glorot initialization."""
     return jax.random.normal(key=key, shape=shape, dtype=dtype) / normalization
 
 
 class LRUCell(nn.Module):
+    """Linear Recurrent Unit Cell."""
+
     d_hidden: int
     r_max: float = 1.0
     r_min: float = 0.0
@@ -70,12 +74,14 @@ class LRUCell(nn.Module):
     """
 
     def setup(self):
+        """Create parameters."""
         self.nu_log = self.param("nu_log", nu_log_init, (self.d_hidden,), self.r_max, self.r_min)
         self.theta_log = self.param("theta_log", theta_log_init, (self.d_hidden,), self.max_phase)
         self.gamma_log = self.param("gamma_log", gamma_log_init, (self.d_hidden,), self.nu_log, self.theta_log)
 
     @nn.compact
     def __call__(self, carry, inputs, resets=None):
+        """Compute output for given input sequence and optionally reset hidden state."""
         h_tminus1 = carry
         batch_dim = inputs.shape[0] if len(inputs.shape) > 1 else 0
         input_dim = inputs.shape[-1]
@@ -98,7 +104,7 @@ class LRUCell(nn.Module):
 
         # Running the LRU + output projection
         # For details on parallel scan, check discussion in Smith et al (2022).
-        inputs = jnp.reshape(inputs, (-1, input_dim))
+        # inputs = jnp.reshape(inputs, (-1, input_dim))
         Lambda_elements = jnp.repeat(Lambda[None, ...], inputs.shape[0], axis=0)
         Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs.reshape(-1, input_dim))
         if resets is None:
@@ -109,19 +115,38 @@ class LRUCell(nn.Module):
             )
         return hidden_states[-1], hidden_states[-1] if batch_dim == 0 else hidden_states
 
-    def to_lambda(self, x):
+    def _to_lambda(self, x):
         return get_lambda(self.nu_log, self.theta_log)
 
 
 class OnlineLRUCell(nn.RNNCellBase):
+    """LRU cell with online gradient computation."""
+
     d_hidden: int
     plasticity: str = "bptt"
 
     @nn.compact
-    def __call__(self, carry, x_t, d=None, force_trace_compute=False):
+    def __call__(self, carry, x_t, resets=None, force_trace_compute=False):
+        """Call the LRU cell with online gradient computation.
+
+        Parameters
+        ----------
+        carry : any
+            LRU cell state.
+        x_t : array
+            Input sequence.
+        resets : array, optional
+            Boolean array with length of input sequence, by default None
+        force_trace_compute : bool, optional
+            Force updating the gradient traces even when autograd is not required, by default False
+
+        Returns
+        -------
+        Tuple : carry, output
+        """
         model_fn = LRUCell(self.d_hidden)
         if self.plasticity == "bptt":
-            return model_fn(carry, x_t, resets=d)
+            return model_fn(carry, x_t, resets=resets)
 
         def _trace_update(carry, _p, x_t):
             h, grad_memory = carry
@@ -140,14 +165,14 @@ class OnlineLRUCell(nn.RNNCellBase):
 
         def f(mdl, carry, x_t):
             h, *traces = carry
-            h_next, out = mdl(h, x_t, resets=d)
+            h_next, out = mdl(h, x_t, resets=resets)
             if force_trace_compute:
                 traces = _trace_update(carry, mdl.variables["params"], x_t)
             return (h_next, *traces), out
 
         def fwd(mdl: LRUCell, carry, x_t):
             f_out, vjp_func = nn.vjp(f, mdl, carry, x_t)
-            _, vjp_to_lambda = nn.vjp(lambda m, x: m.to_lambda(x), mdl, x_t)
+            _, vjp_to_lambda = nn.vjp(lambda m, x: m._to_lambda(x), mdl, x_t)
             traces = _trace_update(carry, mdl.variables["params"], x_t)
             return f_out, (vjp_func, traces, vjp_to_lambda, mdl.gamma_log)  # output, residual
 
@@ -191,9 +216,7 @@ class OnlineLRUCell(nn.RNNCellBase):
 
 
 class OnlineLRULayer(nn.RNNCellBase):
-    """
-    OnlineLRU layer with linear projection afterwards
-    """
+    """OnlineLRU layer with linear projection afterwards."""
 
     d_output: int
     d_hidden: int = 256
@@ -201,6 +224,17 @@ class OnlineLRULayer(nn.RNNCellBase):
 
     @nn.compact
     def __call__(self, carry, x_t, resets=None, **args):
+        """Applies the LRU cell to the input and computes the output projections.
+
+        Args:
+            carry (Union[Array, Tuple[Array, ...]]): The carry state from the previous time step.
+            x_t (Array): The input at the current time step.
+            resets (Optional[Array]): Optional reset signals.
+            **args: Additional arguments for the LRU cell.
+
+        Returns:
+            Tuple[Union[Array, Tuple[Array, ...]], Array]: The updated carry state and the output at the current time step.
+        """
         h_tminus1 = carry if self.plasticity == "bptt" else carry[0]
         hidden_dim = h_tminus1.shape[-1]
 
@@ -226,9 +260,11 @@ class OnlineLRULayer(nn.RNNCellBase):
 
     @staticmethod
     def rtrl_gradient(*args, **kwargs):
+        """Compute the Real-Time Recurrent Learning (RTRL) gradient for the LRU cell."""
         return OnlineLRUCell.rtrl_gradient(*args, **kwargs)
 
     def initialize_carry(self, rng, input_shape):
+        """Initializes the carry state for the LRU cell including gradient traces."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
         hidden_init = jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64)
         if self.plasticity == "bptt":
@@ -256,7 +292,7 @@ if __name__ == "__main__":
     test_x = jax.random.normal(jax.random.PRNGKey(0), (seq_len, batch_size, input_dim))
 
     # print(test_x)
-    def apply_rtrl(rt_rtu_params, test_x, rt_hidden_init, mem_grad_init):
+    def _apply_rtrl(rt_rtu_params, test_x, rt_hidden_init, mem_grad_init):
         rt_carry = (rt_hidden_init, mem_grad_init)
         hs_c1 = []
         for i in range(seq_len):
@@ -265,7 +301,7 @@ if __name__ == "__main__":
         error = (1 - jnp.mean(jnp.stack(hs_c1))) ** 2
         return error
 
-    rtrl_out = apply_rtrl(params, test_x, h_init, grad_momory_init)
-    grad_rtrl = jax.grad(apply_rtrl)(params, test_x, h_init, grad_momory_init)
+    rtrl_out = _apply_rtrl(params, test_x, h_init, grad_momory_init)
+    grad_rtrl = jax.grad(_apply_rtrl)(params, test_x, h_init, grad_momory_init)
     print(rtrl_out)
     print(grad_rtrl)
