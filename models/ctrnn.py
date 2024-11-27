@@ -2,17 +2,15 @@
 
 from dataclasses import field
 from functools import partial
+from typing import Tuple
+
 import flax.linen as nn
 import jax
 import jax.interpreters
 import jax.numpy as jnp
 import jax.random as jrand
-
 from chex import PRNGKey
 from flax.linen import nowrap
-
-
-from typing import Tuple
 
 from .wirings import make_mask_initializer
 

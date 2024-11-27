@@ -1,23 +1,22 @@
 """S5 model implementation in JAX."""
+
 from dataclasses import dataclass, field
 from functools import partial
 
 import jax
 import jax.numpy as jnp
 import jax.numpy as np
-from chex import ArrayDevice
 from flax import linen as nn
 from jax import random
 from jax.nn.initializers import lecun_normal, normal
 from jax.numpy.linalg import eigh
 from jax.scipy.linalg import block_diag
 
-from .jax_util import ModelConfig
 from .seq_util import binary_operator, binary_operator_reset
 
 
 @dataclass
-class S5Config(ModelConfig):
+class S5Config:
     """S5 Configuration.
 
     Parameters
@@ -28,6 +27,8 @@ class S5Config(ModelConfig):
                             e.g. after training on a different resolution for
                             the speech commands benchmark
     """
+
+    decode_into_subclasses: bool = True
 
     # Model Parameters
     state_size: int = 256

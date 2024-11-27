@@ -1,20 +1,20 @@
 """Utility functions for JAX models."""
 
-from dataclasses import dataclass
-from functools import partial
-import os
 import json
-import numpy as np
+import os
+from functools import partial
+import re
+
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 import optax
 import orbax.checkpoint
 from jax.tree_util import tree_map
-from simple_parsing import Serializable
 
 
-class JAX_RNG:
+class JaxRng:
     """Base class that facilitates jax PRNG managment."""
 
     def __init__(self, rng) -> None:
@@ -148,6 +148,16 @@ def g_slow_loss(x_before, x_t, x_next):
 
 
 def make_vmap_model(_model, **kwargs):
+    """Create a vectorized version of the given model's apply function using JAX's vmap and jit.
+
+    Args:
+        _model: The model object which contains the apply function to be vectorized.
+        **kwargs: Additional keyword arguments to be passed to the model's apply function.
+
+    Returns:
+        A function that takes parameters (_p) and input data (_input), and applies the vectorized model's apply function to the input data.
+    """
+
     @jax.jit
     def _vmap_model(_p, _input):
         return jax.vmap(jax.tree_util.Partial(_model.apply, _p, **kwargs))(_input)
@@ -156,6 +166,17 @@ def make_vmap_model(_model, **kwargs):
 
 
 def make_validate(_model, test_data, **kwargs):
+    """Create a validation function for a given model and test data.
+
+    Args:
+        _model: The model to be validated.
+        test_data: The data to be used for validation.
+        **kwargs: Additional keyword arguments to be passed to the vmap model creation function.
+
+    Returns:
+        A function that takes model parameters as input and returns the mean squared error loss
+        between the model predictions and the test data.
+    """
     vmap_model = make_vmap_model(_model, **kwargs)
 
     @jax.jit
@@ -166,8 +187,8 @@ def make_validate(_model, test_data, **kwargs):
     return _validate
 
 
-@dataclass
-class ModelConfig(Serializable):
-    decode_into_subclasses: bool = True
-
-
+def get_matching_leaves(tree, pattern):
+    """Get leaves of tree that match pattern."""
+    flattened, _ = jax.tree_util.tree_flatten_with_path(tree)
+    flattened = {jax.tree_util.keystr(k): v for k, v in flattened}
+    return [flattened[k] for k in flattened if re.fullmatch(pattern, k)]
