@@ -81,9 +81,12 @@ class LRUCell(nn.Module):
 
     @nn.compact
     def __call__(self, carry, inputs, resets=None):
-        """Compute output for given input sequence and optionally reset hidden state."""
+        """Compute output for given input sequence and optionally reset hidden state.
+
+        Assumes that the input is a sequence of shape (steps, input_dim) or a single vector of shape (input_dim,).
+        """
         h_tminus1 = carry
-        batch_dim = inputs.shape[0] if len(inputs.shape) > 1 else 0
+        _is_sequence = len(inputs.shape) > 1
         input_dim = inputs.shape[-1]
         hidden_dim = h_tminus1.shape[-1]
 
@@ -104,16 +107,16 @@ class LRUCell(nn.Module):
 
         # Running the LRU + output projection
         # For details on parallel scan, check discussion in Smith et al (2022).
-        # inputs = jnp.reshape(inputs, (-1, input_dim))
+        inputs = jnp.reshape(inputs, (-1, input_dim))
         Lambda_elements = jnp.repeat(Lambda[None, ...], inputs.shape[0], axis=0)
-        Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs.reshape(-1, input_dim))
+        Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs)
         if resets is None:
             _, hidden_states = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
         else:
             _, hidden_states, _ = jax.lax.associative_scan(
                 binary_operator_reset, (Lambda_elements, Bu_elements, resets.astype(jnp.int32))
             )
-        return hidden_states[-1], hidden_states[-1] if batch_dim == 0 else hidden_states
+        return hidden_states[-1], hidden_states if _is_sequence else hidden_states[-1]
 
     def _to_lambda(self, x):
         return get_lambda(self.nu_log, self.theta_log)
@@ -165,7 +168,11 @@ class OnlineLRUCell(nn.RNNCellBase):
 
         def f(mdl, carry, x_t):
             h, *traces = carry
-            h_next, out = mdl(h, x_t, resets=resets)
+            # Vmap in case of batched carry
+            if len(carry[0].shape) > 1:
+                h_next, out = jax.vmap(mdl)(h, x_t, resets=resets)
+            else:
+                h_next, out = mdl(h, x_t, resets=resets)
             if force_trace_compute:
                 traces = _trace_update(carry, mdl.variables["params"], x_t)
             return (h_next, *traces), out
@@ -219,12 +226,26 @@ class OnlineLRULayer(nn.RNNCellBase):
     """OnlineLRU layer with linear projection afterwards."""
 
     d_output: int
-    d_hidden: int = 256
+    d_hidden: int
     plasticity: str = "bptt"
+
+    def __init__(self, d_output, d_hidden=None, plasticity="bptt", **kwargs):
+        """Initialize the model with the specified output dimension, hidden dimension, and plasticity type.
+
+        Args:
+            d_output (int): The dimension of the output layer.
+            d_hidden (int, optional): The dimension of the hidden layer. Defaults to the value of d_output if not provided.
+            plasticity (str): The type of plasticity to use. Defaults to "bptt".
+            kwargs: Additional arguments for the LRU cell.
+        """
+        self.d_output = d_output
+        self.d_hidden = d_hidden or d_output
+        self.plasticity = plasticity
+        super().__init__(**kwargs)
 
     @nn.compact
     def __call__(self, carry, x_t, resets=None, **args):
-        """Applies the LRU cell to the input and computes the output projections.
+        """Apply the LRU cell to the input and computes the output projections.
 
         Args:
             carry (Union[Array, Tuple[Array, ...]]): The carry state from the previous time step.
@@ -264,7 +285,7 @@ class OnlineLRULayer(nn.RNNCellBase):
         return OnlineLRUCell.rtrl_gradient(*args, **kwargs)
 
     def initialize_carry(self, rng, input_shape):
-        """Initializes the carry state for the LRU cell including gradient traces."""
+        """Initialize the carry state for the LRU cell including gradient traces."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
         hidden_init = jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64)
         if self.plasticity == "bptt":

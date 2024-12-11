@@ -46,7 +46,7 @@ class SequenceLayer(nn.Module):
 class MultiLayerRNN(nn.RNNCellBase):
     """Multilayer RNN."""
 
-    layers: list
+    layers: list[int]
     rnn_cls: nn.RNNCellBase
     rnn_kwargs: dict = field(default_factory=dict)
     glu: bool = True

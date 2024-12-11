@@ -1,6 +1,7 @@
 """Module for model definitions and utilities."""
 
 import re
+from turtle import mode
 
 import flax
 import flax.linen
@@ -79,6 +80,13 @@ def make_rnn_ensemble_config(
         kwargs["plasticity"] = match.group(1)
     elif model_name in ["s5", "s5_rtrl"]:
         kwargs = {"config": S5Config(**kwargs)}
+    if model_name not in ["bptt", "rtrl", "rflo"]:
+        if "wiring" in kwargs:
+            # print(f"WARNING specifying wiring does not work with model {model_name}. Deleting from kwargs")
+            del kwargs["wiring"]
+        if "wiring_kwargs" in kwargs:
+            # print(f"WARNING specifying wiring_kwargs does not work with model {model_name}. Deleting from kwargs")
+            del kwargs["wiring_kwargs"]
     return RNNEnsembleConfig(
         layers=(hidden_size,) * num_layers,
         out_size=out_size,
