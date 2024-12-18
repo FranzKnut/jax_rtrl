@@ -9,6 +9,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+jax.config.update("jax_data_dependent_tracing_fallback", True)
+
 
 class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""
@@ -36,12 +38,12 @@ class FADense(nn.Dense):
                 self.param_dtype,
             )
 
-        def f(mdl, x, B):
+        def f(mdl, x, _B):
             return nn.Dense.__call__(mdl, x)
 
-        def fwd(mdl, x, B):
+        def fwd(mdl, x, _B):
             """Forward pass with tmp for backward pass."""
-            return nn.Dense.__call__(mdl, x), (x, B)
+            return nn.Dense.__call__(mdl, x), (x, _B)
 
         # f_bwd :: (c, CT b) -> CT a
         def bwd(tmp, y_bar):
@@ -50,8 +52,6 @@ class FADense(nn.Dense):
             grads = {"params": {"kernel": jnp.einsum("...X,...Y->YX", y_bar, _x)}}
             if self.use_bias:
                 grads["params"]["bias"] = jnp.einsum("...X->X", y_bar)
-            # if self.f_align:
-            #     grads['params']['B'] = jnp.zeros_like(B)
             x_grad = jnp.einsum("YX,...X->...Y", _B, y_bar)
             return (grads, x_grad, jnp.zeros_like(_B))
 
