@@ -244,7 +244,7 @@ class OnlineLRULayer(nn.RNNCellBase):
         super().__init__(**kwargs)
 
     @nn.compact
-    def __call__(self, carry, x_t, resets=None, **args):
+    def __call__(self, carry, x_t, **args):
         """Apply the LRU cell to the input and computes the output projections.
 
         Args:
@@ -277,7 +277,7 @@ class OnlineLRULayer(nn.RNNCellBase):
         carry, h_t = online_lru(carry, x_t, **args)
         C = C_real + 1j * C_img
         y_t = (h_t @ C.transpose()).real + x_t @ D.transpose()
-        return carry, y_t  # carry, output
+        return carry, y_t
 
     @staticmethod
     def rtrl_gradient(*args, **kwargs):

@@ -1,7 +1,6 @@
 """Module for model definitions and utilities."""
 
 import re
-from turtle import mode
 
 import flax
 import flax.linen
