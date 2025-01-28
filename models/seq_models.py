@@ -1,6 +1,7 @@
 """Sequence models implemented with Flax."""
 
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Tuple
 
 import distrax
@@ -9,7 +10,7 @@ import jax.numpy as jnp
 from chex import PRNGKey
 from flax import linen as nn
 
-from .jax_util import zeros_like_tree
+from .jax_util import get_matching_leaves, set_matching_leaves, zeros_like_tree
 from .mlp import MLP, DistributionLayer, FADense
 
 
@@ -46,7 +47,7 @@ class SequenceLayer(nn.Module):
 class MultiLayerRNN(nn.RNNCellBase):
     """Multilayer RNN."""
 
-    layers: list[int]
+    sizes: list[int]
     rnn_cls: nn.RNNCellBase
     rnn_kwargs: dict = field(default_factory=dict)
     glu: bool = True
@@ -55,7 +56,7 @@ class MultiLayerRNN(nn.RNNCellBase):
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN layers."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
-        shapes = zip(self.layers, [self.layers[:1], *[(s,) for s in self.layers[:-1]]])
+        shapes = zip(self.sizes, [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]])
         return [
             self.rnn_cls(size, **self.rnn_kwargs).initialize_carry(rng, batch_size + in_size)
             for size, in_size in shapes
@@ -63,12 +64,12 @@ class MultiLayerRNN(nn.RNNCellBase):
 
     def setup(self):
         """Initialize submodules."""
-        self.rnns = [
+        self.layers = [
             SequenceLayer(
                 self.rnn_cls(size, **self.rnn_kwargs, name=f"rnn_{i}"),
                 size,
             )
-            for i, size in enumerate(self.layers)
+            for i, size in enumerate(self.sizes)
         ]
 
     @property
@@ -79,8 +80,8 @@ class MultiLayerRNN(nn.RNNCellBase):
     @nn.compact
     def __call__(self, carries, x, **kwargs):
         """Call MLP."""
-        x = FADense(self.layers[0], name="input")(x)
-        for i, rnn in enumerate(self.rnns):
+        x = FADense(self.sizes[0], name="input")(x)
+        for i, rnn in enumerate(self.layers):
             carries[i], x = rnn(carries[i], x, **kwargs)
         return carries, x
 
@@ -103,9 +104,9 @@ class FAMultiLayerRNN(MultiLayerRNN):
                     f"B{i}",
                     self.kernel_init,
                     self.make_rng() if self.has_rng("params") else None,
-                    (size, self.layers[-1]),
+                    (size, self.sizes[-1]),
                 ).value
-                for i, size in enumerate(self.layers[:-1])
+                for i, size in enumerate(self.sizes[:-1])
             ]
         else:
             raise ValueError("unknown fa_type: " + self.fa_type)
@@ -116,7 +117,7 @@ class FAMultiLayerRNN(MultiLayerRNN):
         def fwd(mdl: MultiLayerRNN, _carries, x, _Bs):
             """Forward pass with tmp for backward pass."""
             vjps = []
-            for i, rnn in enumerate(mdl.rnns):
+            for i, rnn in enumerate(mdl.sizes):
                 (_carries[i], x), vjp_func = jax.vjp(rnn.apply, rnn.variables, _carries[i], x, **kwargs)
                 vjps.append(vjp_func)
 
@@ -127,8 +128,8 @@ class FAMultiLayerRNN(MultiLayerRNN):
             vjps, _Bs = tmp
             grads = zeros_like_tree(self.variables["params"])
             grads_inputs = []
-            for i in range(len(self.rnns)):
-                y_t = _Bs[i] @ y_bar[1] if i < len(self.rnns) - 1 else y_bar[1]
+            for i in range(len(self.sizes)):
+                y_t = _Bs[i] @ y_bar[1] if i < len(self.sizes) - 1 else y_bar[1]
                 params_t, *inputs_t = vjps[i]((y_bar[0][i], y_t))
                 grads[f"rnn_{i}"] = params_t["params"]
                 grads_inputs.append(inputs_t[0])
@@ -263,7 +264,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
         # Compute parameter gradients for each RNN
         for i, (c, d) in enumerate(zip(carry, df_dh)):
-            grads["params"][f"rnns_{i}"] = self.config.model.rtrl_gradient(
+            grads["params"][f"layers_{i}"] = self.config.model.rtrl_gradient(
                 c, d, plasticity=self.config.rnn_kwargs["plasticity"]
             )[0]
         return loss, grads
@@ -285,11 +286,12 @@ class RNNEnsemble(nn.RNNCellBase):
 
     @staticmethod
     def clip_tau(params):
-        """HACK: clip tau to > 1.0."""
-        for k in params["params"]["rnn"]:
-            for _l in params["params"]["rnn"][k]:
-                params["params"]["rnn"][k][_l]["tau"] = jnp.clip(params["params"]["rnn"][k][_l]["tau"], min=1.0)
-        return params
+        """HACK: clip tau to >= 1.0."""
+        return set_matching_leaves(
+            params,
+            ".*tau.*",
+            jax.tree.map(partial(jnp.clip, min=1.0), get_matching_leaves(params, ".*tau.*")),
+        )
 
 
 def make_batched_model(model, batch_size=None):

@@ -2,8 +2,8 @@
 
 import json
 import os
-from functools import partial
 import re
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -192,3 +192,17 @@ def get_matching_leaves(tree, pattern):
     flattened, _ = jax.tree_util.tree_flatten_with_path(tree)
     flattened = {jax.tree_util.keystr(k): v for k, v in flattened}
     return [flattened[k] for k in flattened if re.fullmatch(pattern, k)]
+
+
+def set_matching_leaves(tree, pattern, new_values):
+    """Set leaves of tree that match pattern."""
+    flattened, treedef = jax.tree_util.tree_flatten_with_path(tree)
+    key_matches = [re.fullmatch(pattern, jax.tree_util.keystr(k)) for k, _ in flattened]
+    index = 0
+    for i, k in enumerate(key_matches):
+        if k:
+            flattened[i] = new_values[index]
+            index += 1
+        else:
+            flattened[i] = flattened[i][1]
+    return jax.tree_util.tree_unflatten(treedef, flattened)
