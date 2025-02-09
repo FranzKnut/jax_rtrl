@@ -9,8 +9,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-jax.config.update("jax_data_dependent_tracing_fallback", True)
-
 
 class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""

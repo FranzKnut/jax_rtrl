@@ -11,16 +11,21 @@ from .lru import OnlineLRULayer
 from .s5 import S5Config, StackedEncoderModel
 from .seq_models import RNNEnsembleConfig
 
+ONLINE_CELL_TYPES = {
+    "rflo": OnlineCTRNNCell,
+    "lru_rtrl": OnlineLRULayer,
+    "s5_rtrl": StackedEncoderModel,
+}
+
+
 CELL_TYPES = {
     "bptt": CTRNNCell,
-    "rflo": OnlineCTRNNCell,
     "rtrl": OnlineCTRNNCell,
     "lru": OnlineLRULayer,
-    "lru_rtrl": OnlineLRULayer,
     "s5": StackedEncoderModel,
-    "s5_rtrl": StackedEncoderModel,
     # "linear": StackedEncoderModel, # TODO: homogenize StackedEncoderModel and MultiLayerRNN
     # "gru": StackedEncoderModel,
+    **ONLINE_CELL_TYPES,
 }
 
 
