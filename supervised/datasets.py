@@ -1,6 +1,7 @@
 """Datasets for supervised learning."""
 
 import os
+from typing import Iterable
 
 import jax
 from jax import numpy as jnp
@@ -53,13 +54,13 @@ def dataloader(arrays, batch_size: int, *, key=None, permute=False):
             end = start + batch_size
 
 
-def cut_sequences(set_x: jax.Array, set_y: jax.Array, seq_len: int, overlap=0, set_t=None):
+
+def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=0, set_t=None):
     """Cut the given sequences into subsequences of length seq_len.
 
     Sequences may overlap. If set_t is given, it is also cut into subsequences.
     Args:
-        set_x (Array): Sequence of x values
-        set_y (Array): Sequence of y values
+        data (Array | Iterable): the data to be split
         seq_len (int): Sequence length
         overlap (int, optional): Overlap for the sequences. Defaults to 0.
         set_t (Array, optional): An optional Array containing timestamps. Defaults to None.
@@ -67,19 +68,10 @@ def cut_sequences(set_x: jax.Array, set_y: jax.Array, seq_len: int, overlap=0, s
     Returns:
         Tuple[Array, Array] or Tuple[Array, Array, Array]: if set_t is None, returns (x, y), else (x, t, y)
     """
-    times = []
-    starts = jnp.arange(len(set_x) - seq_len + 1, step=seq_len - overlap)
-    x = jax.vmap(lambda start: jax.lax.dynamic_slice(set_x, (start,), (seq_len,)))(starts)
-    y = jax.vmap(lambda start: jax.lax.dynamic_slice(set_y, (start,), (seq_len,)))(starts)
-    if set_t is None:
-        return (jnp.stack(x, axis=0), jnp.stack(y, axis=0))
-    else:
-        t = jax.vmap(lambda start: jax.lax.dynamic_slice(set_y, (start,), (seq_len,)))(starts)
-        return (
-            jnp.stack(x, axis=0),
-            jnp.expand_dims(jnp.stack(t, axis=0), axis=-1),
-            jnp.stack(y, axis=0),
-        )
+    first_set = data if isinstance(data, jax.Array) else data[0]
+    starts = jnp.arange(len(first_set) - seq_len + 1, step=seq_len - overlap)
+    sliced = [jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts) for d in data]
+    return [jnp.stack(s, axis=0) for s in sliced]
 
 
 # Toy datasets -----------------------------------------------------------------
