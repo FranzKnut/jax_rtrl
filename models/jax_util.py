@@ -140,7 +140,7 @@ def sparsity_log_penalty(x):
     """
 
     def _f(x):
-        return jnp.log(1 + x**2).mean()
+        return jnp.log(1 + jnp.abs(x)**2).mean()
 
     if isinstance(x, jnp.ndarray):
         return _f(x)
