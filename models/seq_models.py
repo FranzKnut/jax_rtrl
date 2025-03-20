@@ -20,7 +20,7 @@ class RNNEnsembleConfig:
 
     num_modules: int
     layers: tuple[int]
-    glu: bool = False
+    glu: bool = True
     model: type = nn.RNNCellBase
     out_size: int | None = None
     out_dist: str | None = None
@@ -56,8 +56,7 @@ class SequenceLayer(nn.Module):
         hidden, x = self.seq(hidden, x, **kwargs)  # call seq model
         if self.activation is not None:
             x = getattr(nn, self.activation)(x)
-        x = drop(nn.gelu(x))
-        x = nn.Dense(self.d_output)(x)
+        x = nn.Dense(self.d_output)(drop(x))
         if self.glu:
             # Gated Linear Unit
             x *= jax.nn.sigmoid(nn.Dense(self.d_output)(x))
