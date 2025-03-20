@@ -1,20 +1,21 @@
 """Convolutional neural network autoencoders built with flax."""
 
 from dataclasses import dataclass, field
-import numpy as np
+
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 from flax import linen as nn
 from jax.nn import softmax
-
 from models.ctrnn import CTRNNCell
 
 
 class ConvDecoder(nn.Module):
     """2D-Convolutional Decoder.
 
-    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
+    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html
+    """
 
     img_shape: tuple[int]
     c_hid: int = 8

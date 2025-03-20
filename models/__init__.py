@@ -58,7 +58,7 @@ def make_rnn_ensemble_config(
     model_kwargs=None,
     output_layers=None,
     skip_connection=False,
-    glu=True,
+    glu=False,
 ):
     """Make configuration for an RNN ensemble model.
 

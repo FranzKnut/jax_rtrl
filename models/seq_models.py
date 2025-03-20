@@ -14,6 +14,23 @@ from .jax_util import get_matching_leaves, set_matching_leaves, zeros_like_tree
 from .mlp import MLP, DistributionLayer, FADense
 
 
+@dataclass
+class RNNEnsembleConfig:
+    """Configuration for RNNEnsemble."""
+
+    num_modules: int
+    layers: tuple[int]
+    glu: bool = False
+    model: type = nn.RNNCellBase
+    out_size: int | None = None
+    out_dist: str | None = None
+    input_layers: tuple[int] | None = None  # TODO
+    output_layers: tuple[int] | None = None
+    fa_type: str = "bp"
+    rnn_kwargs: dict = field(default_factory=dict)
+    skip_connection: bool = False  # FIXME: Implemented wrongly
+
+
 class SequenceLayer(nn.Module):
     """Single layer, with one LRU module, GLU, dropout and batch/layer norm."""
 
@@ -21,8 +38,10 @@ class SequenceLayer(nn.Module):
     d_output: int  # output layer sizes
     dropout: float = 0.0  # dropout probability
     norm: str = "layer"  # which normalization to use
-    training: bool = True  # in training mode (dropout in trainign mode only)
-    glu: bool = True  # use Gated Linear Unit Structure
+    training: bool = True  # in training mode (dropout in training mode only)
+    glu: bool = False  # use Gated Linear Unit Structure
+    skip_connection: bool = False  # skip connection
+    activation: str | None = None  # activation function applied after seq model
 
     @nn.compact
     def __call__(self, hidden, inputs, **kwargs):
@@ -35,13 +54,17 @@ class SequenceLayer(nn.Module):
 
         x = normalization(inputs)  # pre normalization
         hidden, x = self.seq(hidden, x, **kwargs)  # call seq model
+        if self.activation is not None:
+            x = getattr(nn, self.activation)(x)
         x = drop(nn.gelu(x))
         x = nn.Dense(self.d_output)(x)
         if self.glu:
             # Gated Linear Unit
             x *= jax.nn.sigmoid(nn.Dense(self.d_output)(x))
         x = drop(x)
-        return hidden, inputs + x  # skip connection
+        if self.skip_connection:
+            x = x + inputs
+        return hidden, x
 
 
 class MultiLayerRNN(nn.RNNCellBase):
@@ -50,7 +73,10 @@ class MultiLayerRNN(nn.RNNCellBase):
     sizes: list[int]
     rnn_cls: nn.RNNCellBase
     rnn_kwargs: dict = field(default_factory=dict)
-    glu: bool = True
+    dropout: float = 0.0
+    glu: bool = False
+    skip_connection: bool = False
+    activation: str | None = None
 
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
@@ -68,6 +94,10 @@ class MultiLayerRNN(nn.RNNCellBase):
             SequenceLayer(
                 self.rnn_cls(size, **self.rnn_kwargs, name=f"rnn_{i}"),
                 size,
+                dropout=self.dropout,
+                glu=self.glu,
+                skip_connection=self.skip_connection,
+                activation=self.activation,
             )
             for i, size in enumerate(self.sizes)
         ]
@@ -143,23 +173,6 @@ class FAMultiLayerRNN(MultiLayerRNN):
         return fa_grad(self, carries, x, Bs)
 
 
-@dataclass
-class RNNEnsembleConfig:
-    """Configuration for RNNEnsemble."""
-
-    num_modules: int
-    layers: tuple[int]
-    glu: bool = True
-    model: type = nn.RNNCellBase
-    out_size: int | None = None
-    out_dist: str | None = None
-    input_layers: tuple[int] | None = None  # TODO
-    output_layers: tuple[int] | None = None
-    fa_type: str = "bp"
-    rnn_kwargs: dict = field(default_factory=dict)
-    skip_connection: bool = False
-
-
 class RNNEnsemble(nn.RNNCellBase):
     """Ensemble of RNN cells."""
 
@@ -175,6 +188,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 fa_type=self.config.fa_type,
                 name=f"ensembles_{i}",
                 glu=self.config.glu,
+                activation="gelu" if self.config.model in ["lru", "lru_rtrl", "s5"] else None,
             )
             for i in range(self.config.num_modules)
         ]
@@ -195,6 +209,7 @@ class RNNEnsemble(nn.RNNCellBase):
             out = outs[i]
             # Optional Skip connection
             if self.config.skip_connection:
+                print("Skip connection not implemented correctly")
                 out = jnp.concatenate([x, out], axis=-1)
             # Outup FF layers
             if self.config.output_layers:
