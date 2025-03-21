@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 from jax import random
 from flax import linen as nn
-from flax.core.frozen_dict import unfreeze
-from models.linear import binary_operator_diag, matrix_init
+from models.linear import matrix_init
+from models.seq_util import binary_operator_diag_spatial, binary_operator_diag
 
 
 def nu_init(key, shape, r_min, r_max, dtype=jnp.float32, log=True):
@@ -32,15 +32,6 @@ def gamma_log_init(key, lamb, log=True):
         theta = jnp.exp(theta)
     diag_lambda = jnp.exp(-nu + 1j * theta)
     return jnp.log(jnp.sqrt(1 - jnp.abs(diag_lambda) ** 2))
-
-
-# Parallel scan operations
-@jax.vmap
-def binary_operator_diag_spatial(q_i, q_j):
-    """Same as above but stop the gradient for the recurrent connection"""
-    A_i, b_i = q_i
-    A_j, b_j = q_j
-    return A_j * A_i, jax.lax.stop_gradient(A_j * b_i) + b_j
 
 
 class LRU(nn.Module):
@@ -132,7 +123,9 @@ class LRU(nn.Module):
         if self.training_mode == "bptt":
             _, hidden_states = jax.lax.associative_scan(binary_operator_diag, elements)
         else:
-            _, hidden_states = jax.lax.associative_scan(binary_operator_diag_spatial, elements)
+            _, hidden_states = jax.lax.associative_scan(
+                binary_operator_diag_spatial, elements
+            )
 
         return hidden_states
 
@@ -150,7 +143,9 @@ class LRU(nn.Module):
             "online_1truncated",
             "online_reservoir",
         ]
-        self.online = "online" in self.training_mode  # whether we compute the gradient online
+        self.online = (
+            "online" in self.training_mode
+        )  # whether we compute the gradient online
         if self.online:
             self.approximation_type = self.training_mode[7:]
 
@@ -167,7 +162,11 @@ class LRU(nn.Module):
             (self.d_hidden,),
         )  # norm of lambda in [r_min, r_max]
         if self.gamma_norm:
-            self.gamma_log = self.param("gamma_log", partial(gamma_log_init, log=self.exp_param), (self.nu, self.theta))
+            self.gamma_log = self.param(
+                "gamma_log",
+                partial(gamma_log_init, log=self.exp_param),
+                (self.nu, self.theta),
+            )
 
         # Glorot initialized Input/Output projection matrices
         self.B_re = self.param(
@@ -201,11 +200,20 @@ class LRU(nn.Module):
                 (self.seq_length, self.d_hidden),
             )
 
-            self.traces_gamma = self.variable("traces", "gamma", jnp.zeros, (self.seq_length, self.d_hidden))
-            self.traces_lambda = self.variable("traces", "lambda", jnp.zeros, (self.seq_length, self.d_hidden))
+            self.traces_gamma = self.variable(
+                "traces", "gamma", jnp.zeros, (self.seq_length, self.d_hidden)
+            )
+            self.traces_lambda = self.variable(
+                "traces", "lambda", jnp.zeros, (self.seq_length, self.d_hidden)
+            )
 
             if self.approximation_type in ["full", "snap1", "full_rec_simpleB"]:
-                self.traces_B = self.variable("traces", "B", jnp.zeros, (self.seq_length, self.d_hidden, self.d_model))
+                self.traces_B = self.variable(
+                    "traces",
+                    "B",
+                    jnp.zeros,
+                    (self.seq_length, self.d_hidden, self.d_model),
+                )
 
     def __call__(self, inputs):
         """
@@ -227,8 +235,15 @@ class LRU(nn.Module):
             if self.approximation_type in ["1truncated"]:
                 self.traces_lambda.value = hidden_states[:-1]
                 self.traces_gamma.value = Bu_elements
-            elif self.approximation_type in ["full", "full_rec", "full_rec_simpleB", "snap1"]:
-                Lambda_elements = jnp.repeat(self.get_diag_lambda()[None, ...], inputs.shape[0], axis=0)
+            elif self.approximation_type in [
+                "full",
+                "full_rec",
+                "full_rec_simpleB",
+                "snap1",
+            ]:
+                Lambda_elements = jnp.repeat(
+                    self.get_diag_lambda()[None, ...], inputs.shape[0], axis=0
+                )
                 # Update for trace lambda
                 _, self.traces_lambda.value = jax.lax.associative_scan(
                     binary_operator_diag,
@@ -248,15 +263,17 @@ class LRU(nn.Module):
                     axis=0,
                 )  # same as left multiplying by diag(lambda), but same shape as B (to allow for
                 #    element-wise multiplication in the associative scan)
-                gammau_elements = jax.vmap(lambda u: jnp.outer(self.get_diag_gamma(), u))(inputs).astype(jnp.complex64)
+                gammau_elements = jax.vmap(
+                    lambda u: jnp.outer(self.get_diag_gamma(), u)
+                )(inputs).astype(jnp.complex64)
                 _, self.traces_B.value = jax.lax.associative_scan(
                     binary_operator_diag,
                     (full_Lambda_elements, gammau_elements + 0j),
                 )
             elif self.approximation_type in ["full_rec_simpleB"]:
-                self.traces_B.value = jax.vmap(lambda u: jnp.outer(self.get_diag_gamma(), u))(inputs).astype(
-                    jnp.complex64
-                )
+                self.traces_B.value = jax.vmap(
+                    lambda u: jnp.outer(self.get_diag_gamma(), u)
+                )(inputs).astype(jnp.complex64)
         return output
 
     def update_gradients(self, grad):
@@ -264,14 +281,18 @@ class LRU(nn.Module):
         Eventually combine traces and perturbations to compute the (online) gradient.
         """
         if self.training_mode in ["bptt", "online_spatial", "online_reservoir"]:
-            raise ValueError("Upgrade gradient should not be called for this training mode")
+            raise ValueError(
+                "Upgrade gradient should not be called for this training mode"
+            )
 
         # We need to change the gradients for lambda, gamma and B
         # The others are automatically computed with spatial backpropagation
         # NOTE: self.pert_hidden_states contains dL/dhidden_states
 
         # Grads for lambda
-        delta_lambda = jnp.sum(self.pert_hidden_states.value[1:] * self.traces_lambda.value, axis=0)
+        delta_lambda = jnp.sum(
+            self.pert_hidden_states.value[1:] * self.traces_lambda.value, axis=0
+        )
         _, dl = jax.vjp(
             lambda nu, theta: self.get_diag_lambda(nu=nu, theta=theta),
             self.nu,
@@ -283,7 +304,9 @@ class LRU(nn.Module):
 
         # Grads for gamma if needed
         if self.gamma_norm:
-            delta_gamma = jnp.sum((self.pert_hidden_states.value * self.traces_gamma.value).real, axis=0)
+            delta_gamma = jnp.sum(
+                (self.pert_hidden_states.value * self.traces_gamma.value).real, axis=0
+            )
             # as dgamma/dgamma_log = exp(gamma_log) = gamma
             grad["gamma_log"] = delta_gamma * self.get_diag_gamma()
 

@@ -4,7 +4,7 @@ authors:
   - family-names: Lemmel
     given-names: Julian
     orcid: https://orcid.org/0000-0002-3517-2860 
-title: "jax-rtrl: A JAX-based implementation of the Real-Time Recurrent Learning algorithm"
+title: "Real-Time Recurrent Reinforcement Learning"
 version: 0.1.0
 identifiers:
   - type: doi
