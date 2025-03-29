@@ -14,7 +14,7 @@ dacite = "^1.8.1"
 simple-parsing = "^0.1.6"
 distrax = "^0.1.5"
 tqdm = "^4.67.0"
-poethepoet = "^0.29.0"
+poethepoet = "*"
 
 
 [build-system]
