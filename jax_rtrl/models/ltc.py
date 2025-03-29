@@ -1,4 +1,4 @@
-"""CTRNN implementation."""
+"""LTC implementation. TODO!"""
 
 from dataclasses import field
 from functools import partial

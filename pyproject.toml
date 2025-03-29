@@ -2,9 +2,9 @@
 name = "jax_rtrl"
 version = "0.1.0"
 description = ""
-authors = ["julian <julian.lemmel@tuwien.ac.at>"]
+authors = ["Julian Lemmel <julian.lemmel@tuwien.ac.at>"]
 readme = "README.md"
-packages = [{include = "models"}]
+packages = [{include = "jax_rtrl"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
