@@ -27,7 +27,7 @@ def init_weight_consolidation_state(factor, decay, theta):
     )
 
 
-def update_reg_strength(state: WeightConsolidationState, new_theta, xi=1e-3):
+def update_reg_strength(state: WeightConsolidationState, new_theta, xi=1e-6):
     """Update the regularization strength for weight consolidation.
 
     Args:

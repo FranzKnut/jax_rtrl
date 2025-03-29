@@ -8,7 +8,7 @@ packages = [{include = "models"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-flax = "^0.10.1"
+flax = "^0.10.2"
 plotly = "^5.24.1"
 dacite = "^1.8.1"
 simple-parsing = "^0.1.6"

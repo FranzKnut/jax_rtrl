@@ -140,12 +140,22 @@ def sparsity_log_penalty(x):
     """
 
     def _f(x):
-        return jnp.log(1 + jnp.abs(x)**2).mean()
+        return jnp.log(1 + jnp.abs(x) ** 2).mean()
 
     if isinstance(x, jnp.ndarray):
         return _f(x)
     else:
         return jax.tree.reduce(lambda _x, _y: _x + _f(_y), x, initializer=0)
+
+
+def rbf_kernel(X, gamma=None):
+    """Radial Basis Function Kernel."""
+    if gamma is None:
+        gamma = 1.0 / X.shape[-1]
+    XX = (X**2).sum(1)
+    XY = X @ X.T
+    sq_distances = XX[:, None] + XX - 2 * XY
+    return jnp.exp(-gamma * sq_distances)
 
 
 def g_slow_loss(x_before, x_t, x_next):
