@@ -58,7 +58,8 @@ def make_rnn_ensemble_config(
     model_kwargs=None,
     output_layers=None,
     skip_connection=False,
-    glu=True,
+    glu=False,
+    f_align=False,
 ):
     """Make configuration for an RNN ensemble model.
 
@@ -72,7 +73,8 @@ def make_rnn_ensemble_config(
         model_kwargs (dict, optional): Additional keyword arguments for the model. Defaults to None.
         output_layers (list, optional): List of output layers. Defaults to None.
         skip_connection (bool, optional): Whether to use skip connections. Defaults to False.
-        glu (bool, optional): Whether to use Gated Linear Units (GLU). Defaults to True.
+        glu (bool, optional): Whether to use Gated Linear Units (GLU). Defaults to False.
+        f_align (bool, optional): Whether to use Feedback Alignment. Defaults to False.
 
     Returns:
         RNNEnsembleConfig: The configuration object for the RNN ensemble model.
@@ -101,4 +103,5 @@ def make_rnn_ensemble_config(
         skip_connection=skip_connection,
         model=model_cls,
         glu=glu,
+        fa_type="fa" if f_align else "bp",
     )

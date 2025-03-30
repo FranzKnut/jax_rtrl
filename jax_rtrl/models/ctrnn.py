@@ -18,7 +18,7 @@ from .wirings import make_mask_initializer
 def ctrnn_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
     W, tau = params
-    # Concatenate input and hidden state
+    # Concatenate input and hidden state and ones for bias
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     u = y @ W.T
@@ -57,7 +57,14 @@ class CTRNNCell(nn.RNNCellBase):
             h = self.initialize_carry(self.make_rng(), x.shape)
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        W = self.param("W", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
+
+        def _initializer(key, *_):
+            _w_in = nn.initializers.unit(0.1)(key, (self.num_units, x.shape[-1]))
+            _w_rec = nn.initializers.orthogonal(0.1)(key, (self.num_units, self.num_units))
+            _bias = jnp.zeros((self.num_units, 1))
+            return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
+
+        W = self.param("W", _initializer, w_shape)
 
         if self.wiring is not None:
             mask = self.variable(
@@ -71,7 +78,7 @@ class CTRNNCell(nn.RNNCellBase):
             W = jax.lax.stop_gradient(mask) * W
         # Compute updates
         if self.ode_type == "murray":
-            tau = self.param("tau", partial(jrand.uniform, minval=1, maxval=10), (self.num_units,))
+            tau = self.param("tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,))
             df_dt = ctrnn_ode((W, tau), h, x)
         elif self.ode_type == "tg":
             W_tau = self.param(

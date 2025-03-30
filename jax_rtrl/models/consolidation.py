@@ -9,6 +9,8 @@ from models.jax_util import zeros_like_tree
 
 @dataclass
 class WeightConsolidationState:
+    """Configuration for Elastic Weight Consolidation."""
+
     factor: float
     omega: jax.Array
     reg_strength: jax.Array

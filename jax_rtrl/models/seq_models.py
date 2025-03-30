@@ -126,7 +126,7 @@ class FAMultiLayerRNN(MultiLayerRNN):
         """Call the MultiLayerRNN with the given carries and input x."""
         if self.fa_type == "bp":
             return MultiLayerRNN.__call__(self, carries, x, **kwargs)
-        elif self.fa_type == "dfa":
+        elif self.fa_type in ["fa", "dfa"]:
             Bs = [
                 self.variable(
                     "falign",
