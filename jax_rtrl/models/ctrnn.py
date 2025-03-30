@@ -59,7 +59,7 @@ class CTRNNCell(nn.RNNCellBase):
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
 
         def _initializer(key, *_):
-            _w_in = nn.initializers.unit(0.1)(key, (self.num_units, x.shape[-1]))
+            _w_in = nn.initializers.orthogonal(0.1)(key, (self.num_units, x.shape[-1]))
             _w_rec = nn.initializers.orthogonal(0.1)(key, (self.num_units, self.num_units))
             _bias = jnp.zeros((self.num_units, 1))
             return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
