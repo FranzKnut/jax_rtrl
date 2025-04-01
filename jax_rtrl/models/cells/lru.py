@@ -14,8 +14,8 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 
-from .linear import binary_operator
-from .seq_util import binary_operator_reset
+from ..linear import binary_operator
+from ..seq_util import binary_operator_reset
 
 PRNGKey = Any
 Shape = Tuple[int, ...]

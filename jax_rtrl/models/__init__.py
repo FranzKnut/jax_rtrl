@@ -6,28 +6,10 @@ import flax
 import flax.linen
 import jax
 
-from .ctrnn import CTRNNCell, OnlineCTRNNCell
-from .lru import OnlineLRULayer
-from .s5 import S5Config, StackedEncoderModel
-from .seq_models import RNNEnsembleConfig
+from jax_rtrl.models.cells import CELL_TYPES
 
-ONLINE_CELL_TYPES = {
-    "rflo": OnlineCTRNNCell,
-    "lru_rtrl": OnlineLRULayer,
-    "s5_rtrl": StackedEncoderModel,
-}
-
-
-CELL_TYPES = {
-    "bptt": CTRNNCell,
-    "rtrl": OnlineCTRNNCell,
-    "lru": OnlineLRULayer,
-    "s5": StackedEncoderModel,
-    # "linear": StackedEncoderModel, # TODO: homogenize StackedEncoderModel and MultiLayerRNN
-    # "gru": StackedEncoderModel,
-    **ONLINE_CELL_TYPES,
-}
-
+from .s5 import S5Config
+from .seq_models import RNNEnsembleConfig, SequenceLayerConfig
 
 def init_model(model: flax.linen.Module, sample_input, is_rnn: bool, rng_key=None):
     """Initialize a Flax model with the given sample input and optional random key.
@@ -53,6 +35,7 @@ def make_rnn_ensemble_config(
     hidden_size,
     out_size=None,
     num_modules=1,
+    num_blocks=1,
     num_layers=1,
     stochastic=False,
     model_kwargs=None,
@@ -60,6 +43,11 @@ def make_rnn_ensemble_config(
     skip_connection=False,
     glu=False,
     f_align=False,
+    norm="layer",
+    activation=None,
+    dropout=0.0,
+    wiring=None,
+    wiring_kwargs=None,
 ):
     """Make configuration for an RNN ensemble model.
 
@@ -75,15 +63,17 @@ def make_rnn_ensemble_config(
         skip_connection (bool, optional): Whether to use skip connections. Defaults to False.
         glu (bool, optional): Whether to use Gated Linear Units (GLU). Defaults to False.
         f_align (bool, optional): Whether to use Feedback Alignment. Defaults to False.
+        norm (str, optional): Normalization type. Defaults to "layer".
+        activation (str, optional): Activation function. Defaults to None.
+        dropout (float, optional): Dropout probability. Defaults to 0.0.
 
     Returns:
         RNNEnsembleConfig: The configuration object for the RNN ensemble model.
     """
-    model_cls = CELL_TYPES[model_name]
     kwargs = model_kwargs or {}
-    match = re.search(r"(rflo|rtrl)", model_name)
-    if match:
-        kwargs["plasticity"] = match.group(1)
+    if wiring == "ncp":
+        kwargs["interneurons"] = hidden_size - (out_size + 1)
+    
     elif model_name in ["s5", "s5_rtrl"]:
         kwargs = {"config": S5Config(**kwargs)}
     if model_name not in ["bptt", "rtrl", "rflo"]:
@@ -93,15 +83,28 @@ def make_rnn_ensemble_config(
         if "wiring_kwargs" in kwargs:
             # print(f"WARNING specifying wiring_kwargs does not work with model {model_name}. Deleting from kwargs")
             del kwargs["wiring_kwargs"]
+            
+    match = model_name and re.search(r"(rflo|rtrl)", model_name)
+    if match:
+        kwargs["plasticity"] = match.group(1)
+    
+    layer_config = SequenceLayerConfig(
+        activation=activation,
+        norm=norm,
+        dropout=dropout,
+        skip_connection=skip_connection,
+        glu=glu,
+    )
+    
     return RNNEnsembleConfig(
+        model_name=model_name,
         layers=(hidden_size,) * num_layers,
         out_size=out_size,
         num_modules=num_modules,
         out_dist="Normal" if stochastic else None,
         rnn_kwargs=kwargs,
         output_layers=output_layers,
-        skip_connection=skip_connection,
-        model=model_cls,
-        glu=glu,
         fa_type="fa" if f_align else "bp",
+        layer_config=layer_config,
+        num_blocks=num_blocks,
     )

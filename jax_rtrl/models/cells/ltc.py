@@ -12,7 +12,7 @@ import jax.random as jrand
 from chex import PRNGKey
 from flax.linen import nowrap
 
-from .wirings import make_mask_initializer
+from ..wirings import make_mask_initializer
 
 
 def ctrnn_ode(params, h, x):

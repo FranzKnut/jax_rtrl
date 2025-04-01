@@ -8,7 +8,7 @@ import jax.random as jrandom
 import numpy as np
 from flax import linen as nn
 from jax.nn import softmax
-from models.ctrnn import CTRNNCell
+from jax_rtrl.models.cells.ctrnn import CTRNNCell
 
 
 class ConvDecoder(nn.Module):

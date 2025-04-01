@@ -7,8 +7,8 @@ import jax.numpy as jnp
 import jax.random as jrand
 import matplotlib.pyplot as plt
 import numpy as np
-from models.ctrnn import OnlineCTRNNCell
-from models.lru import OnlineLRULayer
+from jax_rtrl.models.cells.ctrnn import OnlineCTRNNCell
+from jax_rtrl.models.cells.lru import OnlineLRULayer
 from models.seq_models import RNNEnsembleConfig
 from supervised.datasets import sine, spirals
 
@@ -19,7 +19,7 @@ from models.seq_models import RNNEnsemble
 from supervised.training_utils import predict
 from supervised.training_utils import train_rnn_online as train
 
-from jax_rtrl.models import CELL_TYPES
+from jax_rtrl.models.cells import CELL_TYPES
 
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_debug_nans", True)
@@ -43,9 +43,9 @@ class Model(nn.Module):
         else:
             kwargs = {}
         return RNNEnsemble(
+            CELL_TYPES[self.plasticity],
             RNNEnsembleConfig(
                 layers=(self.hidden_size,) * 2,
-                model=CELL_TYPES[self.plasticity],
                 out_size=self.outsize,
                 num_modules=self.num_modules,
                 out_dist=self.out_dist,
