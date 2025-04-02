@@ -43,7 +43,7 @@ def make_rnn_ensemble_config(
     skip_connection=False,
     glu=False,
     f_align=False,
-    norm="layer",
+    norm=None,
     activation=None,
     dropout=0.0,
     wiring=None,

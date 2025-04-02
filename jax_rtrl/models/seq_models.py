@@ -108,10 +108,12 @@ class SequenceLayer(nn.Module):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
         if self.config.norm in ["layer"]:
             normalization = nn.LayerNorm()
-        else:
+        elif self.config.norm in ["batch"]:
             normalization = nn.BatchNorm(
                 use_running_average=not self.training, axis_name="batch"
             )
+        else:
+            normalization = lambda x: x  # noqa
         drop = nn.Dropout(
             self.config.dropout, broadcast_dims=[0], deterministic=not self.training
         )
@@ -441,9 +443,9 @@ class RNNEnsemble(nn.RNNCellBase):
 
         # Compute parameter gradients for each RNN
         for i, (c, d) in enumerate(zip(carry, df_dh)):
-            grads["params"][f"layers_{i}"] = CELL_TYPES[self.config.model_name].rtrl_gradient(
-                c, d, plasticity=self.config.rnn_kwargs["plasticity"]
-            )[0]
+            grads["params"][f"layers_{i}"] = CELL_TYPES[
+                self.config.model_name
+            ].rtrl_gradient(c, d, plasticity=self.config.rnn_kwargs["plasticity"])[0]
         return loss, grads
 
     @nn.nowrap
