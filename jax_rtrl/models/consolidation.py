@@ -4,7 +4,7 @@ import operator
 import jax
 import jax.numpy as jnp
 from flax.struct import dataclass
-from models.jax_util import zeros_like_tree
+from jax_rtrl.models.jax_util import zeros_like_tree
 
 
 @dataclass

@@ -376,7 +376,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 outs[i] = self.dists[i](out)
 
         # Aggregate outputs
-        if not self.config.out_size:
+        if not self.config.out_dist:
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
         else:
             # Last dim is batch in distrax

@@ -6,10 +6,11 @@ import flax
 import flax.linen
 import jax
 
-from jax_rtrl.models.cells import CELL_TYPES
+from jax_rtrl.models.cells import CELL_TYPES, ONLINE_CELL_TYPES  # noqa
 
 from .s5 import S5Config
 from .seq_models import RNNEnsembleConfig, SequenceLayerConfig
+
 
 def init_model(model: flax.linen.Module, sample_input, is_rnn: bool, rng_key=None):
     """Initialize a Flax model with the given sample input and optional random key.
@@ -73,7 +74,7 @@ def make_rnn_ensemble_config(
     kwargs = model_kwargs or {}
     if wiring == "ncp":
         kwargs["interneurons"] = hidden_size - (out_size + 1)
-    
+
     elif model_name in ["s5", "s5_rtrl"]:
         kwargs = {"config": S5Config(**kwargs)}
     if model_name not in ["bptt", "rtrl", "rflo"]:
@@ -83,11 +84,11 @@ def make_rnn_ensemble_config(
         if "wiring_kwargs" in kwargs:
             # print(f"WARNING specifying wiring_kwargs does not work with model {model_name}. Deleting from kwargs")
             del kwargs["wiring_kwargs"]
-            
+
     match = model_name and re.search(r"(rflo|rtrl)", model_name)
     if match:
         kwargs["plasticity"] = match.group(1)
-    
+
     layer_config = SequenceLayerConfig(
         activation=activation,
         norm=norm,
@@ -95,7 +96,7 @@ def make_rnn_ensemble_config(
         skip_connection=skip_connection,
         glu=glu,
     )
-    
+
     return RNNEnsembleConfig(
         model_name=model_name,
         layers=(hidden_size,) * num_layers,
