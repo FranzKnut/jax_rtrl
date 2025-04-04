@@ -96,12 +96,28 @@ class SequenceLayer(nn.Module):
         training: Whether the model is in training mode (affects dropout behavior).
     """
 
-    seq: nn.Module  # seq module
+    rnn_cls: type[nn.RNNCellBase]  # RNN class
+    rnn_size: int  # Size of the RNN layer
     d_output: int = None  # output layer size, defaults to 2 * hidden_size
     config: SequenceLayerConfig = field(
         default_factory=SequenceLayerConfig
     )  # configuration for the layer
     training: bool = True  # training mode (dropout in training mode only)
+    num_blocks: int = 1  # Number of input chunks for parallel processing
+    rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN
+
+    @nn.nowrap
+    def _make_rnn(self):
+        return make_rnn(
+            self.rnn_cls,
+            self.rnn_size,
+            num_blocks=self.num_blocks,
+            **self.rnn_kwargs,
+        )
+
+    def setup(self):
+        """Initialize the RNN module."""
+        self.seq = self._make_rnn()
 
     @nn.compact
     def __call__(self, hidden, inputs, **kwargs):
@@ -122,14 +138,20 @@ class SequenceLayer(nn.Module):
         hidden, x = self.seq(hidden, x, **kwargs)  # call seq model
         if self.config.activation is not None:
             x = getattr(nn, self.config.activation)(x)
+        if self.config.skip_connection:
+            x = x + inputs
         x = nn.Dense(self.d_output or hidden.shape[-1])(drop(x))
         if self.config.glu:
             # Gated Linear Unit
             x *= jax.nn.sigmoid(nn.Dense(self.d_output or hidden.shape[-1])(x))
         x = drop(x)
-        if self.config.skip_connection:
-            x = x + inputs
+
         return hidden, x
+
+    @nn.nowrap
+    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+        """Initialize the carry (hidden state) for the sequence model."""
+        return self._make_rnn().initialize_carry(rng, input_shape)
 
 
 class MultiLayerRNN(nn.RNNCellBase):
@@ -149,27 +171,35 @@ class MultiLayerRNN(nn.RNNCellBase):
     num_blocks: int = 1
     layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
 
-    def setup(self):
-        """Initialize submodules."""
-        self.layers = [
+    @nn.nowrap
+    def _make_layers(self):
+        """Create the Sequence submodels."""
+        return [
             SequenceLayer(
-                make_rnn(self.rnn_cls, size, name=f"rnn_{i}", **self.rnn_kwargs),
-                2 * size,
-                self.layer_config,
+                rnn_cls=self.rnn_cls,
+                rnn_size=size,
+                num_blocks=self.num_blocks,
+                rnn_kwargs=self.rnn_kwargs,
+                d_output=2 * size,
+                config=self.layer_config,
+                name=f"layer_{i}",
             )
             for i, size in enumerate(self.sizes)
         ]
+
+    def setup(self):
+        """Initialize submodules."""
+        self.layers = self._make_layers()
 
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN layers."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
-        shapes = zip(self.sizes, [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]])
+        shapes = [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]]
+        layers = self._make_layers()
         return [
-            self.rnn_cls(size, **self.rnn_kwargs).initialize_carry(
-                rng, batch_size + in_size
-            )
-            for size, in_size in shapes
+            _l.initialize_carry(rng, batch_size + in_size)
+            for _l, in_size in zip(layers, shapes)
         ]
 
     @property
@@ -252,16 +282,35 @@ class FAMultiLayerRNN(MultiLayerRNN):
         return fa_grad(self, carries, x, Bs)
 
 
-class RNNWrapper(nn.RNNCellBase):
-    """Wrapper for RNN submodel with input chunking and vmap processing.
+class BlockWrapper(nn.RNNCellBase):
+    """Wrapper for a blocked RNN submodel with input chunking and vmap processing.
 
     Attributes:
         rnn_submodel: RNN submodel to wrap.
         num_blocks: Number of input chunks for parallel processing.
     """
 
-    rnn_submodel: nn.Module  # RNN submodel
+    size: int  # Size of the RNN layer
+    rnn_cls: type[nn.RNNCellBase]  # RNN class
     num_blocks: int  # Number of chunks to split the input into
+    rnn_kwargs: dict = field(
+        default_factory=dict
+    )  # Additional arguments for the RNN class
+
+    def setup(self):
+        self.block_rnns = self._make_rnn()
+
+    @nn.nowrap
+    def _make_rnn(self):
+        """Create the RNN submodel."""
+        return nn.vmap(
+            self.rnn_cls,
+            variable_axes={"params": 0, "wiring": 0},  # Separate parameters per chunk
+            split_rngs={"params": True, "dropout": True, "wiring": True},
+            in_axes=-1,
+            out_axes=-1,
+            axis_size=self.num_blocks,
+        )(self.size // self.num_blocks, **self.rnn_kwargs)
 
     @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
@@ -270,26 +319,27 @@ class RNNWrapper(nn.RNNCellBase):
             "input dimension must be divisible by num_blocks."
         )
         block_shape = (
-            self.num_blocks,
             *input_shape[:-1],
             input_shape[-1] // self.num_blocks,
+            self.num_blocks,
         )
-        return self.rnn_submodel.initialize_carry(rng, block_shape)
+        return self._make_rnn().initialize_carry(rng, block_shape)
 
     @nn.compact
     def __call__(self, carry, x, **kwargs):
         """Split input, process with vmap over RNN submodel, and combine output."""
         # Split input into chunks and stack along a new dimension
-        x_split = jnp.split(x, self.num_blocks, axis=-1)
+        x_split = jnp.reshape(
+            x,
+            (
+                *x.shape[:-1],
+                x.shape[-1] // self.num_blocks,
+                self.num_blocks,
+            ),
+        )
 
         # Vmap over the RNN submodel
-        carry, y = nn.vmap(
-            self.rnn_submodel,
-            in_axes=(0,),  # Map over carry and input chunks
-            out_axes=(0,),  # Return mapped carry and output chunks
-            variable_axes={"params": 0},  # Separate parameters per chunk
-            split_rngs={"params": True, "dropout": True},
-        )(carry, x_split, **kwargs)
+        carry, y = self.block_rnns(carry, x_split, **kwargs)
 
         # Combine output chunks
         y_combined = jnp.concatenate(y, axis=-1)
@@ -302,7 +352,7 @@ def make_rnn(
     num_blocks: int = 1,
     name: str = None,
     **kwargs,
-) -> nn.Module:
+) -> nn.RNNCellBase:
     """Create an RNN module with optional input chunking.
 
     Parameters:
@@ -315,14 +365,16 @@ def make_rnn(
     Returns:
         An instance of the specified RNN class or an RNNWrapper if num_blocks > 1.
     """
-    rnn = rnn_cls(size, name=name, **kwargs)
     if num_blocks > 1:
-        return RNNWrapper(
-            rnn_submodel=rnn,
+        return BlockWrapper(
+            size=size,
+            rnn_cls=rnn_cls,
             num_blocks=num_blocks,
             name=f"{name}_block" if name else None,
+            rnn_kwargs=kwargs,
         )
-    return rnn
+    else:
+        return rnn_cls(size, name=name, **kwargs)
 
 
 class RNNEnsemble(nn.RNNCellBase):
@@ -341,6 +393,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 self.config.layers,
                 rnn_cls=CELL_TYPES[self.config.model_name],
                 rnn_kwargs=self.config.rnn_kwargs,
+                num_blocks=self.config.num_blocks,
                 fa_type=self.config.fa_type,
                 name=f"ensembles_{i}",
                 layer_config=self.config.layer_config,  # Use the config directly
@@ -454,6 +507,7 @@ class RNNEnsemble(nn.RNNCellBase):
         return [
             FAMultiLayerRNN(
                 self.config.layers,
+                num_blocks=self.config.num_blocks,
                 rnn_cls=CELL_TYPES[self.config.model_name],
                 rnn_kwargs=self.config.rnn_kwargs,
             ).initialize_carry(rng, input_shape)
