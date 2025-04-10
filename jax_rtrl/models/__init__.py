@@ -67,6 +67,7 @@ def make_rnn_ensemble_config(
         norm (str, optional): Normalization type. Defaults to "layer".
         activation (str, optional): Activation function. Defaults to None.
         dropout (float, optional): Dropout probability. Defaults to 0.0.
+        TODO: document wiring
 
     Returns:
         RNNEnsembleConfig: The configuration object for the RNN ensemble model.

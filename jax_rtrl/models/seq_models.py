@@ -531,7 +531,7 @@ class RNNEnsemble(nn.RNNCellBase):
         )
 
 
-def make_batched_model(model, batch_size=None):
+def make_batched_model(model):
     """Parallelize model across a batch of input sequences using vmap.
 
     Parameters:
@@ -545,7 +545,6 @@ def make_batched_model(model, batch_size=None):
         model,
         in_axes=0,
         out_axes=0,
-        axis_size=batch_size,
         variable_axes={
             "params": None,
             "falign": None,

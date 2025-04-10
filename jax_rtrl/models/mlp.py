@@ -169,6 +169,7 @@ class MLPEnsemble(nn.Module):
             out = self.model(**self.kwargs, name=f"mlp{i}")(x)
             # Optional Skip connection
             if self.skip_connection:
+                # FIXME: That's not what a skip-connection is!
                 out = jnp.concatenate([x, out], axis=-1)
             # Make distribution for each submodule
             if self.out_size is not None:
