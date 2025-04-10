@@ -307,9 +307,10 @@ class BlockWrapper(nn.RNNCellBase):
             self.rnn_cls,
             variable_axes={"params": 0, "wiring": 0},  # Separate parameters per chunk
             split_rngs={"params": True, "dropout": True, "wiring": True},
-            in_axes=-1,
-            out_axes=-1,
+            in_axes=-2,
+            out_axes=-2,
             axis_size=self.num_blocks,
+            # methods=["__call__", "initialize_carry"],
         )(self.size // self.num_blocks, **self.rnn_kwargs)
 
     @nn.nowrap
@@ -318,31 +319,27 @@ class BlockWrapper(nn.RNNCellBase):
         assert input_shape[-1] % self.num_blocks == 0, (
             "input dimension must be divisible by num_blocks."
         )
-        block_shape = (
-            *input_shape[:-1],
-            input_shape[-1] // self.num_blocks,
-            self.num_blocks,
-        )
-        return self._make_rnn().initialize_carry(rng, block_shape)
+        block_shape = (*input_shape[:-1], input_shape[-1] // self.num_blocks)
+        rng = jax.random.split(rng, self.num_blocks)
+        # Block shape is the same for all blocks
+        _rnn = self.rnn_cls(self.size // self.num_blocks, **self.rnn_kwargs)
+        init_fn = partial(_rnn.initialize_carry, input_shape=block_shape)
+        # TODO: Since vmap init does not work, Try looping over blocks and concatenate
+        return jax.vmap(init_fn, in_axes=-2, out_axes=-2)(rng)
 
     @nn.compact
     def __call__(self, carry, x, **kwargs):
         """Split input, process with vmap over RNN submodel, and combine output."""
         # Split input into chunks and stack along a new dimension
         x_split = jnp.reshape(
-            x,
-            (
-                *x.shape[:-1],
-                x.shape[-1] // self.num_blocks,
-                self.num_blocks,
-            ),
+            x, (*x.shape[:-1], self.num_blocks, x.shape[-1] // self.num_blocks)
         )
 
         # Vmap over the RNN submodel
         carry, y = self.block_rnns(carry, x_split, **kwargs)
 
         # Combine output chunks
-        y_combined = jnp.concatenate(y, axis=-1)
+        y_combined = y.reshape(x.shape)
         return carry, y_combined
 
 
@@ -388,6 +385,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def setup(self):
         """Initialize submodules."""
+        # TODO: Use BlockWrapper for ensemble
         self.ensembles = [
             FAMultiLayerRNN(
                 self.config.layers,
@@ -464,7 +462,7 @@ class RNNEnsemble(nn.RNNCellBase):
         outs = []
         carry_out = []
         for i in range(self.config.num_modules):
-            # Loop over rnn submodules
+            # loop over rnn submodules
             carry, out = self.ensembles[i](h[i], x, **call_args)
             carry_out.append(carry)
             outs.append(out)

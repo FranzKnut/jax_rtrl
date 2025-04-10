@@ -60,7 +60,9 @@ class CTRNNCell(nn.RNNCellBase):
 
         def _initializer(key, *_):
             _w_in = nn.initializers.orthogonal(0.1)(key, (self.num_units, x.shape[-1]))
-            _w_rec = nn.initializers.orthogonal(0.1)(key, (self.num_units, self.num_units))
+            _w_rec = nn.initializers.orthogonal(0.1)(
+                key, (self.num_units, self.num_units)
+            )
             _bias = jnp.zeros((self.num_units, 1))
             return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
 
@@ -78,7 +80,9 @@ class CTRNNCell(nn.RNNCellBase):
             W = jax.lax.stop_gradient(mask) * W
         # Compute updates
         if self.ode_type == "murray":
-            tau = self.param("tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,))
+            tau = self.param(
+                "tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,)
+            )
             df_dt = ctrnn_ode((W, tau), h, x)
         elif self.ode_type == "tg":
             W_tau = self.param(
@@ -94,7 +98,7 @@ class CTRNNCell(nn.RNNCellBase):
     @nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize neuron states."""
-        return jnp.zeros(input_shape[:-1] + (self.num_units,))
+        return jnp.zeros(tuple(input_shape)[:-1] + (self.num_units,))
 
     @property
     def num_feature_axes(self) -> int:
@@ -169,9 +173,13 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     df_dw = {"W": jw, "tau": jtau}
     dh_dx = jnp.outer(
         df_dh,
-        (jnp.concatenate([jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))], axis=-1) @ W.T)[
-            ..., : x.shape[-1]
-        ],
+        (
+            jnp.concatenate(
+                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
+                axis=-1,
+            )
+            @ W.T
+        )[..., : x.shape[-1]],
     )
     # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
     return df_dw, dh_dx  # , hebb
@@ -250,7 +258,9 @@ class OnlineCTRNNCell(CTRNNCell):
             """Backward pass using RTRL."""
             # carry, jp, jx, hebb = tmp
             df_dy = y_bar[-1]
-            grads_p, grads_x = self.rtrl_gradient(tmp, df_dy, plasticity=self.plasticity)
+            grads_p, grads_x = self.rtrl_gradient(
+                tmp, df_dy, plasticity=self.plasticity
+            )
             # grads_p['W'] += hebb
             carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
             return ({"params": grads_p}, carry, grads_x)
@@ -280,9 +290,11 @@ class OnlineCTRNNCell(CTRNNCell):
 
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
-        params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
+        params = self.lazy_init(rng, (h, None, None), jnp.zeros(input_shape))
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
-        jp = jax.tree.map(lambda x: jnp.zeros(leading_shape + x.shape), params["params"])
+        jp = jax.tree.map(
+            lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
+        )
         return h, jp, jx
 
 
@@ -349,7 +361,9 @@ if __name__ == "__main__":
             jax.debug.callback(print_progress, n, current_loss)
             return (__params, _opt_state, _key), current_loss
 
-        (_params, *_), _losses = jax.lax.scan(step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32))
+        (_params, *_), _losses = jax.lax.scan(
+            step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32)
+        )
         print(f"Final loss: {_losses[-1]:.3f}")
         return _params, _losses
 
