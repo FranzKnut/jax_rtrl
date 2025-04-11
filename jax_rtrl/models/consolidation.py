@@ -39,8 +39,14 @@ def update_reg_strength(state: WeightConsolidationState, new_theta, xi=1e-6):
         old_theta: The old parameter value.
         xi: A small positive value to prevent division by zero.
     """
+
+    def _update_reg_strength(reg_st, omega, t, t_ref):
+        return state.decay * reg_st + (1 - state.decay) * omega / (
+            (t - t_ref) ** 2 + xi
+        )
+
     new_reg_strength = jax.tree.map(
-        lambda reg_st, omega, t, t_ref: state.decay * reg_st + (1 - state.decay) * omega / ((t - t_ref) ** 2 + xi),
+        _update_reg_strength,
         state.reg_strength,
         state.omega,
         new_theta,
@@ -61,15 +67,21 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
         dL_dtheta: The gradient of the loss with respect to the parameter.
         dtheta_dt: The update that was applied to the parameter.
     """
-    return state.replace(omega=jax.tree.map(lambda o, g, d: o - g * d, state.omega, dL_dtheta, dtheta_dt))
+    return state.replace(
+        omega=jax.tree.map(lambda o, g, d: o - g * d, state.omega, dL_dtheta, dtheta_dt)
+    )
 
 
 def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
     """Compute the weight consolidation loss."""
+
+    def _wc_loss(strength, t, t_ref):
+        return state.factor * jnp.sum(strength * (t_ref - t) ** 2)
+
     return jax.tree.reduce(
         operator.add,
         jax.tree.map(
-            lambda strength, t, t_ref: state.factor * jnp.sum(strength * (t_ref - t) ** 2),
+            _wc_loss,
             state.reg_strength,
             theta,
             state.theta_ref,

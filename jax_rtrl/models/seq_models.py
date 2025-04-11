@@ -180,7 +180,7 @@ class MultiLayerRNN(nn.RNNCellBase):
                 rnn_size=size,
                 num_blocks=self.num_blocks,
                 rnn_kwargs=self.rnn_kwargs,
-                d_output=2 * size,
+                d_output=size,
                 config=self.layer_config,
                 name=f"layer_{i}",
             )
