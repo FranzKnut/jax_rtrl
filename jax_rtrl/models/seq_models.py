@@ -35,7 +35,7 @@ class SequenceLayerConfig:
     dropout: float = 0.0
     norm: str = "layer"
     glu: bool = False
-    skip_connection: bool = False  # FIXME: Implemented wrongly
+    skip_connection: bool = False
     activation: str | None = None
 
 
@@ -82,9 +82,9 @@ class RNNEnsembleConfig:
         if self.model_name not in ["bptt", "rtrl", "rflo"]:
             self.rnn_kwargs.pop("wiring", None)
             self.rnn_kwargs.pop("wiring_kwargs", None)
-            print(
-                f"WARNING specifying wiring does not work with model {self.model_name}. Deleting from kwargs"
-            )
+            # print(
+            #     f"WARNING specifying wiring does not work with model {self.model_name}. Deleting from kwargs"
+            # )
 
 
 class SequenceLayer(nn.Module):
@@ -98,7 +98,7 @@ class SequenceLayer(nn.Module):
 
     rnn_cls: type[nn.RNNCellBase]  # RNN class
     rnn_size: int  # Size of the RNN layer
-    d_output: int = None  # output layer size, defaults to 2 * hidden_size
+    d_output: int = None  # output layer size, defaults to hidden_size
     config: SequenceLayerConfig = field(
         default_factory=SequenceLayerConfig
     )  # configuration for the layer
@@ -106,21 +106,17 @@ class SequenceLayer(nn.Module):
     num_blocks: int = 1  # Number of input chunks for parallel processing
     rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN
 
-    @nn.nowrap
-    def _make_rnn(self):
-        return make_rnn(
+    def setup(self):
+        """Initialize the RNN module."""
+        self.seq = make_rnn(
             self.rnn_cls,
             self.rnn_size,
             num_blocks=self.num_blocks,
             **self.rnn_kwargs,
         )
 
-    def setup(self):
-        """Initialize the RNN module."""
-        self.seq = self._make_rnn()
-
     @nn.compact
-    def __call__(self, hidden, inputs, **kwargs):
+    def __call__(self, hidden, inputs, *args, **kwargs):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
         if self.config.norm in ["layer"]:
             normalization = nn.LayerNorm()
@@ -135,23 +131,21 @@ class SequenceLayer(nn.Module):
         )
 
         x = normalization(inputs)  # pre normalization
-        hidden, x = self.seq(hidden, x, **kwargs)  # call seq model
+        hidden, x = self.seq(hidden, x, *args, **kwargs)  # call seq model
         if self.config.activation is not None:
             x = getattr(nn, self.config.activation)(x)
         if self.config.skip_connection:
             x = x + inputs
-        x = nn.Dense(self.d_output or hidden.shape[-1])(drop(x))
+        x = FADense(self.d_output or hidden.shape[-1])(drop(x))
         if self.config.glu:
             # Gated Linear Unit
-            x *= jax.nn.sigmoid(nn.Dense(self.d_output or hidden.shape[-1])(x))
+            x *= jax.nn.sigmoid(FADense(self.d_output or hidden.shape[-1])(x))
         x = drop(x)
-
         return hidden, x
 
-    @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry (hidden state) for the sequence model."""
-        return self._make_rnn().initialize_carry(rng, input_shape)
+        return self.seq.initialize_carry(rng, input_shape)
 
 
 class MultiLayerRNN(nn.RNNCellBase):
@@ -191,15 +185,13 @@ class MultiLayerRNN(nn.RNNCellBase):
         """Initialize submodules."""
         self.layers = self._make_layers()
 
-    @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN layers."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
         shapes = [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]]
-        layers = self._make_layers()
         return [
             _l.initialize_carry(rng, batch_size + in_size)
-            for _l, in_size in zip(layers, shapes)
+            for _l, in_size in zip(self.layers, shapes)
         ]
 
     @property
@@ -208,11 +200,11 @@ class MultiLayerRNN(nn.RNNCellBase):
         return 1
 
     @nn.compact
-    def __call__(self, carries, x, **kwargs):
+    def __call__(self, carries, x, *args, **kwargs):
         """Call MLP."""
         x = FADense(self.sizes[0], name="input")(x)
         for i, rnn in enumerate(self.layers):
-            carries[i], x = rnn(carries[i], x, **kwargs)
+            carries[i], x = rnn(carries[i], x, *args, **kwargs)
         return carries, x
 
 
@@ -230,10 +222,10 @@ class FAMultiLayerRNN(MultiLayerRNN):
     fa_type: str = "bp"
 
     @nn.compact
-    def __call__(self, carries, x, **kwargs):
+    def __call__(self, carries, x, *args, **kwargs):
         """Call the MultiLayerRNN with the given carries and input x."""
         if self.fa_type == "bp":
-            return MultiLayerRNN.__call__(self, carries, x, **kwargs)
+            return MultiLayerRNN.__call__(self, carries, x, *args, **kwargs)
         elif self.fa_type in ["fa", "dfa"]:
             Bs = [
                 self.variable(
@@ -249,14 +241,14 @@ class FAMultiLayerRNN(MultiLayerRNN):
             raise ValueError("unknown fa_type: " + self.fa_type)
 
         def f(mdl, _carries, x, _Bs):
-            return MultiLayerRNN.__call__(mdl, _carries, x, **kwargs)
+            return MultiLayerRNN.__call__(mdl, _carries, x, *args, **kwargs)
 
         def fwd(mdl: MultiLayerRNN, _carries, x, _Bs):
             """Forward pass with tmp for backward pass."""
             vjps = []
             for i, rnn in enumerate(mdl.sizes):
                 (_carries[i], x), vjp_func = jax.vjp(
-                    rnn.apply, rnn.variables, _carries[i], x, **kwargs
+                    rnn.apply, rnn.variables, _carries[i], x, *args, **kwargs
                 )
                 vjps.append(vjp_func)
 
@@ -298,12 +290,7 @@ class BlockWrapper(nn.RNNCellBase):
     )  # Additional arguments for the RNN class
 
     def setup(self):
-        self.block_rnns = self._make_rnn()
-
-    @nn.nowrap
-    def _make_rnn(self):
-        """Create the RNN submodel."""
-        return nn.vmap(
+        self.block_rnns = nn.vmap(
             self.rnn_cls,
             variable_axes={"params": 0, "wiring": 0},  # Separate parameters per chunk
             split_rngs={"params": True, "dropout": True, "wiring": True},
@@ -313,7 +300,6 @@ class BlockWrapper(nn.RNNCellBase):
             # methods=["__call__", "initialize_carry"],
         )(self.size // self.num_blocks, **self.rnn_kwargs)
 
-    @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN submodel."""
         assert input_shape[-1] % self.num_blocks == 0, (
@@ -322,21 +308,27 @@ class BlockWrapper(nn.RNNCellBase):
         block_shape = (*input_shape[:-1], input_shape[-1] // self.num_blocks)
         rng = jax.random.split(rng, self.num_blocks)
         # Block shape is the same for all blocks
-        _rnn = self.rnn_cls(self.size // self.num_blocks, **self.rnn_kwargs)
-        init_fn = partial(_rnn.initialize_carry, input_shape=block_shape)
-        # TODO: Since vmap init does not work, Try looping over blocks and concatenate
-        return jax.vmap(init_fn, in_axes=-2, out_axes=-2)(rng)
+        return jax.vmap(
+            partial(self.block_rnns.initialize_carry, input_shape=(block_shape)),
+            out_axes=-2,
+        )(rng)
 
     @nn.compact
-    def __call__(self, carry, x, **kwargs):
+    def __call__(self, carry, x, *args, **kwargs):
         """Split input, process with vmap over RNN submodel, and combine output."""
         # Split input into chunks and stack along a new dimension
         x_split = jnp.reshape(
             x, (*x.shape[:-1], self.num_blocks, x.shape[-1] // self.num_blocks)
         )
 
+        # Give every block the same args
+        (args, kwargs) = jax.tree_map(
+            lambda a: jnp.tile(a, (self.num_blocks,1 )),
+            (args, kwargs),
+        )
+
         # Vmap over the RNN submodel
-        carry, y = self.block_rnns(carry, x_split, **kwargs)
+        carry, y = self.block_rnns(carry, x_split, *args, **kwargs)
 
         # Combine output chunks
         y_combined = y.reshape(x.shape)
@@ -438,7 +430,11 @@ class RNNEnsemble(nn.RNNCellBase):
         return outs
 
     def __call__(
-        self, h: jax.Array | None = None, x: jax.Array = None, rng=None, **call_args
+        self,
+        h: jax.Array | None = None,
+        x: jax.Array = None,
+        *call_args,
+        **call_kwargs,
     ):  # noqa
         """Call submodules and concatenate output.
 
@@ -449,9 +445,6 @@ class RNNEnsemble(nn.RNNCellBase):
             of rnn submodule states
         x : Array
             input
-        rng : PRNGKey, optional,
-            if given, returns one value per submodule in order to train them independently,
-            If None, mean of submodules or a Mixed Distribution is returned.
 
         Returns:
         _type_
@@ -463,15 +456,13 @@ class RNNEnsemble(nn.RNNCellBase):
         carry_out = []
         for i in range(self.config.num_modules):
             # loop over rnn submodules
-            carry, out = self.ensembles[i](h[i], x, **call_args)
+            carry, out = self.ensembles[i](h[i], x, *call_args, **call_kwargs)
             carry_out.append(carry)
             outs.append(out)
 
         # Post-process and aggregate outputs
         outs = self._postprocessing(outs, x)
 
-        if rng is not None:
-            outs = outs.sample(seed=rng) if self.config.out_dist else outs.mean(axis=0)
         return carry_out, outs
 
     def _loss(self, hidden, loss_fn, target, x):
@@ -480,7 +471,7 @@ class RNNEnsemble(nn.RNNCellBase):
         return loss_fn(outs, target)
 
     @nn.nowrap
-    def loss_and_grad(self, params, loss_fn, carry, hidden, x, target):
+    def loss_and_grad_async(self, params, loss_fn, carry, hidden, x, target):
         """Compute loss and gradient asynchronuously."""
         # Compute gradient of loss wrt to network output
         loss, (grads, df_dh) = jax.value_and_grad(self.apply, argnums=[0, 1])(
@@ -499,18 +490,9 @@ class RNNEnsemble(nn.RNNCellBase):
             ].rtrl_gradient(c, d, plasticity=self.config.rnn_kwargs["plasticity"])[0]
         return loss, grads
 
-    @nn.nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize neuron states."""
-        return [
-            FAMultiLayerRNN(
-                self.config.layers,
-                num_blocks=self.config.num_blocks,
-                rnn_cls=CELL_TYPES[self.config.model_name],
-                rnn_kwargs=self.config.rnn_kwargs,
-            ).initialize_carry(rng, input_shape)
-            for _ in range(self.config.num_modules)
-        ]
+        return [e.initialize_carry(rng, input_shape) for e in self.ensembles]
 
     @property
     def num_feature_axes(self) -> int:

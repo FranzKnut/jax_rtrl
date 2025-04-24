@@ -24,7 +24,7 @@ class JaxRng:
     @property
     def rng(self):
         """Split internal rng."""
-        self._rng, rng = jrandom.split(self._rng)
+        self._rng, rng = jax.jit(jrandom.split)(self._rng)
         return rng
 
 
@@ -65,7 +65,8 @@ def restore_params_and_config(path):
     params = checkpointer.restore(
         orbax_path,
         restore_args=jax.tree_map(
-            lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray), checkpointer.metadata(orbax_path)
+            lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray),
+            checkpointer.metadata(orbax_path),
         ),
     )
 
@@ -95,7 +96,9 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
-        _params = jax.tree_map(lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params)
+        _params = jax.tree_map(
+            lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
+        )
         return checkpointer.save(orbax_path, _params, force=True)
 
     restored_params = None

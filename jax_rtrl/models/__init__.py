@@ -48,7 +48,6 @@ def make_rnn_ensemble_config(
     activation=None,
     dropout=0.0,
     wiring=None,
-    wiring_kwargs=None,
 ):
     """Make configuration for an RNN ensemble model.
 
@@ -79,6 +78,7 @@ def make_rnn_ensemble_config(
     elif model_name in ["s5", "s5_rtrl"]:
         kwargs = {"config": S5Config(**kwargs)}
     if model_name not in ["bptt", "rtrl", "rflo"]:
+        activation = "silu"
         if "wiring" in kwargs:
             # print(f"WARNING specifying wiring does not work with model {model_name}. Deleting from kwargs")
             del kwargs["wiring"]

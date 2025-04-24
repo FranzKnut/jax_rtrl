@@ -143,7 +143,7 @@ class MLPEnsemble(nn.Module):
     skip_connection: bool = False
 
     @nn.compact
-    def __call__(self, x, rng=None):  # noqa
+    def __call__(self, x):  # noqa
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -178,14 +178,13 @@ class MLPEnsemble(nn.Module):
 
         if not self.out_dist:
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
-            if rng is not None:
-                outs = jnp.mean(outs, axis=0)
+
         else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
-            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
-            if rng is not None:
-                outs = outs.sample(seed=rng)
+            outs = distrax.MixtureSameFamily(
+                distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs
+            )
 
         return outs
 
@@ -206,7 +205,11 @@ class DistributionLayer(nn.Module):
             loc, scale = jnp.split(x, 2, axis=-1)
             return distrax.Normal(loc, jax.nn.softplus(scale) + self.eps)
         elif self.distribution == "Categorical":
-            out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
+            out_size = (
+                np.prod(self.out_size)
+                if isinstance(self.out_size, tuple)
+                else self.out_size
+            )
             x = FADense(out_size, f_align=self.f_align)(x)
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)

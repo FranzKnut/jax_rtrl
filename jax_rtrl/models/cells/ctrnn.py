@@ -253,7 +253,6 @@ class OnlineCTRNNCell(CTRNNCell):
                 (out, *traces) if force_trace_compute else out,
             ), (out, *traces)
 
-        @jax.jit
         def bwd(tmp, y_bar):
             """Backward pass using RTRL."""
             # carry, jp, jx, hebb = tmp
@@ -290,7 +289,24 @@ class OnlineCTRNNCell(CTRNNCell):
 
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
-        params = self.lazy_init(rng, (h, None, None), jnp.zeros(input_shape))
+
+        # HACK: if we are inside a batched setting, we need to replicate for self.init
+        _h = h
+        if hasattr(rng, "_trace"):
+            _outer_batch_size = rng._trace.axis_data.size
+            _h = jnp.tile(h, (1,) * (len(_h.shape) - 1) + (_outer_batch_size, 1))
+            input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
+        # Lazy initialize to get the parameter shapes
+        params = self.lazy_init(
+            rng,
+            (_h, None, None),
+            jnp.zeros(input_shape),
+        )
+        # Now we also have to "unbatch" the params
+        if hasattr(rng, "_trace"):
+            params = jax.tree_map(lambda x: x[0], params)
+            
+        # Initialize the jacobian traces
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
         jp = jax.tree.map(
             lambda x: jnp.zeros(leading_shape + x.shape), params["params"]

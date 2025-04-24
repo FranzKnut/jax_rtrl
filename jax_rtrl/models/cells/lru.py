@@ -75,9 +75,15 @@ class LRUCell(nn.Module):
 
     def setup(self):
         """Create parameters."""
-        self.nu_log = self.param("nu_log", nu_log_init, (self.d_hidden,), self.r_max, self.r_min)
-        self.theta_log = self.param("theta_log", theta_log_init, (self.d_hidden,), self.max_phase)
-        self.gamma_log = self.param("gamma_log", gamma_log_init, (self.d_hidden,), self.nu_log, self.theta_log)
+        self.nu_log = self.param(
+            "nu_log", nu_log_init, (self.d_hidden,), self.r_max, self.r_min
+        )
+        self.theta_log = self.param(
+            "theta_log", theta_log_init, (self.d_hidden,), self.max_phase
+        )
+        self.gamma_log = self.param(
+            "gamma_log", gamma_log_init, (self.d_hidden,), self.nu_log, self.theta_log
+        )
 
     @nn.compact
     def __call__(self, carry, inputs, resets=None):
@@ -111,10 +117,13 @@ class LRUCell(nn.Module):
         Lambda_elements = jnp.repeat(Lambda[None, ...], inputs.shape[0], axis=0)
         Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs)
         if resets is None:
-            _, hidden_states = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
+            _, hidden_states = jax.lax.associative_scan(
+                binary_operator, (Lambda_elements, Bu_elements)
+            )
         else:
             _, hidden_states, _ = jax.lax.associative_scan(
-                binary_operator_reset, (Lambda_elements, Bu_elements, resets.astype(jnp.int32))
+                binary_operator_reset,
+                (Lambda_elements, Bu_elements, resets.astype(jnp.int32)),
             )
         return hidden_states[-1], hidden_states if _is_sequence else hidden_states[-1]
 
@@ -157,8 +166,12 @@ class OnlineLRUCell(nn.RNNCellBase):
             B = _p["B_real"] + 1j * _p["B_img"]
 
             new_grad_lambda = Lambda * grad_memory[0] + h
-            new_grad_gamma = Lambda * grad_memory[1] + (x_t @ jnp.swapaxes(B, -1, -2)).squeeze()
-            new_grad_B = (jnp.expand_dims(Lambda, axis=-1)) * grad_memory[2] + jnp.outer(_p["gamma_log"], x_t)
+            new_grad_gamma = (
+                Lambda * grad_memory[1] + (x_t @ jnp.swapaxes(B, -1, -2)).squeeze()
+            )
+            new_grad_B = (jnp.expand_dims(Lambda, axis=-1)) * grad_memory[
+                2
+            ] + jnp.outer(_p["gamma_log"], x_t)
 
             return (
                 new_grad_lambda,
@@ -181,7 +194,12 @@ class OnlineLRUCell(nn.RNNCellBase):
             f_out, vjp_func = nn.vjp(f, mdl, carry, x_t)
             _, vjp_to_lambda = nn.vjp(lambda m, x: m._to_lambda(x), mdl, x_t)
             traces = _trace_update(carry, mdl.variables["params"], x_t)
-            return f_out, (vjp_func, traces, vjp_to_lambda, mdl.gamma_log)  # output, residual
+            return f_out, (
+                vjp_func,
+                traces,
+                vjp_to_lambda,
+                mdl.gamma_log,
+            )  # output, residual
 
         def bwd(residuals, y_t):
             # y_t =(partial{output}/partial{h_{t}},ignore the rest
@@ -209,7 +227,9 @@ class OnlineLRUCell(nn.RNNCellBase):
             d_params_rec["params"]["theta_log"],
         )
 
-        correct_gamma_log = (d_output_d_h * new_grad_memory[1]).real * jnp.exp(gamma_log)
+        correct_gamma_log = (d_output_d_h * new_grad_memory[1]).real * jnp.exp(
+            gamma_log
+        )
         grad_B = jnp.expand_dims(d_output_d_h, -1) * new_grad_memory[2]
         # correct_B_re = (jnp.expand_dims(d_output_d_h,-1) * new_grad_memory[2]).real
         # correct_B_img = (jnp.expand_dims(d_output_d_h,-1) * new_grad_memory[2]).imag
@@ -226,7 +246,7 @@ class OnlineLRULayer(nn.RNNCellBase):
     """OnlineLRU layer with linear projection afterwards."""
 
     d_output: int
-    d_hidden: int
+    d_hidden: int = None
     plasticity: str = "bptt"
 
     def __init__(self, d_output, d_hidden=None, plasticity="bptt", **kwargs):
@@ -244,7 +264,7 @@ class OnlineLRULayer(nn.RNNCellBase):
         super().__init__(**kwargs)
 
     @nn.compact
-    def __call__(self, carry, x_t, **args):
+    def __call__(self, carry, x_t, *args, **kwargs):
         """Apply the LRU cell to the input and computes the output projections.
 
         Args:
@@ -273,8 +293,8 @@ class OnlineLRULayer(nn.RNNCellBase):
 
         D = self.param("D", matrix_init, (self.d_output, x_t.shape[-1]))
 
-        online_lru = OnlineLRUCell(self.d_hidden, self.plasticity)
-        carry, h_t = online_lru(carry, x_t, **args)
+        online_lru = OnlineLRUCell(self.d_hidden or self.d_output, self.plasticity)
+        carry, h_t = online_lru(carry, x_t, *args, **kwargs)
         C = C_real + 1j * C_img
         y_t = (h_t @ C.transpose()).real + x_t @ D.transpose()
         return carry, y_t
@@ -286,14 +306,15 @@ class OnlineLRULayer(nn.RNNCellBase):
 
     def initialize_carry(self, rng, input_shape):
         """Initialize the carry state for the LRU cell including gradient traces."""
+        d_hidden = self.d_hidden or self.d_output
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
-        hidden_init = jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64)
+        hidden_init = jnp.zeros((*batch_size, d_hidden), dtype=jnp.complex64)
         if self.plasticity == "bptt":
             return hidden_init
         memory_grad_init = (
-            jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64),
-            jnp.zeros((*batch_size, self.d_hidden), dtype=jnp.complex64),
-            jnp.zeros((*batch_size, self.d_hidden, input_shape[-1]), dtype=jnp.complex64),
+            jnp.zeros((*batch_size, d_hidden), dtype=jnp.complex64),
+            jnp.zeros((*batch_size, d_hidden), dtype=jnp.complex64),
+            jnp.zeros((*batch_size, d_hidden, input_shape[-1]), dtype=jnp.complex64),
         )
         return (hidden_init, memory_grad_init)
 
@@ -317,7 +338,9 @@ if __name__ == "__main__":
         rt_carry = (rt_hidden_init, mem_grad_init)
         hs_c1 = []
         for i in range(seq_len):
-            rt_carry, out = jax.vmap(partial(model.apply, rt_rtu_params))(rt_carry, test_x[i, :, :])
+            rt_carry, out = jax.vmap(partial(model.apply, rt_rtu_params))(
+                rt_carry, test_x[i, :, :]
+            )
             hs_c1.append(out)
         error = (1 - jnp.mean(jnp.stack(hs_c1))) ** 2
         return error
