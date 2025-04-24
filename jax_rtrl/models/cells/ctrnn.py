@@ -294,7 +294,8 @@ class OnlineCTRNNCell(CTRNNCell):
         _h = h
         if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
             _outer_batch_size = rng._trace.axis_data.size
-            _h = jnp.tile(h, (1,) * (len(_h.shape) - 1) + (_outer_batch_size, 1))
+            _h = jnp.tile(h, (_outer_batch_size,)+ (1,) * len(h.shape))
+            _h = _h.reshape(h.shape[:-1]+ ( _outer_batch_size, -1))
             input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
         # Lazy initialize to get the parameter shapes
         params = self.lazy_init(
