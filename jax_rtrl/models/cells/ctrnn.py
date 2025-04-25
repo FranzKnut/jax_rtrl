@@ -305,7 +305,7 @@ class OnlineCTRNNCell(CTRNNCell):
         )
         # Now we also have to "unbatch" the params
         if hasattr(rng, "_trace"):
-            params = jax.tree_map(lambda x: x[0], params)
+            params = jax.tree.map(lambda x: x[0], params)
             
         # Initialize the jacobian traces
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape

@@ -79,7 +79,7 @@ class GRUOnlineCell(nn.recurrent.RNNCellBase, metaclass=nn.recurrent.RNNCellComp
 
             # Trick: use the diag of d.../dh as an error signal and then use vjp to compute
             # partial[i, i, :]
-            grad = jax.tree_util.tree_map(jnp.zeros_like, unfreeze(self.variables["params"]))
+            grad = jax.tree.map(jnp.zeros_like, unfreeze(self.variables["params"]))
             grad = unfreeze(grad)
             for beg in ["h", "i"]:
                 for end in ["r", "z", "n"]:
@@ -134,7 +134,7 @@ class GRU(nn.Module):
                     diag = diag_rec_jac[:, None]
                 return new + diag * old
 
-            new_jac = jax.tree_util.tree_map(_jac_update, jac, partial_param)
+            new_jac = jax.tree.map(_jac_update, jac, partial_param)
 
             return (new_hiddens, new_jac, t + 1), (new_hiddens, new_jac)
 
@@ -203,7 +203,7 @@ class GRU(nn.Module):
             init_carry = (
                 jnp.zeros((self.d_hidden,)),
                 {
-                    "params": jax.tree_util.tree_map(
+                    "params": jax.tree.map(
                         lambda p: jnp.diagonal(jnp.zeros((self.d_hidden,) + p.shape)),
                         unfreeze(self.cell.variables["params"]),
                     )

@@ -322,7 +322,7 @@ class BlockWrapper(nn.RNNCellBase):
         )
 
         # Give every block the same args
-        (args, kwargs) = jax.tree_map(
+        (args, kwargs) = jax.tree.map(
             lambda a: jnp.tile(a, (self.num_blocks,1 )),
             (args, kwargs),
         )

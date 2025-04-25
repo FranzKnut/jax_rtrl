@@ -3,7 +3,6 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from jax import tree_map
 from jax.nn import initializers
 
 
@@ -27,7 +26,7 @@ class Plasticity:
         # batched_out = (batch_size, self.cell.out_size) if batch_size else (
         #     self.cell.out_size,)
         # P = dh/dw
-        traces["P"] = tree_map(lambda x: jnp.zeros(batched_units + x.shape), eqx.filter(self.cell, eqx.is_array))
+        traces["P"] = jax.tree.map(lambda x: jnp.zeros(batched_units + x.shape), eqx.filter(self.cell, eqx.is_array))
         # if self.cell.output_mapping:
         #     # P_out = (dy/dw_out, dy/db_out)
         #     traces['P_out'] = (jnp.zeros(batched_out + self.cell.w_out.shape),
@@ -74,14 +73,14 @@ class Plasticity:
         @param dout:
         @return: Dictionary where key is the name of the weight and value is the update
         """
-        gradients = tree_map(lambda t: jnp.einsum("H,H...->...", dout, t), traces["P"])
+        gradients = jax.tree.map(lambda t: jnp.einsum("H,H...->...", dout, t), traces["P"])
 
         if with_dy_dx:
             dy_dx = jnp.einsum("H,H...->...", dout, traces["Q"])[..., : cell.input_size]
             return gradients, dy_dx
 
         # if cell.output_mapping:
-        #     w_out_grad = tree_map(lambda t: dout @ t, traces['P_out'])
+        #     w_out_grad = jax.tree.map(lambda t: dout @ t, traces['P_out'])
         #     gradients = eqx.tree_at(lambda t: (
         #         t.w_out, t.b_out), gradients, w_out_grad)
 
@@ -125,7 +124,7 @@ class LocalMSE(Plasticity):
             out["Q"] = jac_pre[-cell.units :, -cell.units :]
         else:
             jac_cell = jax.jacrev(cell.f, argnums=0, has_aux=True)(cell, [0], pre)[0]
-        p = tree_map(lambda x: x[-cell.units :], jac_cell)
+        p = jax.tree.map(lambda x: x[-cell.units :], jac_cell)
         out["P"] = p
         return out
 
@@ -170,10 +169,10 @@ class RTRL(Plasticity):
         # / cell.dt
 
         # jacobian trace (previous step * dh_h)
-        comm = jax.tree_map(lambda p: jnp.tensordot(df_dh[..., -cell.units :, -cell.units :], p, axes=1), P)
+        comm = jax.tree.map(lambda p: jnp.tensordot(df_dh[..., -cell.units :, -cell.units :], p, axes=1), P)
 
         # Update dh_dw approximation
-        dh_dw = jax.tree_map(rtrl_step, P, comm, df_dw)
+        dh_dw = jax.tree.map(rtrl_step, P, comm, df_dw)
 
         # if cell.output_mapping:
         #     jac_out = jax.jacrev(cell.map_output, argnums=0)(cell, post)

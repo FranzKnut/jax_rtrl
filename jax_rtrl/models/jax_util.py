@@ -11,7 +11,6 @@ import jax.random as jrandom
 import numpy as np
 import optax
 import orbax.checkpoint
-from jax.tree_util import tree_map
 
 
 class JaxRng:
@@ -50,9 +49,9 @@ def preprocess_img(img):
 def zeros_like_tree(tree, batch_size=None):
     """Create pytree of zeros with batchsize."""
     if batch_size is not None:
-        return tree_map(lambda x: jnp.zeros((batch_size,) + x.shape), tree)
+        return jax.tree.map(lambda x: jnp.zeros((batch_size,) + x.shape), tree)
     else:
-        return tree_map(lambda x: jnp.zeros_like(x), tree)
+        return jax.tree.map(lambda x: jnp.zeros_like(x), tree)
 
 
 def restore_params_and_config(path):
@@ -64,7 +63,7 @@ def restore_params_and_config(path):
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
     params = checkpointer.restore(
         orbax_path,
-        restore_args=jax.tree_map(
+        restore_args=jax.tree.map(
             lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray),
             checkpointer.metadata(orbax_path),
         ),
@@ -96,7 +95,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
-        _params = jax.tree_map(
+        _params = jax.tree.map(
             lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
         )
         return checkpointer.save(orbax_path, _params, force=True)
