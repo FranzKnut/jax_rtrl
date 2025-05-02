@@ -15,7 +15,7 @@ class WeightConsolidationState:
     omega: jax.Array
     reg_strength: jax.Array
     theta_ref: jax.Array
-    decay: float = 0.5
+    decay: float = 0.2
 
 
 def init_weight_consolidation_state(factor, decay, theta):

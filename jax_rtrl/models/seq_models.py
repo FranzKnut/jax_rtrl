@@ -59,8 +59,8 @@ class RNNEnsembleConfig:
     """
 
     model_name: str | None
-    num_modules: int
     layers: tuple[int]
+    num_modules: int = 1
     num_blocks: int = 1
     glu: bool = True
     out_size: int | None = None
@@ -323,7 +323,7 @@ class BlockWrapper(nn.RNNCellBase):
 
         # Give every block the same args
         (args, kwargs) = jax.tree.map(
-            lambda a: jnp.tile(a, (self.num_blocks,1 )),
+            lambda a: jnp.tile(a, (self.num_blocks, 1)),
             (args, kwargs),
         )
 
@@ -470,12 +470,10 @@ class RNNEnsemble(nn.RNNCellBase):
         outs = self._postprocessing(hidden, x)
         return loss_fn(outs, target)
 
-    @nn.nowrap
-    def loss_and_grad_async(self, params, loss_fn, carry, hidden, x, target):
+    def loss_and_grad_async(self, loss_fn, carry, hidden, x, target):
         """Compute loss and gradient asynchronuously."""
         # Compute gradient of loss wrt to network output
-        loss, (grads, df_dh) = jax.value_and_grad(self.apply, argnums=[0, 1])(
-            params,
+        loss, (grads, df_dh) = jax.value_and_grad(self._loss, argnums=[0, 1])(
             [c[-1][0].real for c in carry],
             loss_fn,
             target,

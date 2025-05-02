@@ -6,11 +6,9 @@ from typing import Tuple
 
 import flax.linen as nn
 import jax
-import jax.interpreters
 import jax.numpy as jnp
 import jax.random as jrand
 from chex import PRNGKey
-from flax.linen import nowrap
 
 from ..wirings import make_mask_initializer
 
@@ -95,7 +93,6 @@ class CTRNNCell(nn.RNNCellBase):
         out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
         return out, out
 
-    @nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize neuron states."""
         return jnp.zeros(tuple(input_shape)[:-1] + (self.num_units,))
@@ -294,8 +291,8 @@ class OnlineCTRNNCell(CTRNNCell):
         _h = h
         if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
             _outer_batch_size = rng._trace.axis_data.size
-            _h = jnp.tile(h, (_outer_batch_size,)+ (1,) * len(h.shape))
-            _h = _h.reshape(h.shape[:-1]+ ( _outer_batch_size, -1))
+            _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
+            _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
             input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
         # Lazy initialize to get the parameter shapes
         params = self.lazy_init(
@@ -304,9 +301,8 @@ class OnlineCTRNNCell(CTRNNCell):
             jnp.zeros(input_shape),
         )
         # Now we also have to "unbatch" the params
-        if hasattr(rng, "_trace"):
+        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
             params = jax.tree.map(lambda x: x[0], params)
-            
         # Initialize the jacobian traces
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
         jp = jax.tree.map(
