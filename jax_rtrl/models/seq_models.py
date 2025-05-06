@@ -34,8 +34,8 @@ class SequenceLayerConfig:
 
     dropout: float = 0.0
     norm: str = "layer"
-    glu: bool = False
-    skip_connection: bool = False
+    glu: bool = True
+    skip_connection: bool = True
     activation: str | None = None
 
 
@@ -62,7 +62,6 @@ class RNNEnsembleConfig:
     layers: tuple[int]
     num_modules: int = 1
     num_blocks: int = 1
-    glu: bool = True
     out_size: int | None = None
     out_dist: str | None = None
     input_layers: tuple[int] | None = None  # TODO
