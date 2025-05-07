@@ -138,7 +138,9 @@ class OnlineLRUCell(nn.RNNCellBase):
     plasticity: str = "bptt"
 
     @nn.compact
-    def __call__(self, carry, x_t, resets=None, force_trace_compute=False):
+    def __call__(
+        self, carry, x_t, resets=None, force_trace_compute=False, force_bptt=False
+    ):
         """Call the LRU cell with online gradient computation.
 
         Parameters
@@ -157,7 +159,7 @@ class OnlineLRUCell(nn.RNNCellBase):
         Tuple : carry, output
         """
         model_fn = LRUCell(self.d_hidden)
-        if self.plasticity == "bptt":
+        if self.plasticity == "bptt" or force_bptt:
             return model_fn(carry, x_t, resets=resets)
 
         def _trace_update(carry, _p, x_t):

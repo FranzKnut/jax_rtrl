@@ -15,7 +15,7 @@ class WeightConsolidationState:
     omega: jax.Array
     reg_strength: jax.Array
     theta_ref: jax.Array
-    decay: float = 0.2
+    decay: float = 0.9
 
 
 def init_weight_consolidation_state(factor, decay, theta):
@@ -29,14 +29,18 @@ def init_weight_consolidation_state(factor, decay, theta):
     )
 
 
-def update_reg_strength(state: WeightConsolidationState, new_theta, xi=1e-6):
+def update_reg_strength(
+    state: WeightConsolidationState,
+    new_theta,
+    reset: bool = False,
+    xi: float = 1e-6,
+):
     """Update the regularization strength for weight consolidation.
 
     Args:
-        reg_strength: The current regularization strength.
-        omega: The consolidation coefficient.
+        state: The current consolidation state.
         new_theta: The new parameter value.
-        old_theta: The old parameter value.
+        reset: Whether to reset omega.
         xi: A small positive value to prevent division by zero.
     """
 
@@ -53,7 +57,7 @@ def update_reg_strength(state: WeightConsolidationState, new_theta, xi=1e-6):
         state.theta_ref,
     )
     return state.replace(
-        omega=zeros_like_tree(new_theta),
+        omega=zeros_like_tree(new_theta) if reset else state.omega,
         reg_strength=new_reg_strength,
         theta_ref=new_theta,
     )

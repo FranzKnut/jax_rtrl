@@ -217,11 +217,11 @@ class OnlineCTRNNCell(CTRNNCell):
     plasticity: str = "rflo"
 
     @nn.compact
-    def __call__(self, carry, x, force_trace_compute=False):  # noqa
+    def __call__(self, carry, x, force_trace_compute=False, force_bptt=False):  # noqa
         if carry is None:
             carry = self.initialize_carry(self.make_rng(), x.shape)
 
-        if self.plasticity == "bptt":
+        if self.plasticity == "bptt" or force_bptt:
             return CTRNNCell.__call__(self, carry, x)
 
         def _trace_update(carry, _p, x):
