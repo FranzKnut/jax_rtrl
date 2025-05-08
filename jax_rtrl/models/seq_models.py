@@ -377,45 +377,45 @@ class RNNEnsemble(nn.RNNCellBase):
     def setup(self):
         """Initialize submodules."""
         # TODO: Use BlockWrapper for ensemble
-        self.ensembles = [
-            FAMultiLayerRNN(
-                self.config.layers,
-                rnn_cls=CELL_TYPES[self.config.model_name],
-                rnn_kwargs=self.config.rnn_kwargs,
-                num_blocks=self.config.num_blocks,
-                fa_type=self.config.fa_type,
-                name=f"ensembles_{i}",
-                layer_config=self.config.layer_config,  # Use the config directly
-            )
-            for i in range(self.config.num_modules)
-        ]
+        self.ensembles = make_batched_model(
+            FAMultiLayerRNN,
+            split_rngs=True,
+            split_inputs=(0, None),
+            axis_size=self.config.num_modules,
+        )(
+            self.config.layers,
+            rnn_cls=CELL_TYPES[self.config.model_name],
+            rnn_kwargs=self.config.rnn_kwargs,
+            num_blocks=self.config.num_blocks,
+            fa_type=self.config.fa_type,
+            name="ensemble",
+            layer_config=self.config.layer_config,  # Use the config directly
+        )
+
         if self.config.output_layers:
-            self.mlps_out = [
-                MLP(
-                    self.config.output_layers,
-                    f_align=self.config.rnn_kwargs.get("f_align", False),
-                    name=f"mlps_{i}",
-                )
-                for i in range(self.config.num_modules)
-            ]
+            self.mlps_out = make_batched_model(
+                MLP,
+                split_rngs=True,
+                axis_size=self.config.num_modules,
+            )(
+                self.config.output_layers,
+                f_align=self.config.rnn_kwargs.get("f_align", False),
+                name="mlps_out",
+            )
+
         if self.config.out_size is not None:
             # Make distribution for each submodule
-            self.dists = [
-                DistributionLayer(
-                    self.config.out_size, self.config.out_dist, name=f"dists_{i}"
-                )
-                for i in range(self.config.num_modules)
-            ]
+            self.dists = make_batched_model(
+                DistributionLayer,
+                split_rngs=True,
+                axis_size=self.config.num_modules,
+            )(self.config.out_size, self.config.out_dist, name="dists")
 
     def _postprocessing(self, outs, x):
-        for i in range(self.config.num_modules):
-            out = outs[i]
-            # Outup FF layers
-            if self.config.output_layers:
-                out = self.mlps_out[i](out)
-            if self.config.out_size is not None:
-                # Make distribution for each submodule
-                outs[i] = self.dists[i](out)
+        # Outup FF layers
+        outs = self.mlps_out(outs)
+        # Make distribution for each submodule
+        outs = self.dists(outs)
 
         # Aggregate outputs
         if not self.config.out_dist:
@@ -453,11 +453,8 @@ class RNNEnsemble(nn.RNNCellBase):
             h = self.initialize_carry(jax.random.key(0), x.shape)
         outs = []
         carry_out = []
-        for i in range(self.config.num_modules):
-            # loop over rnn submodules
-            carry, out = self.ensembles[i](h[i], x, *call_args, **call_kwargs)
-            carry_out.append(carry)
-            outs.append(out)
+        # loop over rnn submodules
+        carry_out, outs = self.ensembles(h, x, *call_args, **call_kwargs)
 
         # Post-process and aggregate outputs
         outs = self._postprocessing(outs, x)
@@ -481,6 +478,7 @@ class RNNEnsemble(nn.RNNCellBase):
         )
 
         # Compute parameter gradients for each RNN
+        # FIXME
         for i, (c, d) in enumerate(zip(carry, df_dh)):
             grads["params"][f"layers_{i}"] = CELL_TYPES[
                 self.config.model_name
@@ -489,7 +487,14 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize neuron states."""
-        return [e.initialize_carry(rng, input_shape) for e in self.ensembles]
+        # return self.ensembles.initialize_carry(rng, input_shape)
+        return jax.vmap(
+            self.ensembles.initialize_carry,
+            in_axes=(None, None),
+            out_axes=len(input_shape) - 1,
+            axis_size=self.config.num_modules,
+        )(rng, input_shape)
+    
 
     @property
     def num_feature_axes(self) -> int:
@@ -508,7 +513,13 @@ class RNNEnsemble(nn.RNNCellBase):
         )
 
 
-def make_batched_model(model):
+def make_batched_model(
+    model,
+    split_rngs: bool = False,
+    split_inputs: int | tuple[int, ...] = 0,
+    axis_size=None,
+    methods: list[str] = None,
+):
     """Parallelize model across a batch of input sequences using vmap.
 
     Parameters:
@@ -518,6 +529,19 @@ def make_batched_model(model):
     Returns:
         A batched version of the model.
     """
+    if split_rngs:
+        return nn.vmap(
+            model,
+            variable_axes={
+                "params": 0,
+                "wiring": 0,
+            },  # Separate parameters per chunk
+            split_rngs={"params": True, "dropout": True, "wiring": True},
+            in_axes=split_inputs,
+            out_axes=0,
+            axis_size=axis_size,
+            methods=methods,
+        )
     return nn.vmap(
         model,
         in_axes=0,
