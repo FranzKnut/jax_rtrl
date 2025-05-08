@@ -148,7 +148,7 @@ class OnlineLRUCell(nn.RNNCellBase):
         carry : any
             LRU cell state.
         x_t : array
-            Input sequence.
+            Input sequence. (steps, input_dim) or (input_dim,)
         resets : array, optional
             Boolean array with length of input sequence, by default None
         force_trace_compute : bool, optional

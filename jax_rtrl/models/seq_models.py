@@ -373,6 +373,7 @@ class RNNEnsemble(nn.RNNCellBase):
     """
 
     config: RNNEnsembleConfig
+    num_submodule_extra_args: int = 0  # set to number of additional args for submodule, MAKE SURE THIS IS SET CORRECTLY!
 
     def setup(self):
         """Initialize submodules."""
@@ -380,7 +381,7 @@ class RNNEnsemble(nn.RNNCellBase):
         self.ensembles = make_batched_model(
             FAMultiLayerRNN,
             split_rngs=True,
-            split_inputs=(0, None),
+            split_inputs=(0, None) + (None,) * self.num_submodule_extra_args,
             axis_size=self.config.num_modules,
         )(
             self.config.layers,
@@ -494,7 +495,6 @@ class RNNEnsemble(nn.RNNCellBase):
             out_axes=len(input_shape) - 1,
             axis_size=self.config.num_modules,
         )(rng, input_shape)
-    
 
     @property
     def num_feature_axes(self) -> int:
