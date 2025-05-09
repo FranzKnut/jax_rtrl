@@ -414,9 +414,12 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def _postprocessing(self, outs, x):
         # Outup FF layers
-        outs = self.mlps_out(outs)
+        if self.config.output_layers:
+            outs = self.mlps_out(outs)
+
         # Make distribution for each submodule
-        outs = self.dists(outs)
+        if self.config.out_size is not None:
+            outs = self.dists(outs)
 
         # Aggregate outputs
         if not self.config.out_dist:
