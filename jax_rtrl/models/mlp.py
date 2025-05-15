@@ -14,7 +14,7 @@ class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""
 
     f_align: bool = False
-    kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
 
     @nn.compact
     def __call__(self, x):
