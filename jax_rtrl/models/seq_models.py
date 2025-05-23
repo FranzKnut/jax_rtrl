@@ -33,10 +33,10 @@ class SequenceLayerConfig:
     """
 
     dropout: float = 0.0
-    norm: str = "layer"
+    norm: str | None = None
     glu: bool = True
     skip_connection: bool = True
-    activation: str | None = None
+    activation: str | None = "silu"
 
 
 @dataclass
@@ -59,13 +59,13 @@ class RNNEnsembleConfig:
     """
 
     model_name: str | None
-    layers: tuple[int]
+    layers: tuple[int, ...]
     num_modules: int = 1
     num_blocks: int = 1
     out_size: int | None = None
     out_dist: str | None = None
-    input_layers: tuple[int] | None = None  # TODO
-    output_layers: tuple[int] | None = None
+    input_layers: tuple[int, ...] | None = None  # TODO
+    output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
     rnn_kwargs: dict = field(default_factory=dict)
     layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
