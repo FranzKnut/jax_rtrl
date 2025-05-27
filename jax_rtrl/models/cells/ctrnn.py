@@ -2,7 +2,6 @@
 
 from dataclasses import field
 from functools import partial
-from typing import Tuple
 
 import flax.linen as nn
 import jax
@@ -11,6 +10,7 @@ import jax.random as jrand
 from chex import PRNGKey
 
 from ..wirings import make_mask_initializer
+from ..jax_util import set_matching_leaves, get_matching_leaves
 
 
 def ctrnn_ode(params, h, x):
@@ -93,7 +93,7 @@ class CTRNNCell(nn.RNNCellBase):
         out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
         return out, out
 
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
         return jnp.zeros(tuple(input_shape)[:-1] + (self.num_units,))
 
@@ -102,11 +102,16 @@ class CTRNNCell(nn.RNNCellBase):
         """Returns the number of feature axes of the RNN cell."""
         return 1
 
-    @staticmethod
-    def clip_tau(params):
-        """HACK: clip tau to > 1.0"""
-        params["tau"] = jnp.clip(params["tau"], min=1.0)
-        return params
+
+def clip_tau(params):
+    """HACK: clip tau to >= 1.0."""
+    return set_matching_leaves(
+        params,
+        ".*tau.*",
+        jax.tree.map(
+            partial(jnp.clip, min=1.0), get_matching_leaves(params, ".*tau.*")
+        ),
+    )
 
 
 def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
@@ -278,7 +283,7 @@ class OnlineCTRNNCell(CTRNNCell):
         grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
         return grads_p, grads_x
 
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the carry with jacobian traces."""
         h = super().initialize_carry(rng, input_shape)
         if self.plasticity == "bptt":

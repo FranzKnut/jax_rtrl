@@ -377,7 +377,6 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def setup(self):
         """Initialize submodules."""
-        # TODO: Use BlockWrapper for ensemble
         self.ensembles = make_batched_model(
             FAMultiLayerRNN,
             split_rngs=True,
@@ -504,16 +503,6 @@ class RNNEnsemble(nn.RNNCellBase):
         """Returns the number of feature axes of the RNN cell."""
         return 1
 
-    @staticmethod
-    def clip_tau(params):
-        """HACK: clip tau to >= 1.0."""
-        return set_matching_leaves(
-            params,
-            ".*tau.*",
-            jax.tree.map(
-                partial(jnp.clip, min=1.0), get_matching_leaves(params, ".*tau.*")
-            ),
-        )
 
 
 def make_batched_model(

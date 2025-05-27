@@ -135,7 +135,7 @@ class RBFLayer(nn.Module):
 class MLPEnsemble(nn.Module):
     """Ensemble of CTRNN cells."""
 
-    num_modules: int
+    num_modules: int = 1
     model: type = MLP
     out_size: int | None = None
     out_dist: str | None = None
@@ -193,6 +193,7 @@ class DistributionLayer(nn.Module):
     """Parameterized distribution output layer."""
 
     out_size: int
+    layers: tuple[int, ...] = ()
     distribution: str = "Normal"
     eps: float = 0.01
     f_align: bool = False
@@ -200,6 +201,12 @@ class DistributionLayer(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Make the distribution from given vector."""
+        if self.layers:
+            x = MLP(
+                layers=self.layers,
+                activation_fn=jax.nn.relu,
+                f_align=self.f_align,
+            )(x)
         if self.distribution == "Normal":
             x = FADense(2 * self.out_size, f_align=self.f_align)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
