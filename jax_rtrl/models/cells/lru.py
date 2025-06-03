@@ -7,7 +7,6 @@ NeurIPS 2024
 """
 
 from functools import partial
-from typing import Any, Tuple
 
 import flax
 import jax
@@ -16,11 +15,6 @@ from flax import linen as nn
 
 from ..linear import binary_operator
 from ..seq_util import binary_operator_reset
-
-PRNGKey = Any
-Shape = Tuple[int, ...]
-Dtype = Any
-Array = Any
 
 
 def get_lambda(nu_log, theta_log):
@@ -249,9 +243,12 @@ class OnlineLRULayer(nn.RNNCellBase):
 
     d_output: int
     d_hidden: int = None
+    activation: str | None = "silu"
     plasticity: str = "bptt"
 
-    def __init__(self, d_output, d_hidden=None, plasticity="bptt", **kwargs):
+    def __init__(
+        self, d_output, d_hidden=None, plasticity="bptt", activation="silu", **kwargs
+    ):
         """Initialize the model with the specified output dimension, hidden dimension, and plasticity type.
 
         Args:
@@ -263,6 +260,7 @@ class OnlineLRULayer(nn.RNNCellBase):
         self.d_output = d_output
         self.d_hidden = d_hidden or d_output
         self.plasticity = plasticity
+        self.activation = activation
         super().__init__(**kwargs)
 
     @nn.compact
@@ -299,6 +297,7 @@ class OnlineLRULayer(nn.RNNCellBase):
         carry, h_t = online_lru(carry, x_t, *args, **kwargs)
         C = C_real + 1j * C_img
         y_t = (h_t @ C.transpose()).real + x_t @ D.transpose()
+        y_t = getattr(jax.nn, self.activation)(y_t) if self.activation else y_t
         return carry, y_t
 
     @staticmethod

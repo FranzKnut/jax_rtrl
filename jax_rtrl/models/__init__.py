@@ -7,6 +7,7 @@ import flax.linen
 import jax
 
 from jax_rtrl.models.cells import CELL_TYPES, ONLINE_CELL_TYPES  # noqa
+from jax_rtrl.models.mlp import FADense, FAAffine  # noqa
 
 from .s5 import S5Config
 from .seq_models import RNNEnsembleConfig, SequenceLayerConfig
@@ -45,7 +46,6 @@ def make_rnn_ensemble_config(
     glu=True,
     f_align=False,
     norm=None,
-    activation=None,
     dropout=0.0,
     wiring=None,
 ):
@@ -64,7 +64,6 @@ def make_rnn_ensemble_config(
         glu (bool, optional): Whether to use Gated Linear Units (GLU). Defaults to False.
         f_align (bool, optional): Whether to use Feedback Alignment. Defaults to False.
         norm (str, optional): Normalization type. Defaults to "layer".
-        activation (str, optional): Activation function. Defaults to None.
         dropout (float, optional): Dropout probability. Defaults to 0.0.
         TODO: document wiring
 
@@ -78,7 +77,6 @@ def make_rnn_ensemble_config(
     elif model_name in ["s5", "s5_rtrl"]:
         kwargs = {"config": S5Config(**kwargs)}
     if model_name not in ["bptt", "rtrl", "rflo"]:
-        activation = "silu"
         if "wiring" in kwargs:
             # print(f"WARNING specifying wiring does not work with model {model_name}. Deleting from kwargs")
             del kwargs["wiring"]
@@ -91,7 +89,6 @@ def make_rnn_ensemble_config(
         kwargs["plasticity"] = match.group(1)
 
     layer_config = SequenceLayerConfig(
-        activation=activation,
         norm=norm,
         dropout=dropout,
         skip_connection=skip_connection,

@@ -10,7 +10,8 @@ import numpy as np
 import optax
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from models.mlp import CTRNNCell, FADense
+from models.cells import CTRNNCell
+from models import FADense
 
 from jax_rtrl.supervised.datasets import sine
 
@@ -42,12 +43,15 @@ def print_progress(i, loss):
         print(f"Iteration {i} | Loss: {loss:.3f}")
 
 
-def train(_loss_fn, _params, data, _key, num_steps=300_000, lr=1e-4):
+def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-3):
     # We use Stochastic Gradient Descent with a constant learning rate
     _x, _y = data
-    mask = jax.tree.map(lambda x: True, _params)
-    mask["params"]["layers_0"]["cell"]["tau"] = False
-    optimizer = optax.adam(lr, mask=mask)
+    
+    # mask = jax.tree.map(lambda x: True, _params)
+    # mask["params"]["layers_0"]["cell"]["tau"] = False
+    # optimizer = optax.adamw(lr, mask=mask) # Mask tau from weight decay
+
+    optimizer = optax.adam(lr)
     opt_state = optimizer.init(_params)
 
     def step(carry, n):
@@ -59,7 +63,9 @@ def train(_loss_fn, _params, data, _key, num_steps=300_000, lr=1e-4):
         jax.debug.callback(print_progress, n, current_loss)
         return (__params, _opt_state, _key), current_loss
 
-    (_params, *_), _losses = jax.lax.scan(step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32))
+    (_params, *_), _losses = jax.lax.scan(
+        step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32)
+    )
     print(f"Final loss: {_losses[-1]:.3f}")
     return _params, _losses
 

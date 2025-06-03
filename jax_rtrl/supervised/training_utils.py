@@ -1,21 +1,26 @@
 """Supervised training loops."""
+
 import jax
 import optax
 from jax import numpy as jnp
-from optimizers import OptimizerConfig, make_optimizer
 from tqdm import trange
 
 
 def train_rnn_online(
-    _loss_fn, _params, data, _key, h0, num_steps=10_000, opt_config=OptimizerConfig(), param_post_update_fn=None
+    loss_fn,
+    optimizer,
+    params,
+    data,
+    key,
+    h0,
+    num_steps=10_000,
+    param_post_update_fn=None,
 ):
     """Train RNN using Stochastic Gradient Descent with a constant learning rate."""
     _x, _y = data
     # mask = jax.tree.map(lambda x: True, _params)
     # mask['params']['cell']['tau'] = False
-    # lr = optax.warmup_cosine_decay_schedule(init_value=lr/10, peak_value=lr, warmup_steps=500, decay_steps=2500)
-    optimizer = make_optimizer(opt_config)
-    opt_state = optimizer.init(_params)
+    opt_state = optimizer.init(params)
     pbar = trange(int(num_steps), maxinterval=2)
 
     def run_episode(ep_carry, n):
@@ -23,7 +28,9 @@ def train_rnn_online(
             __params, _opt_state, _key, h = carry
             __x, __y = _data
             # _key, key_batch = jrand.split(_key)
-            (current_loss, h), grads = jax.value_and_grad(_loss_fn, has_aux=True)(__params, __x, __y, h)
+            (current_loss, h), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                __params, __x, __y, h
+            )
             updates, _opt_state = optimizer.update(grads, _opt_state, __params)
             __params = optax.apply_updates(__params, updates)
 
@@ -44,16 +51,20 @@ def train_rnn_online(
 
         def print_progress(i, loss):
             pbar.update()
-            pbar.set_description(f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False)
+            pbar.set_description(
+                f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False
+            )
 
         jax.debug.callback(print_progress, n, current_loss)
         return step_carry, current_loss
 
-    (_params, *_), _losses = jax.lax.scan(
-        run_episode, (_params, opt_state, _key, h0), jnp.arange(num_steps, dtype=jnp.int32)
+    (params, *_), _losses = jax.lax.scan(
+        run_episode,
+        (params, opt_state, key, h0),
+        jnp.arange(num_steps, dtype=jnp.int32),
     )
     pbar.close()
-    return _params, _losses
+    return params, _losses
 
 
 def predict(model, params, x):
@@ -62,6 +73,6 @@ def predict(model, params, x):
     def _step(carry, _x):
         return model.apply(params, _x, carry)
 
-    h0 = model.initialize_carry(jax.random.PRNGKey(0), x[0].shape)
+    h0 = model.apply(params, jax.random.PRNGKey(0), x[0].shape, method=model.initialize_carry)
     outs = jax.lax.scan(_step, h0, x)[1]
     return outs

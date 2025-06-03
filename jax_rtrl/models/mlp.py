@@ -194,7 +194,7 @@ class DistributionLayer(nn.Module):
 
     out_size: int
     layers: tuple[int, ...] = ()
-    distribution: str = "Normal"
+    distribution: str | None = "Normal"
     eps: float = 0.01
     f_align: bool = False
 
@@ -221,6 +221,9 @@ class DistributionLayer(nn.Module):
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
             return distrax.Categorical(logits=x)
+        elif self.distribution == "Bernoulli":
+            x = FADense(self.out_size, f_align=self.f_align)(x)
+            return distrax.Bernoulli(logits=x)
         else:
             # Becomes deterministic
             return FADense(self.out_size, f_align=self.f_align)(x)

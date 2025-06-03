@@ -15,7 +15,7 @@ from flax import linen as nn
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.s5 import S5Config
 
-from .jax_util import get_matching_leaves, set_matching_leaves, zeros_like_tree
+from .jax_util import zeros_like_tree
 from .mlp import MLP, DistributionLayer, FADense
 
 
@@ -29,14 +29,12 @@ class SequenceLayerConfig:
         norm: Type of normalization to use ('layer' or 'batch').
         glu: Whether to use Gated Linear Unit structure.
         skip_connection: Whether to use skip connections.
-        activation: Activation function applied after the sequence model.
     """
 
     dropout: float = 0.0
     norm: str | None = None
     glu: bool = True
     skip_connection: bool = True
-    activation: str | None = "silu"
 
 
 @dataclass
@@ -131,8 +129,6 @@ class SequenceLayer(nn.Module):
 
         x = normalization(inputs)  # pre normalization
         hidden, x = self.seq(hidden, x, *args, **kwargs)  # call seq model
-        if self.config.activation is not None:
-            x = getattr(nn, self.config.activation)(x)
         if self.config.skip_connection:
             x = x + inputs
         x = FADense(self.d_output or hidden.shape[-1])(drop(x))
@@ -409,7 +405,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 DistributionLayer,
                 split_rngs=True,
                 axis_size=self.config.num_modules,
-            )(self.config.out_size, self.config.out_dist, name="dists")
+            )(self.config.out_size, distribution=self.config.out_dist, name="dists")
 
     def _postprocessing(self, outs, x):
         # Outup FF layers
@@ -502,7 +498,6 @@ class RNNEnsemble(nn.RNNCellBase):
     def num_feature_axes(self) -> int:
         """Returns the number of feature axes of the RNN cell."""
         return 1
-
 
 
 def make_batched_model(
