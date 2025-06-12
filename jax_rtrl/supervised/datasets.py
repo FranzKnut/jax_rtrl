@@ -2,29 +2,27 @@
 
 import os
 import re
-from typing import Iterable
-
+from collections.abc import Iterable
 import jax
+
 from jax import numpy as jnp
 from jax import random as jrandom
 
 
-def split_train_test(inputs, target, percent_eval=0.2):
+def split_train_test(dataset, percent_eval: float = 0.2):
     """Split the dataset into train and test sets along the first axis.
 
     Train episodes are taken from the beginning of the dataset, test episodes from the end.
-    :param percent_eval:
-    :param inputs:
-    :param target:
+    :param dataset: Pytree
+    :param percent_eval: float
     :return: train and eval tuples of (inputs, target)
     """
-    train_size = int(inputs.shape[0] * (1 - percent_eval))
-    inputs_train = inputs[:train_size]
-    inputs_eval = inputs[train_size:]
+    dataset_size = jax.tree.flatten(dataset)[0][0].shape[0]
+    train_size = int(dataset_size * (1 - percent_eval))
+    dataset_train = jax.tree.map(lambda x: x[:train_size], dataset)
+    dataset_eval = jax.tree.map(lambda x: x[train_size:], dataset)
 
-    target_train = target[:train_size]
-    target_eval = target[train_size:]
-    return (inputs_train, target_train), (inputs_eval, target_eval)
+    return dataset_train, dataset_eval
 
 
 def dataloader(arrays, batch_size: int, *, key=None, permute=False):
@@ -55,7 +53,6 @@ def dataloader(arrays, batch_size: int, *, key=None, permute=False):
             end = start + batch_size
 
 
-
 def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=0):
     """Cut the given sequences into subsequences of length seq_len.
 
@@ -70,7 +67,10 @@ def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=
     """
     first_set = data if isinstance(data, jax.Array) else data[0]
     starts = jnp.arange(len(first_set) - seq_len + 1, step=seq_len - overlap)
-    sliced = [jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts) for d in data]
+    sliced = [
+        jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts)
+        for d in data
+    ]
     return [jnp.stack(s, axis=0) for s in sliced]
 
 
@@ -82,7 +82,11 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
     :param num_files: If not None, only loads the specified number of files
     :return:
     """
-    files = [os.path.join(path, d) for d in os.listdir(path) if d.endswith(".npz" if is_npz else ".npy")]
+    files = [
+        os.path.join(path, d)
+        for d in os.listdir(path)
+        if d.endswith(".npz" if is_npz else ".npy")
+    ]
     # Sort numbered files
     files.sort(key=lambda f: int(re.sub(r"\D", "", f)))
     print(f"Loading {len(files[:num_files])} files from {path}")
@@ -105,11 +109,14 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
             num_steps = len(output)
 
         # An Array that is zero everywhere except at the start of each file
-        start_indices = jnp.concatenate([jnp.zeros(1), jnp.cumsum(jnp.array(num_steps_per_file[:-1]))], dtype=int)
+        start_indices = jnp.concatenate(
+            [jnp.zeros(1), jnp.cumsum(jnp.array(num_steps_per_file[:-1]))], dtype=int
+        )
         file_starts = jnp.zeros(num_steps).at[start_indices].set(1)
 
     print(f"Files contained {num_steps:d} steps total")
     return output, file_starts
+
 
 # Toy datasets -----------------------------------------------------------------
 
@@ -148,7 +155,13 @@ def rollouts(data_folder, with_time=False):
     :param act_in_obs: If True, the actions are included in the observations
     :return:
     """
-    files = sorted([os.path.join(data_folder, d) for d in os.listdir(data_folder) if d.endswith(".npz")])
+    files = sorted(
+        [
+            os.path.join(data_folder, d)
+            for d in os.listdir(data_folder)
+            if d.endswith(".npz")
+        ]
+    )
 
     all_x = []
     if with_time:
