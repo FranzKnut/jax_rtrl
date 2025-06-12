@@ -1,6 +1,7 @@
 """Datasets for supervised learning."""
 
 import os
+import re
 from typing import Iterable
 
 import jax
@@ -55,24 +56,60 @@ def dataloader(arrays, batch_size: int, *, key=None, permute=False):
 
 
 
-def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=0, set_t=None):
+def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=0):
     """Cut the given sequences into subsequences of length seq_len.
 
-    Sequences may overlap. If set_t is given, it is also cut into subsequences.
+    Sequences may overlap.
     Args:
         data (Array | Iterable): the data to be split
         seq_len (int): Sequence length
         overlap (int, optional): Overlap for the sequences. Defaults to 0.
-        set_t (Array, optional): An optional Array containing timestamps. Defaults to None.
 
     Returns:
-        Tuple[Array, Array] or Tuple[Array, Array, Array]: if set_t is None, returns (x, y), else (x, t, y)
+        Tuple[Array, ...]
     """
     first_set = data if isinstance(data, jax.Array) else data[0]
     starts = jnp.arange(len(first_set) - seq_len + 1, step=seq_len - overlap)
     sliced = [jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts) for d in data]
     return [jnp.stack(s, axis=0) for s in sliced]
 
+
+def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
+    """Load a set of npz or npz files from a folder.
+
+    :param name: Environment name
+    :param is_npz: If True, the files in the folder are assumed to be .npz files containing multiple fields
+    :param num_files: If not None, only loads the specified number of files
+    :return:
+    """
+    files = [os.path.join(path, d) for d in os.listdir(path) if d.endswith(".npz" if is_npz else ".npy")]
+    # Sort numbered files
+    files.sort(key=lambda f: int(re.sub(r"\D", "", f)))
+    print(f"Loading {len(files[:num_files])} files from {path}")
+    data = []
+    with jax.default_device(jax.devices("cpu")[0]):
+        for f in files[:num_files]:
+            d = jnp.load(f, allow_pickle=True)
+            if is_npz:
+                d = dict(d)
+            data.append(d)
+
+        if is_npz:
+            output = jax.tree.map(lambda *x: jnp.concatenate(x, axis=0), *data)
+            num_steps = len(output[list(output.keys())[0]])
+            num_steps_per_file = [len(d[list(d.keys())[0]]) for d in data]
+        else:
+            output = jnp.concatenate(data, axis=0)
+            num_steps_per_file = [len(d) for d in data]
+            file_starts = jnp.zeros(num_steps)
+            num_steps = len(output)
+
+        # An Array that is zero everywhere except at the start of each file
+        start_indices = jnp.concatenate([jnp.zeros(1), jnp.cumsum(jnp.array(num_steps_per_file[:-1]))], dtype=int)
+        file_starts = jnp.zeros(num_steps).at[start_indices].set(1)
+
+    print(f"Files contained {num_steps:d} steps total")
+    return output, file_starts
 
 # Toy datasets -----------------------------------------------------------------
 
