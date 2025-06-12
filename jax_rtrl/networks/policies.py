@@ -117,16 +117,32 @@ class PolicyRNN(nn.RNNCellBase, Policy):
 
     @nn.compact
     def __call__(
-        self, carry: jax.Array | None = None, x: jax.Array = None, *args, **kwargs
+        self,
+        carry: jax.Array | None = None,
+        x: jax.Array = None,
+        img: jax.Array = None,
+        *args,
+        **kwargs,
     ):  # type: ignore
         """Compute Action from observation."""
         if self.config.use_cnn:
-            x = ConvEncoder(
-                latent_size=self.config.latent_size, c_hid=self.config.c_hid
-            )(x)
+            if img is None:
+                img = x
+            img_enc = ConvEncoder(
+                latent_size=self.config.latent_size,
+                c_hid=self.config.c_hid,
+                name="cnn",
+            )(img)
+            if x is None:
+                input_shape = img_enc.shape[:-1] + (0,)
+                x = img_enc
+            else:
+                input_shape = x.shape
+                x = jnp.concatenate([x, img_enc], axis=-1)
+
         # Step RNN
         if carry is None:
-            carry = self.rnn.initialize_carry(jax.random.key(0), x.shape)
+            carry = self.rnn.initialize_carry(jax.random.key(0), input_shape)
         carry, x = self.rnn(carry, x, *args, **kwargs)
         return carry, x
 
@@ -137,6 +153,10 @@ class PolicyRNN(nn.RNNCellBase, Policy):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the RNN cell carry."""
+        if self.config.use_cnn:
+            input_shape = input_shape[:-1] + (
+                self.config.latent_size + input_shape[-1],
+            )
         return self.rnn.initialize_carry(rng, input_shape)
 
 

@@ -3,6 +3,7 @@
 import jax
 import optax
 from jax import numpy as jnp
+from flax import linen as nn
 from tqdm import trange
 
 
@@ -67,12 +68,14 @@ def train_rnn_online(
     return params, _losses
 
 
-def predict(model, params, x):
+def predict(model: nn.RNNCellBase, params, *inputs):
     """Predict a sequence of outputs given an input sequence."""
 
     def _step(carry, _x):
-        return model.apply(params, _x, carry)
+        return model.apply(params, carry, *_x)
 
-    h0 = model.apply(params, jax.random.PRNGKey(0), x[0].shape, method=model.initialize_carry)
-    outs = jax.lax.scan(_step, h0, x)[1]
+    h0 = model.apply(
+        params, jax.random.PRNGKey(0), inputs[0].shape[1:], method=model.initialize_carry
+    )
+    outs = jax.lax.scan(_step, h0, inputs)[1]
     return outs
