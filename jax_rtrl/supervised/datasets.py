@@ -7,6 +7,7 @@ import jax
 
 from jax import numpy as jnp
 from jax import random as jrandom
+from tqdm import tqdm
 
 
 def split_train_test(dataset, percent_eval: float = 0.2):
@@ -92,7 +93,7 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
     print(f"Loading {len(files[:num_files])} files from {path}")
     data = []
     with jax.default_device(jax.devices("cpu")[0]):
-        for f in files[:num_files]:
+        for f in tqdm(files[:num_files]):
             d = jnp.load(f, allow_pickle=True)
             if is_npz:
                 d = dict(d)

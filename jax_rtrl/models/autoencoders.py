@@ -24,9 +24,13 @@ class ConvDecoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Decode Image from latent vector."""
-        xy_shape = np.array(self.img_shape[:2]) / (2 * 2)  # initial img shape depends on number of layers
+        xy_shape = np.array(self.img_shape[:2]) / (
+            2 * 2
+        )  # initial img shape depends on number of layers
         if any(xy_shape != xy_shape.astype(int)):
-            raise ValueError("The img x- and y-shapes must be divisible by number of expanding layers.")
+            raise ValueError(
+                "The img x- and y-shapes must be divisible by number of expanding layers."
+            )
 
         x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
         x = nn.relu(x)
@@ -50,17 +54,17 @@ class ConvEncoder(nn.Module):
     https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
 
     latent_size: int
-    c_hid: int = 8
+    c_hid: int = 16
 
     @nn.compact
     def __call__(self, x):
         """Encode given Image."""
         # Encode observation using CNN
-        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
+        x = nn.Conv(features=self.c_hid, kernel_size=(5, 5), strides=2)(x)
         x = nn.gelu(x)
-        x = nn.Conv(features=self.c_hid, kernel_size=(3, 3))(x)
+        x = nn.Conv(features=self.c_hid, kernel_size=(5, 5))(x)
         x = nn.gelu(x)
-        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
+        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
         x = nn.gelu(x)
         x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
         x = nn.gelu(x)
@@ -253,7 +257,9 @@ class DSAE_Encoder(nn.Module):
         x = nn.max_pool(x, window_shape=(2, 2), strides=(2, 2))
         x = nn.gelu(norm(x))
         x = nn.Conv(features=self.latent_size, kernel_size=(3, 3))(x)
-        out = SpatialSoftArgmax(temperature=self.temperature, normalise=self.tanh_output)(x)
+        out = SpatialSoftArgmax(
+            temperature=self.temperature, normalise=self.tanh_output
+        )(x)
         if self.twin_bottleneck:
             vec_out = nn.tanh(nn.Dense(self.latent_size)(x.flatten()))
             return out, vec_out
@@ -290,7 +296,9 @@ class SimpleConvDecoder(nn.Module):
     @nn.compact
     def __call__(self, x):
         """Decode Image from latent vector."""
-        xy_shape = np.array(self.img_shape[:2]) / 4  # initial img shape depends on number of layers
+        xy_shape = (
+            np.array(self.img_shape[:2]) / 4
+        )  # initial img shape depends on number of layers
         if any(xy_shape != xy_shape.astype(int)):
             raise ValueError("The img x- and y-shapes must be divisible by 4.")
 
@@ -299,7 +307,9 @@ class SimpleConvDecoder(nn.Module):
         x = x.reshape(*[int(n) for n in xy_shape], -1)
         x = nn.ConvTranspose(features=self.c_hid, kernel_size=(5, 5), strides=2)(x)
         x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3), strides=2)(x)
+        x = nn.ConvTranspose(
+            features=self.img_shape[-1], kernel_size=(3, 3), strides=2
+        )(x)
         return nn.tanh(x) if self.tanh_output else x
 
 
@@ -321,13 +331,19 @@ class DeepSpatialAutoencoder(nn.Module):
         )
         if self.config.decoder == "SimpleConv":
             self.decoder = SimpleConvDecoder(
-                img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec
+                img_shape=self.image_output_size,
+                tanh_output=self.config.tanh_output,
+                c_hid=self.config.c_hid_dec,
             )
         elif self.config.decoder == "Linear":
-            self.decoder = LinearDecoder(img_shape=self.image_output_size, tanh_output=self.config.tanh_output)
+            self.decoder = LinearDecoder(
+                img_shape=self.image_output_size, tanh_output=self.config.tanh_output
+            )
         elif self.config.decoder == "Conv":
             self.decoder = ConvDecoder(
-                img_shape=self.image_output_size, tanh_output=self.config.tanh_output, c_hid=self.config.c_hid_dec
+                img_shape=self.image_output_size,
+                tanh_output=self.config.tanh_output,
+                c_hid=self.config.c_hid_dec,
             )
 
     def encode(self, x, train: bool = True):
@@ -346,7 +362,9 @@ class DeepSpatialAutoencoder(nn.Module):
         enc_out = self.encoder(x, train=train)
         if self.config.twin_bottleneck:
             spatial_features, vec_features = enc_out
-            features = jnp.concatenate([spatial_features.flatten(), vec_features], axis=-1)
+            features = jnp.concatenate(
+                [spatial_features.flatten(), vec_features], axis=-1
+            )
         else:
             features = enc_out.flatten()
         return self.decoder(features), features

@@ -139,6 +139,8 @@ class PolicyRNN(nn.RNNCellBase, Policy):
             else:
                 input_shape = x.shape
                 x = jnp.concatenate([x, img_enc], axis=-1)
+        else:
+            input_shape = x.shape
 
         # Step RNN
         if carry is None:
