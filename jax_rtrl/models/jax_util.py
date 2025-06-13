@@ -80,13 +80,25 @@ def restore_params_and_config(path):
 def checkpointing(path, fresh=False, hparams: dict = None):
     """Set up checkpointing at given path.
 
-    Returns:
-        params : PyTree
-                Restored parameters or None if no checkpoint found or fresh is True.
+    Parameters
+    ----------
+    path : str
+        Path to the checkpoint directory.
+    fresh : bool, optional
+        If True, overwrite existing checkpoint. Default is False.
+    hparams : dict, optional
+        Hyper-parameters to be saved alongside model params.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+            - params : PyTree or None
+                Restored parameters, or None if no checkpoint found or fresh is True.
+            - hparams : dict
+                Restored or provided hyper-parameters.
         save_model : Callable
-                Function (PyTree->None) for saving given PyTree
-        hparams : dict
-                Stores given hyper-parameters alongside model params as json
+            Function (PyTree -> None) for saving given PyTree.
     """
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
@@ -95,9 +107,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
-        _params = jax.tree.map(
-            lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
-        )
+        _params = jax.tree.map(lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params)
         return checkpointer.save(orbax_path, _params, force=True)
 
     restored_params = None

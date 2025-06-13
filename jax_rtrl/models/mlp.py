@@ -25,14 +25,14 @@ class FADense(nn.Dense):
                 "B",
                 self.kernel_init,
                 self.make_rng() if self.has_rng("params") else None,
-                (jnp.shape(x)[-1], self.features),
+                (x.shape[-1], self.features),
                 self.param_dtype,
             ).value
         else:
             B = self.param(
                 "kernel",
                 self.kernel_init,
-                (jnp.shape(x)[-1], self.features),
+                (x.shape[-1], self.features),
                 self.param_dtype,
             )
 
@@ -212,11 +212,7 @@ class DistributionLayer(nn.Module):
             loc, scale = jnp.split(x, 2, axis=-1)
             return distrax.Normal(loc, jax.nn.softplus(scale) + self.eps)
         elif self.distribution == "Categorical":
-            out_size = (
-                np.prod(self.out_size)
-                if isinstance(self.out_size, tuple)
-                else self.out_size
-            )
+            out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
             x = FADense(out_size, f_align=self.f_align)(x)
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)

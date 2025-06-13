@@ -29,9 +29,7 @@ def train_rnn_online(
             __params, _opt_state, _key, h = carry
             __x, __y = _data
             # _key, key_batch = jrand.split(_key)
-            (current_loss, h), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-                __params, __x, __y, h
-            )
+            (current_loss, h), grads = jax.value_and_grad(loss_fn, has_aux=True)(__params, __x, __y, h)
             updates, _opt_state = optimizer.update(grads, _opt_state, __params)
             __params = optax.apply_updates(__params, updates)
 
@@ -52,9 +50,7 @@ def train_rnn_online(
 
         def print_progress(i, loss):
             pbar.update()
-            pbar.set_description(
-                f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False
-            )
+            pbar.set_description(f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False)
 
         jax.debug.callback(print_progress, n, current_loss)
         return step_carry, current_loss
@@ -75,7 +71,10 @@ def predict(model: nn.RNNCellBase, params, *inputs):
         return model.apply(params, carry, *_x)
 
     h0 = model.apply(
-        params, jax.random.PRNGKey(0), inputs[0].shape[1:], method=model.initialize_carry
+        params,
+        jax.random.PRNGKey(0),
+        inputs[0].shape[1:],
+        method=model.initialize_carry,
     )
     outs = jax.lax.scan(_step, h0, inputs)[1]
     return outs
