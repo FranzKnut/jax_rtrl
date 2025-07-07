@@ -299,8 +299,8 @@ class OnlineCTRNNCell(CTRNNCell):
             _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
             _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
             input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
-        # Lazy initialize to get the parameter shapes
-        params = self.lazy_init(
+        # initialize to get the parameter shapes
+        params = self.init(
             rng,
             (_h, None, None),
             jnp.zeros(input_shape),

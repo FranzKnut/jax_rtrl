@@ -150,6 +150,8 @@ def sine(length=100, offset=2, num_periods=3):
 
 def rollouts(data_folder, with_time=False):
     """Load a dataset from the BulletEnv simulator.
+    
+    TODO: redundant with load_np_files_from_folder, refactor to use it.
 
     :param name: Environment name
     :param y_mode: 'obs' for learning observations (auto-regression), 'act' for learning actions
