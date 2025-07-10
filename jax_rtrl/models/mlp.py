@@ -211,15 +211,12 @@ class DistributionLayer(nn.Module):
             x = FADense(2 * self.out_size, f_align=self.f_align)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
             return distrax.Normal(loc, jax.nn.softplus(scale) + self.eps)
-        elif self.distribution == "Categorical":
+        elif self.distribution in ["Categorical", "Bernoulli"]:
             out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
             x = FADense(out_size, f_align=self.f_align)(x)
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
-            return distrax.Categorical(logits=x)
-        elif self.distribution == "Bernoulli":
-            x = FADense(self.out_size, f_align=self.f_align)(x)
-            return distrax.Bernoulli(logits=x)
+            return getattr(distrax, self.distribution)(logits=x)
         else:
             # Becomes deterministic
             return FADense(self.out_size, f_align=self.f_align)(x)
