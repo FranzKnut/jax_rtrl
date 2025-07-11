@@ -45,7 +45,7 @@ class CTRNNCell(nn.RNNCellBase):
     num_units: int
     dt: float = 1.0
     ode_type: str = "murray"
-    wiring: str | None = None 
+    wiring: str | None = None
     wiring_kwargs: dict = field(default_factory=dict)
 
     @nn.compact
@@ -58,9 +58,7 @@ class CTRNNCell(nn.RNNCellBase):
 
         def _initializer(key, *_):
             _w_in = nn.initializers.orthogonal(0.1)(key, (self.num_units, x.shape[-1]))
-            _w_rec = nn.initializers.orthogonal(0.1)(
-                key, (self.num_units, self.num_units)
-            )
+            _w_rec = nn.initializers.orthogonal(0.1)(key, (self.num_units, self.num_units))
             _bias = jnp.zeros((self.num_units, 1))
             return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
 
@@ -76,11 +74,10 @@ class CTRNNCell(nn.RNNCellBase):
                 int,
             ).value
             W = jax.lax.stop_gradient(mask) * W
+
         # Compute updates
         if self.ode_type == "murray":
-            tau = self.param(
-                "tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,)
-            )
+            tau = self.param("tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,))
             df_dt = ctrnn_ode((W, tau), h, x)
         elif self.ode_type == "tg":
             W_tau = self.param(
@@ -108,9 +105,7 @@ def clip_tau(params):
     return set_matching_leaves(
         params,
         ".*tau.*",
-        jax.tree.map(
-            partial(jnp.clip, min=1.0), get_matching_leaves(params, ".*tau.*")
-        ),
+        jax.tree.map(partial(jnp.clip, min=1.0), get_matching_leaves(params, ".*tau.*")),
     )
 
 
@@ -259,9 +254,7 @@ class OnlineCTRNNCell(CTRNNCell):
             """Backward pass using RTRL."""
             # carry, jp, jx, hebb = tmp
             df_dy = y_bar[-1]
-            grads_p, grads_x = self.rtrl_gradient(
-                tmp, df_dy, plasticity=self.plasticity
-            )
+            grads_p, grads_x = self.rtrl_gradient(tmp, df_dy, plasticity=self.plasticity)
             # grads_p['W'] += hebb
             carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
             return ({"params": grads_p}, carry, grads_x)
@@ -310,9 +303,7 @@ class OnlineCTRNNCell(CTRNNCell):
             params = jax.tree.map(lambda x: x[0], params)
         # Initialize the jacobian traces
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
-        jp = jax.tree.map(
-            lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
-        )
+        jp = jax.tree.map(lambda x: jnp.zeros(leading_shape + x.shape), params["params"])
         return h, jp, jx
 
 

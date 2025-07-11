@@ -101,6 +101,8 @@ class MLP(nn.Module):
 
     activation_fn is applied after every layer except the last one.
     If f_align is true, each layer uses feedback alignment instead of backpropagation.
+    
+    TODO: Add support for dropout and batch normalization.
     """
 
     layers: list
@@ -108,7 +110,7 @@ class MLP(nn.Module):
     f_align: bool = False
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, training: bool = True):
         """Call MLP."""
         for size in self.layers[:-1]:
             x = self.activation_fn(FADense(size, f_align=self.f_align)(x))
@@ -143,7 +145,7 @@ class MLPEnsemble(nn.Module):
     skip_connection: bool = False
 
     @nn.compact
-    def __call__(self, x):  # noqa
+    def __call__(self, x, training: bool = True):  # noqa
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -166,7 +168,7 @@ class MLPEnsemble(nn.Module):
         outs = []
         for i in range(self.num_modules):
             # Loop over rnn submodules
-            out = self.model(**self.kwargs, name=f"mlp{i}")(x)
+            out = self.model(**self.kwargs, name=f"mlp{i}")(x, training=training)
             # Optional Skip connection
             if self.skip_connection:
                 # FIXME: That's not what a skip-connection is!

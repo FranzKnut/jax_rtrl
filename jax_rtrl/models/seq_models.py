@@ -99,7 +99,6 @@ class SequenceLayer(nn.Module):
     config: SequenceLayerConfig = field(
         default_factory=SequenceLayerConfig
     )  # configuration for the layer
-    training: bool = True  # training mode (dropout in training mode only)
     num_blocks: int = 1  # Number of input chunks for parallel processing
     rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN
 
@@ -113,20 +112,30 @@ class SequenceLayer(nn.Module):
         )
 
     @nn.compact
-    def __call__(self, hidden, inputs, *args, **kwargs):
+    def __call__(self, hidden, inputs, training=True, *args, **kwargs):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
         if self.config.norm in ["layer"]:
             normalization = nn.LayerNorm()
         elif self.config.norm in ["batch"]:
-            normalization = nn.BatchNorm(use_running_average=not self.training, axis_name="batch")
+            normalization = nn.BatchNorm(use_running_average=not training, axis_name="batch")
         else:
             normalization = lambda x: x  # noqa
-        drop = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not self.training)
 
-        x = normalization(inputs)  # pre normalization
-        hidden, x = self.seq(hidden, x, *args, **kwargs)  # call seq model
+        # input dropout
+        drop = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)
+        x = drop(normalization(inputs))  # pre normalization
+
+        # hidden dropout should not affect rnn aux state
+        # TODO: implement as zoneout (replacing by previous hidden state)
+        # hidden = (drop(hidden[0]), *hidden[1:]) if isinstance(hidden, tuple) else drop(hidden)
+
+        # call seq model
+        hidden, x = self.seq(hidden, x, *args, **kwargs)
+
+        # Optional skip connection
         if self.config.skip_connection:
             x = x + inputs
+
         x = FADense(self.d_output or hidden.shape[-1])(drop(x))
         if self.config.glu:
             # Gated Linear Unit
@@ -192,11 +201,11 @@ class MultiLayerRNN(nn.RNNCellBase):
         return 1
 
     @nn.compact
-    def __call__(self, carries, x, *args, **kwargs):
+    def __call__(self, carries, x, training=True, *args, **kwargs):
         """Call MLP."""
         x = self.input(x)
         for i, rnn in enumerate(self.layers):
-            carries[i], x = rnn(carries[i], x, *args, **kwargs)
+            carries[i], x = rnn(carries[i], x, training, *args, **kwargs)
         return carries, x
 
 
@@ -217,10 +226,10 @@ class FAMultiLayerRNN(MultiLayerRNN):
         self.input = FADense(self.sizes[0], f_align=self.fa_type in ["fa", "dfa"], name="input")
 
     @nn.compact
-    def __call__(self, carries, x, *args, **kwargs):
+    def __call__(self, carries, x, training=True, *args, **kwargs):
         """Call the MultiLayerRNN with the given carries and input x."""
         if self.fa_type == "bp":
-            return MultiLayerRNN.__call__(self, carries, x, *args, **kwargs)
+            return MultiLayerRNN.__call__(self, carries, x, training, *args, **kwargs)
         elif self.fa_type in ["fa", "dfa"]:
             Bs = [
                 self.variable(
@@ -380,7 +389,8 @@ class RNNEnsemble(nn.RNNCellBase):
         self.ensembles = make_batched_model(
             FAMultiLayerRNN,
             split_rngs=True,
-            split_inputs=(0, None) + (None,) * self.num_submodule_extra_args,
+            # h, x, training, (*call_args, **call_kwargs)
+            split_inputs=(0, None, None) + (None,) * self.num_submodule_extra_args,
             axis_size=self.config.num_modules,
         )(
             self.config.layers,
@@ -435,6 +445,7 @@ class RNNEnsemble(nn.RNNCellBase):
         self,
         h: jax.Array | None = None,
         x: jax.Array = None,
+        training: bool = True,
         *call_args,
         **call_kwargs,
     ):  # noqa
@@ -447,6 +458,12 @@ class RNNEnsemble(nn.RNNCellBase):
             of rnn submodule states
         x : Array
             input
+        training : bool
+            whether the model is in training mode (affects dropout behavior)
+        call_args : tuple
+            additional arguments for the RNN submodules
+        call_kwargs : dict
+            additional keyword arguments for the RNN submodules
 
         Returns:
         _type_
@@ -457,7 +474,7 @@ class RNNEnsemble(nn.RNNCellBase):
         outs = []
         carry_out = []
         # loop over rnn submodules
-        carry_out, outs = self.ensembles(h, x, *call_args, **call_kwargs)
+        carry_out, outs = self.ensembles(h, x, training, *call_args, **call_kwargs)
 
         # Post-process and aggregate outputs
         outs = self._postprocessing(outs, x)
