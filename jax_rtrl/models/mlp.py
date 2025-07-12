@@ -101,7 +101,7 @@ class MLP(nn.Module):
 
     activation_fn is applied after every layer except the last one.
     If f_align is true, each layer uses feedback alignment instead of backpropagation.
-    
+
     TODO: Add support for dropout and batch normalization.
     """
 
@@ -221,4 +221,5 @@ class DistributionLayer(nn.Module):
             return getattr(distrax, self.distribution)(logits=x)
         else:
             # Becomes deterministic
-            return FADense(self.out_size, f_align=self.f_align)(x)
+            x = FADense(self.out_size, f_align=self.f_align)(x)
+            return distrax.Deterministic(x)
