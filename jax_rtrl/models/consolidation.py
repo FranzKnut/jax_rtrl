@@ -142,7 +142,7 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
     )
 
 
-def compute_weight_consolidation_loss(state: WeightConsolidationState, theta):
+def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
     """Compute the weight consolidation loss for online continual learning.
 
     TODO: Consider renaming to compute_consolidation_penalty for clarity.
