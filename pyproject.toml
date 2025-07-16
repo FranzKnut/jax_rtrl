@@ -15,6 +15,7 @@ simple-parsing = "^0.1.6"
 distrax = "*"
 tqdm = "^4.67.0"
 poethepoet = "*"
+jaxtyping      = "*"
 
 
 [build-system]
