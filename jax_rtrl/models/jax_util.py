@@ -32,6 +32,11 @@ def symlog(x):
     return jnp.sign(x) * jnp.log(jnp.abs(x) + 1)
 
 
+def symexp(x):
+    """Inverse of symmetric log."""
+    return jnp.sign(x) * jnp.exp(jnp.abs(x)) - 1
+
+
 def sigmoid_between(x, lower, upper):
     """Map input to sigmoid that goes from lower to upper."""
     return (upper - lower) * jax.nn.sigmoid(x) + lower
@@ -121,6 +126,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
             print("Overwriting existing checkpoint")
         else:
             restored_params, restored_hparams = restore_params_and_config(path)
+            print("Restored checkpoint")
 
     if (not exists or fresh) and hparams is not None:
         os.makedirs(path, exist_ok=True)
@@ -219,11 +225,29 @@ def make_validate(_model, test_data, **kwargs):
     return _validate
 
 
+def get_keystr(k):
+    """Even prettier key string."""
+
+    def _str(_k):
+        if hasattr(_k, "key"):
+            return _k.key
+        return str(_k)
+
+    return "/".join(map(_str, k))
+
+
 def get_matching_leaves(tree, pattern):
     """Get leaves of tree that match pattern."""
     flattened, _ = jax.tree_util.tree_flatten_with_path(tree)
-    flattened = {jax.tree_util.keystr(k): v for k, v in flattened}
+    flattened = {get_keystr(k): v for k, v in flattened}
     return [flattened[k] for k in flattened if re.fullmatch(pattern, k)]
+
+
+def get_subtree(tree, prefix):
+    """Get subtree of tree that matches pattern."""
+    tree, _ = jax.tree_util.tree_flatten_with_path(tree)
+    tree = {get_keystr(k): v for k, v in tree}
+    return {k: v for k, v in tree.items() if re.fullmatch(prefix + ".*", k)}
 
 
 def set_matching_leaves(tree, pattern, new_values):

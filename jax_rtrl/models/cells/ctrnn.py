@@ -25,6 +25,18 @@ def ctrnn_ode(params, h, x):
     return (act - h) / tau
 
 
+def ctrnn_ode_tau_softplus(params, h, x, min_tau=1.0):
+    """Compute euler integration step or CTRNN ODE."""
+    W, b_tau = params
+    # Concatenate input and hidden state and ones for bias
+    y = jnp.hstack([x, h, jnp.ones(x.shape[:-1] + (1,))])
+    # This way we only need one FC layer for recurrent and input connections
+    u = y @ W.T
+    act = jnp.tanh(u)
+    # Subtract decay and divide by tau
+    return (act - h) / (jax.nn.softplus(b_tau) + min_tau)
+
+
 def ctrnn_tg(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
     W, W_tau = params
@@ -32,9 +44,9 @@ def ctrnn_tg(params, h, x):
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     act = jnp.tanh(y @ W.T)
-    # tau = jax.nn.softplus(y @ W_tau.T) + 1
+    tau = jax.nn.softplus(y @ W_tau.T) + 1
     # tau = jax.nn.softmax(y @ W_tau.T)
-    tau = jax.nn.sigmoid(y @ W_tau.T)
+    # tau = jax.nn.sigmoid(y @ W_tau.T)
     # Subtract decay and divide by tau
     return (act - h) * tau
 
@@ -44,9 +56,10 @@ class CTRNNCell(nn.RNNCellBase):
 
     num_units: int
     dt: float = 1.0
-    ode_type: str = "murray"
+    ode_type: str = "tau_softplus"
     wiring: str | None = None
     wiring_kwargs: dict = field(default_factory=dict)
+    tau_min: float = 1.0  # minimum value for tau used in ctrnn_ode_tau_softplus
 
     @nn.compact
     def __call__(self, h, x):  # noqa
@@ -79,6 +92,9 @@ class CTRNNCell(nn.RNNCellBase):
         if self.ode_type == "murray":
             tau = self.param("tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,))
             df_dt = ctrnn_ode((W, tau), h, x)
+        elif self.ode_type == "tau_softplus":
+            tau = self.param("tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,))
+            df_dt = ctrnn_ode_tau_softplus((W, tau), h, x, min_tau=self.tau_min)
         elif self.ode_type == "tg":
             W_tau = self.param(
                 "W_tau",
@@ -86,6 +102,7 @@ class CTRNNCell(nn.RNNCellBase):
                 (self.num_units, x.shape[-1] + self.num_units + 1),
             )
             df_dt = ctrnn_tg((W, W_tau), h, x)
+
         # Euler integration step with dt
         out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
         return out, out
@@ -182,6 +199,49 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     return df_dw, dh_dx  # , hebb
 
 
+def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
+    """Compute jacobian trace for RFLO."""
+    h, jp, jx = carry
+    W, b_tau = params.values()
+    tau = jax.nn.softplus(b_tau) + cell.tau_min
+
+    jw = jp["W"]
+    jtau = jp["tau"]
+
+    # immediate jacobian (this step)
+    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    u = v @ W.T
+    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
+    # df_dh = jax.jacrev(jax.nn.tanh)(u)
+    df_dh = 1 - jnp.tanh(u) ** 2
+    # post = jnp.tanh(u)
+
+    # hebb = hebbian(v, post)
+
+    # Outer product the get Immediate Jacobian
+    # M_immediate = jnp.einsum('ij,k', df_dh, v)
+    M_immediate = df_dh[..., None] * v[None]
+
+    # Update eligibility traces
+    jw += (1 / tau)[:, None] * (M_immediate - jw)
+    dh_dtau = ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau) - jtau
+    jtau += dh_dtau / tau
+
+    df_dw = {"W": jw, "tau": jtau}
+    dh_dx = jnp.outer(
+        df_dh,
+        (
+            jnp.concatenate(
+                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
+                axis=-1,
+            )
+            @ W.T
+        )[..., : x.shape[-1]],
+    )
+    # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
+    return df_dw, dh_dx  # , hebb
+
+
 # def rflo_tg(cell: CTRNNCell, carry, params, x):
 #     """Compute jacobian trace for RFLO."""
 #     h, jp, jx = carry
@@ -228,7 +288,12 @@ class OnlineCTRNNCell(CTRNNCell):
             if self.plasticity == "rtrl":
                 traces = rtrl_ctrnn(self, carry, _p, x)
             elif self.plasticity == "rflo":
-                traces = rflo_murray(self, carry, _p, x)
+                if self.ode_type == "murray":
+                    traces = rflo_murray(self, carry, _p, x)
+                elif self.ode_type == "tau_softplus":
+                    traces = rflo_tau_softplus(self, carry, _p, x)
+                else:
+                    raise ValueError(f"ODE type {self.ode_type} not recognized.")
             else:
                 raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
             return traces

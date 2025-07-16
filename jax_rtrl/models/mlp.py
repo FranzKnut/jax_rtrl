@@ -209,17 +209,30 @@ class DistributionLayer(nn.Module):
                 activation_fn=jax.nn.relu,
                 f_align=self.f_align,
             )(x)
-        if self.distribution == "Normal":
+        if self.distribution in ["Normal", "ScaledNormal"]:
             x = FADense(2 * self.out_size, f_align=self.f_align)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
-            return distrax.Normal(loc, jax.nn.softplus(scale) + self.eps)
+            dist_name = self.distribution.replace("Scaled", "")
+            dist = getattr(distrax, dist_name)(loc, jax.nn.softplus(scale) + self.eps)
+            if self.distribution.startswith("Scaled"):
+                # Define limits and scale for bounded distributions
+                min_val = self.param("min_val", nn.initializers.constant(-1.0), self.out_size)
+                max_val = self.param("max_val", nn.initializers.constant(1.0), self.out_size)
+                # sigmoid_transform = distrax.Sigmoid()
+                bij = distrax.ScalarAffine(min_val, max_val - min_val)
+                # bij = distrax.Chain([scaling_transform, sigmoid_transform])
+                dist = distrax.Transformed(dist, bij)
         elif self.distribution in ["Categorical", "Bernoulli"]:
             out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
             x = FADense(out_size, f_align=self.f_align)(x)
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
-            return getattr(distrax, self.distribution)(logits=x)
-        else:
+            dist = getattr(distrax, self.distribution)(logits=x)
+        elif self.distribution == "Deterministic" or self.distribution is None:
             # Becomes deterministic
             x = FADense(self.out_size, f_align=self.f_align)(x)
-            return distrax.Deterministic(x)
+            dist = distrax.Deterministic(x)
+        else:
+            raise ValueError(f"Unsupported distribution type: {self.distribution}")
+
+        return dist
