@@ -17,7 +17,7 @@ def ctrnn_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
     W, tau = params
     # Concatenate input and hidden state and ones for bias
-    y = jnp.hstack([x, h, jnp.ones(x.shape[:-1] + (1,))])
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     u = y @ W.T
     act = jnp.tanh(u)
@@ -29,7 +29,7 @@ def ctrnn_ode_tau_softplus(params, h, x, min_tau=1.0):
     """Compute euler integration step or CTRNN ODE."""
     W, b_tau = params
     # Concatenate input and hidden state and ones for bias
-    y = jnp.hstack([x, h, jnp.ones(x.shape[:-1] + (1,))])
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     u = y @ W.T
     act = jnp.tanh(u)

@@ -34,7 +34,7 @@ def symlog(x):
 
 def symexp(x):
     """Inverse of symmetric log."""
-    return jnp.sign(x) * jnp.exp(jnp.abs(x)) - 1
+    return jnp.sign(x) * jnp.exp(jnp.abs(x) - 1)
 
 
 def sigmoid_between(x, lower, upper):
