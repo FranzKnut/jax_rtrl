@@ -69,10 +69,20 @@ def init_weight_consolidation_state(decay, theta):
     )
 
 
+def set_theta_ref(state: WeightConsolidationState, new_theta_ref: jax.Array):
+    """Set the reference parameters (theta_ref) for online weight consolidation.
+
+    Args:
+        state: The current consolidation state.
+        new_theta_ref: The new reference parameters.
+    """
+    return state.replace(theta_ref=new_theta_ref)
+
+
 def update_reg_strength(
     state: WeightConsolidationState,
     new_theta,
-    reset: bool = False,
+    reset_omega: bool = False,
     xi: float = 1e-6,
 ):
     """Update the regularization strength for online weight consolidation.
@@ -104,16 +114,14 @@ def update_reg_strength(
         state.theta_ref,
     )
     return state.replace(
-        omega=zeros_like_tree(new_theta) if reset else state.omega,
+        omega=zeros_like_tree(new_theta) if reset_omega else state.omega,
         reg_strength=new_reg_strength,
         theta_ref=new_theta,
     )
 
 
-def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
+def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt, use_abs: bool = False):
     """Update the importance weights (omega) for online continual learning.
-
-    TODO: Consider renaming to update_importance_weights for clarity.
 
     Args:
         state: The current consolidation state.
@@ -129,14 +137,43 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
     # Online Synaptic Intelligence approximation
     def _update_omega_online(old_omega, grad, param_update):
         # Compute importance as interaction between gradient and parameter change
-        # new_importance = grad * param_update
+        new_importance = grad**2
+        # if use_abs:
+        #     new_importance = jax.tree.map(jnp.abs, new_importance)
         # Use exponential moving average for online adaptation
-        # return state.decay * old_omega + (1 - state.decay) * new_importance
-        return grad * param_update
+        return state.decay * old_omega + (1 - state.decay) * new_importance
+        # return new_importance + old_omega
 
     return state.replace(
         omega=jax.tree.map(_update_omega_online, state.omega, dL_dtheta, dtheta_dt)
     )
+
+
+def update_fisher_information(state: WeightConsolidationState, dL_dtheta):
+    """Update the approximation of the Fisher Information Matrix for online continual learning.
+
+    Args:
+        state: The current consolidation state.
+        dL_dtheta: The gradient of the loss with respect to the parameter.
+        dtheta_dt: The update that was applied to the parameter.
+
+    Note:
+        This function approximates the Fisher Information Matrix using the
+        relationship between gradients and parameter updates. For online learning,
+        we use exponential moving average to adapt to distribution changes.
+    """
+
+    # Online Synaptic Intelligence approximation
+    def _update_fi(old_strength, grad):
+        # Compute importance as interaction between gradient and parameter change
+        new_importance = grad**2
+        # if use_abs:
+        #     new_importance = jax.tree.map(jnp.abs, new_importance)
+        # Use exponential moving average for online adaptation
+        return state.decay * old_strength + new_importance
+        # return new_importance + old_omega
+
+    return state.replace(reg_strength=jax.tree.map(_update_fi, state.reg_strength, dL_dtheta))
 
 
 def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
@@ -187,42 +224,3 @@ def should_consolidate(
     avg_change = jnp.mean(jnp.array(jax.tree.leaves(changes)))
 
     return avg_change > threshold
-
-
-def consolidate_online(state: WeightConsolidationState, new_theta_ref):
-    """Consolidate parameters for online continual learning.
-
-    This wraps update_reg_strength with reset=True for explicit consolidation.
-    Should be called when significant parameter drift is detected or periodically.
-
-    Args:
-        state: Current consolidation state.
-        new_theta_ref: Parameters to use as new reference.
-
-    Returns:
-        Updated state with consolidated parameters.
-    """
-    return update_reg_strength(state, new_theta_ref, reset=True)
-
-
-def get_consolidation_stats(state: WeightConsolidationState):
-    """Get statistics about the current consolidation state.
-
-    Returns:
-        Dictionary with consolidation statistics for monitoring.
-    """
-    omega_stats = jax.tree.map(
-        lambda x: {"mean": jnp.mean(x), "std": jnp.std(x), "max": jnp.max(x), "min": jnp.min(x)},
-        state.omega,
-    )
-
-    reg_stats = jax.tree.map(
-        lambda x: {"mean": jnp.mean(x), "std": jnp.std(x), "max": jnp.max(x), "min": jnp.min(x)},
-        state.reg_strength,
-    )
-
-    return {
-        "omega_stats": omega_stats,
-        "reg_strength_stats": reg_stats,
-        "decay": state.decay,
-    }
