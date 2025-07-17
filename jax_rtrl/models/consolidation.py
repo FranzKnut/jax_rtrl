@@ -7,7 +7,7 @@ where task boundaries are not known explicitly. Based on:
 
 Example usage for online continual learning:
     # Initialize consolidation state
-    state = init_weight_consolidation_state(factor=1000.0, decay=0.95, theta=initial_params)
+    state = init_weight_consolidation_state(decay=0.95, theta=initial_params)
 
     # Online learning loop (no explicit task boundaries):
     for step, batch in enumerate(data_stream):
@@ -46,25 +46,22 @@ class WeightConsolidationState:
     TODO: Consider renaming to OnlineConsolidationState for clarity.
     """
 
-    factor: float  # Consolidation strength (lambda)
     omega: PyTree  # Importance weights (approximates Fisher Information)
     reg_strength: jax.Array  # Regularization strength per parameter
     theta_ref: jax.Array  # Reference parameters from last consolidation
     decay: float = 0.9  # Decay factor for online updates
 
 
-def init_weight_consolidation_state(factor, decay, theta):
+def init_weight_consolidation_state(decay, theta):
     """Initialize the state for online weight consolidation.
 
     TODO: Consider renaming to init_online_consolidation_state for clarity.
 
     Args:
-        factor: Consolidation strength (lambda).
         decay: Decay factor for exponential moving averages.
         theta: Initial parameters.
     """
     return WeightConsolidationState(
-        factor=factor,
         decay=decay,
         omega=zeros_like_tree(theta),
         reg_strength=zeros_like_tree(theta),
@@ -96,7 +93,7 @@ def update_reg_strength(
     def _update_reg_strength(reg_st, omega, t, t_ref):
         # Online update: balance between accumulated importance (omega) and parameter drift
         param_drift = (t - t_ref) ** 2 + xi
-        importance_contribution = jnp.abs(omega) / (param_drift + xi)
+        importance_contribution = omega / param_drift
         return state.decay * reg_st + (1 - state.decay) * importance_contribution
 
     new_reg_strength = jax.tree.map(
@@ -129,13 +126,13 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
         we use exponential moving average to adapt to distribution changes.
     """
 
-    # Online Fisher Information approximation with exponential decay
-    # omega approximates the diagonal Fisher Information: F_ii ≈ |∇L|² / |Δθ|²
+    # Online Synaptic Intelligence approximation
     def _update_omega_online(old_omega, grad, param_update):
         # Compute importance as interaction between gradient and parameter change
-        new_importance = jnp.abs(grad * param_update)
+        # new_importance = grad * param_update
         # Use exponential moving average for online adaptation
-        return state.decay * old_omega + (1 - state.decay) * new_importance
+        # return state.decay * old_omega + (1 - state.decay) * new_importance
+        return grad * param_update
 
     return state.replace(
         omega=jax.tree.map(_update_omega_online, state.omega, dL_dtheta, dtheta_dt)
@@ -145,14 +142,11 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
 def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
     """Compute the weight consolidation loss for online continual learning.
 
-    TODO: Consider renaming to compute_consolidation_penalty for clarity.
-
     The consolidation loss is: L_consolidation = λ * Σ reg_strength_i * (θ_i - θ*_i)²
-    where reg_strength incorporates both importance (omega) and parameter drift.
     """
 
     def _consolidation_loss(strength, t, t_ref):
-        return state.factor * jnp.sum(strength * (t - t_ref) ** 2)
+        return jnp.mean(strength * (t - t_ref) ** 2)
 
     return jax.tree.reduce(
         operator.add,
@@ -230,6 +224,5 @@ def get_consolidation_stats(state: WeightConsolidationState):
     return {
         "omega_stats": omega_stats,
         "reg_strength_stats": reg_stats,
-        "factor": state.factor,
         "decay": state.decay,
     }
