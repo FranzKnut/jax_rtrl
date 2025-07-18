@@ -1,25 +1,25 @@
 [tool.poetry]
-name = "jax_rtrl"
-version = "0.1.1"
+name        = "jax_rtrl"
+version     = "0.1.1"
 description = ""
-authors = ["Julian Lemmel <julian.lemmel@tuwien.ac.at>"]
-readme = "README.md"
-packages = [{include = "jax_rtrl"}]
+authors     = ["Julian Lemmel <julian.lemmel@tuwien.ac.at>"]
+readme      = "README.md"
+packages    = [{ include = "jax_rtrl" }]
 
 [tool.poetry.dependencies]
-python = "^3.10"
-flax = "*"
-plotly = "^5.24.1"
-dacite = "^1.8.1"
+python         = "^3.10"
+flax           = "*"
+plotly         = "^5.24.1"
+dacite         = "^1.8.1"
 simple-parsing = "^0.1.6"
-distrax = "*"
-tqdm = "^4.67.0"
-poethepoet = "*"
+distrax        = "*"
+tqdm           = "^4.67.0"
+poethepoet     = "*"
 jaxtyping      = "*"
 
 
 [build-system]
-requires = ["poetry-core"]
+requires      = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poe.tasks]

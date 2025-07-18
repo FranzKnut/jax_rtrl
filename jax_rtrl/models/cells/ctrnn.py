@@ -351,21 +351,22 @@ class OnlineCTRNNCell(CTRNNCell):
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
 
         # HACK: if we are inside a batched setting, we need to replicate for self.init
-        _h = h
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            _outer_batch_size = rng._trace.axis_data.size
-            _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
-            _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
-            input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
+        # _h = h
+        # if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
+        #     _outer_batch_size = rng._trace.axis_data.size
+        #     _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
+        #     _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
+        #     input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
         # initialize to get the parameter shapes
         params = self.init(
             rng,
-            (_h, None, None),
+            (h, None, None),
             jnp.zeros(input_shape),
         )
-        # Now we also have to "unbatch" the params
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            params = jax.tree.map(lambda x: x[0], params)
+        # # Now we also have to "unbatch" the params
+        # if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
+        #     params = jax.tree.map(lambda x: x[0], params)
+        
         # Initialize the jacobian traces
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
         jp = jax.tree.map(lambda x: jnp.zeros(leading_shape + x.shape), params["params"])
