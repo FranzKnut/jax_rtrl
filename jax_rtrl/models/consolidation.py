@@ -144,9 +144,7 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt, use_abs:
         return state.decay * old_omega + (1 - state.decay) * new_importance
         # return new_importance + old_omega
 
-    return state.replace(
-        omega=jax.tree.map(_update_omega_online, state.omega, dL_dtheta, dtheta_dt)
-    )
+    return state.replace(omega=jax.tree.map(_update_omega_online, state.omega, dL_dtheta, dtheta_dt))
 
 
 def update_fisher_information(state: WeightConsolidationState, dL_dtheta):

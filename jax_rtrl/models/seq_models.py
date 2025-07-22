@@ -14,6 +14,7 @@ from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.s5 import S5Config
+from numpy import isin
 
 from .jax_util import zeros_like_tree
 from .mlp import MLP, DistributionLayer, FADense
@@ -96,9 +97,7 @@ class SequenceLayer(nn.Module):
     rnn_cls: type[nn.RNNCellBase]  # RNN class
     rnn_size: int  # Size of the RNN layer
     d_output: int = None  # output layer size, defaults to hidden_size
-    config: SequenceLayerConfig = field(
-        default_factory=SequenceLayerConfig
-    )  # configuration for the layer
+    config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)  # configuration for the layer
     num_blocks: int = 1  # Number of input chunks for parallel processing
     rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN
 
@@ -190,10 +189,16 @@ class MultiLayerRNN(nn.RNNCellBase):
         """Initialize the carry (hidden state) for the RNN layers."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
         shapes = [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]]
-        return [
-            _l.initialize_carry(rng, batch_size + in_size)
-            for _l, in_size in zip(self.layers, shapes)
-        ]
+        # Create a list of tuples of initial states for each layer
+        states = [_l.initialize_carry(rng, batch_size + in_size) for _l, in_size in zip(self.layers, shapes)]
+        return self._make_tuple_of_list_from_carries(states)
+
+    def _make_tuple_of_list_from_carries(self, carries):
+        """Convert list of tuples to a tuple of lists."""
+        if isinstance(carries[0], tuple):
+            return tuple([s[i] for s in carries] for i in range(len(carries[0])))
+        else:
+            return (carries,)
 
     @property
     def num_feature_axes(self) -> int:
@@ -204,9 +209,12 @@ class MultiLayerRNN(nn.RNNCellBase):
     def __call__(self, carries, x, training=True, *args, **kwargs):
         """Call MLP."""
         x = self.input(x)
+        new_carries = []
         for i, rnn in enumerate(self.layers):
-            carries[i], x = rnn(carries[i], x, training, *args, **kwargs)
-        return carries, x
+            _carry = carries[0][i] if len(carries) <= 1 else tuple(c[i] for c in carries)
+            _carry, x = rnn(_carry, x, training, *args, **kwargs)
+            new_carries.append(_carry)
+        return self._make_tuple_of_list_from_carries(new_carries), x
 
 
 class FAMultiLayerRNN(MultiLayerRNN):
@@ -251,11 +259,14 @@ class FAMultiLayerRNN(MultiLayerRNN):
             """Forward pass with tmp for backward pass."""
             vjps = []
             x, vjp_in = nn.vjp(FADense.__call__, mdl.input, x)
+            _new_carries = []
             for i, rnn in enumerate(mdl.layers):
-                (_carries[i], x), vjp_func = nn.vjp(SequenceLayer.__call__, rnn, _carries[i], x)
+                _carry = tuple(c[i] for c in _carries) if isinstance(_carries, tuple) else _carries[i]
+                (_carry, x), vjp_func = nn.vjp(SequenceLayer.__call__, rnn, _carry, x)
+                _new_carries.append(_carry)
                 vjps.append(vjp_func)
 
-            return (_carries, x), (vjp_in, vjps, _Bs)
+            return (mdl._make_tuple_of_list_from_carries(_new_carries), x), (vjp_in, vjps, _Bs)
 
         def bwd(tmp, y_bar):
             """Backward pass that may use feedback alignment."""
@@ -310,9 +321,7 @@ class BlockWrapper(nn.RNNCellBase):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN submodel."""
-        assert input_shape[-1] % self.num_blocks == 0, (
-            "input dimension must be divisible by num_blocks."
-        )
+        assert input_shape[-1] % self.num_blocks == 0, "input dimension must be divisible by num_blocks."
         block_shape = (*input_shape[:-1], input_shape[-1] // self.num_blocks)
         rng = jax.random.split(rng, self.num_blocks)
         # Block shape is the same for all blocks
@@ -436,9 +445,7 @@ class RNNEnsemble(nn.RNNCellBase):
         else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
-            outs = distrax.MixtureSameFamily(
-                distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs
-            )
+            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
         return outs
 
     def __call__(

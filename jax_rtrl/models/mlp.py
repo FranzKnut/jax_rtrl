@@ -184,11 +184,67 @@ class MLPEnsemble(nn.Module):
         else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
-            outs = distrax.MixtureSameFamily(
-                distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs
-            )
+            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
 
         return outs
+
+
+def straight_through_one_hot_wrapper(  # pylint: disable=invalid-name
+    Distribution,
+) -> distrax.DistributionLike:
+    """Wrap a distribution to use straight-through gradient for samples.
+
+    Also one-hot encodes the sample in case of Categorical distribution."""
+
+    def sample(self, seed, sample_shape=()):  # pylint: disable=g-doc-args
+        """Sampling with straight through biased gradient estimator.
+
+        Sample a value from the distribution, but backpropagate through the
+        underlying probability to compute the gradient.
+
+        References:
+          [1] Yoshua Bengio, Nicholas Léonard, Aaron Courville, Estimating or
+          Propagating Gradients Through Stochastic Neurons for Conditional
+          Computation, https://arxiv.org/abs/1308.3432
+
+        Args:
+          seed: a random seed.
+          sample_shape: the shape of the required sample.
+
+        Returns:
+          A sample with straight-through gradient.
+        """
+        # pylint: disable=protected-access
+        obj = Distribution(probs=self._probs, logits=self._logits)
+        assert isinstance(obj, (distrax.Categorical, distrax.Bernoulli))
+        sample = obj.sample(seed=seed, sample_shape=sample_shape)
+        probs = obj.probs
+        padded_probs = _pad(probs, sample.shape)
+
+        if isinstance(obj, distrax.Categorical):
+            sample = jax.nn.one_hot(sample, obj.probs.shape[-1])
+        # Keep sample unchanged, but add gradient through probs.
+        sample += padded_probs - jax.lax.stop_gradient(padded_probs)
+        return sample
+
+    def mode(self):
+        """Return the mode of the distribution."""
+        obj = Distribution(probs=self._probs, logits=self._logits)
+        assert isinstance(obj, (distrax.Categorical, distrax.Bernoulli))
+        mode = obj.mode()
+        if isinstance(obj, distrax.Categorical):
+            mode = jax.nn.one_hot(mode, obj.probs.shape[-1])
+        return mode
+
+    def _pad(probs, shape):
+        """Grow probs to have the same number of dimensions as shape."""
+        while len(probs.shape) < len(shape):
+            probs = probs[None]
+        return probs
+
+    parent_name = Distribution.__name__
+    # Return a new object, overriding sample.
+    return type("StraighThrough" + parent_name, (Distribution,), {"sample": sample, "mode": mode})
 
 
 class DistributionLayer(nn.Module):
@@ -227,7 +283,8 @@ class DistributionLayer(nn.Module):
             x = FADense(out_size, f_align=self.f_align)(x)
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
-            dist = getattr(distrax, self.distribution)(logits=x)
+            _dist = straight_through_one_hot_wrapper(getattr(distrax, self.distribution))
+            dist = _dist(logits=x)
         elif self.distribution == "Deterministic" or self.distribution is None:
             # Becomes deterministic
             x = FADense(self.out_size, f_align=self.f_align)(x)
