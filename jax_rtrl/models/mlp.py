@@ -8,6 +8,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
+from sklearn import kernel_approximation
 
 
 class FADense(nn.Dense):
@@ -108,13 +109,14 @@ class MLP(nn.Module):
     layers: list
     activation_fn: Callable = jax.nn.relu
     f_align: bool = False
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
 
     @nn.compact
     def __call__(self, x, training: bool = True):
         """Call MLP."""
         for size in self.layers[:-1]:
-            x = self.activation_fn(FADense(size, f_align=self.f_align)(x))
-        x = FADense(self.layers[-1], f_align=self.f_align)(x)
+            x = self.activation_fn(FADense(size, f_align=self.f_align, kernel_init=self.kernel_init)(x))
+        x = FADense(self.layers[-1], f_align=self.f_align, kernel_init=self.kernel_init)(x)
         return x
 
 
@@ -244,7 +246,7 @@ def straight_through_one_hot_wrapper(  # pylint: disable=invalid-name
 
     parent_name = Distribution.__name__
     # Return a new object, overriding sample.
-    return type("StraighThrough" + parent_name, (Distribution,), {"sample": sample, "mode": mode})
+    return type("StraightThrough" + parent_name, (Distribution,), {"sample": sample, "mode": mode})
 
 
 class DistributionLayer(nn.Module):
@@ -255,6 +257,7 @@ class DistributionLayer(nn.Module):
     distribution: str | None = "Normal"
     eps: float = 0.01
     f_align: bool = False
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
 
     @nn.compact
     def __call__(self, x):
@@ -264,9 +267,11 @@ class DistributionLayer(nn.Module):
                 layers=self.layers,
                 activation_fn=jax.nn.relu,
                 f_align=self.f_align,
+                kernel_init=self.kernel_init,
             )(x)
+
         if self.distribution in ["Normal", "ScaledNormal"]:
-            x = FADense(2 * self.out_size, f_align=self.f_align)(x)
+            x = FADense(2 * self.out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
             loc, scale = jnp.split(x, 2, axis=-1)
             dist_name = self.distribution.replace("Scaled", "")
             dist = getattr(distrax, dist_name)(loc, jax.nn.softplus(scale) + self.eps)
@@ -278,17 +283,24 @@ class DistributionLayer(nn.Module):
                 bij = distrax.ScalarAffine(min_val, max_val - min_val)
                 # bij = distrax.Chain([scaling_transform, sigmoid_transform])
                 dist = distrax.Transformed(dist, bij)
+
         elif self.distribution in ["Categorical", "Bernoulli"]:
+            _dist = getattr(distrax, self.distribution)
             out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
             x = FADense(out_size, f_align=self.f_align)(x)
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
-            _dist = straight_through_one_hot_wrapper(getattr(distrax, self.distribution))
-            dist = _dist(logits=x)
+            # Ensure probability of 1 is never lower than eps
+            # probs = jax.nn.sigmoid(x) if self.distribution == "Bernoulli" else jax.nn.softmax(x, axis=-1)
+            # probs = jnp.clip(probs, min=self.eps / probs.shape[-1])
+            # dist = straight_through_one_hot_wrapper(_dist)(probs=probs)
+            dist = straight_through_one_hot_wrapper(_dist)(logits=x)
+
         elif self.distribution == "Deterministic" or self.distribution is None:
             # Becomes deterministic
             x = FADense(self.out_size, f_align=self.f_align)(x)
             dist = distrax.Deterministic(x)
+
         else:
             raise ValueError(f"Unsupported distribution type: {self.distribution}")
 
