@@ -8,7 +8,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-from sklearn import kernel_approximation
 
 
 class FADense(nn.Dense):
