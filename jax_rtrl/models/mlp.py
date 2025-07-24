@@ -254,7 +254,7 @@ class DistributionLayer(nn.Module):
     out_size: int
     layers: tuple[int, ...] = ()
     distribution: str | None = "Normal"
-    eps: float = 0.01
+    eps: float = 0.01  # Unimix epsilon TODO: rename and write doc for Normal
     f_align: bool = False
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
 
@@ -269,11 +269,21 @@ class DistributionLayer(nn.Module):
                 kernel_init=self.kernel_init,
             )(x)
 
+        out_size = self.out_size
+
         if self.distribution in ["Normal", "ScaledNormal"]:
-            x = FADense(2 * self.out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
+            out_size = 2 * out_size
+        elif self.distribution in ["Categorical", "Bernoulli"] and isinstance(out_size, tuple):
+            out_size = np.prod(out_size)
+
+        x = FADense(out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
+
+        dist_name = self.distribution.replace("Scaled", "")
+        _dist = getattr(distrax, dist_name)
+
+        if self.distribution in ["Normal", "ScaledNormal"]:
             loc, scale = jnp.split(x, 2, axis=-1)
-            dist_name = self.distribution.replace("Scaled", "")
-            dist = getattr(distrax, dist_name)(loc, jax.nn.softplus(scale) + self.eps)
+            dist = _dist(loc, jax.nn.softplus(scale) + self.eps)
             if self.distribution.startswith("Scaled"):
                 # Define limits and scale for bounded distributions
                 min_val = self.param("min_val", nn.initializers.constant(-1.0), self.out_size)
@@ -284,23 +294,15 @@ class DistributionLayer(nn.Module):
                 dist = distrax.Transformed(dist, bij)
 
         elif self.distribution in ["Categorical", "Bernoulli"]:
-            _dist = getattr(distrax, self.distribution)
-            out_size = np.prod(self.out_size) if isinstance(self.out_size, tuple) else self.out_size
-            x = FADense(out_size, f_align=self.f_align)(x)
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
-            # Ensure probability of 1 is never lower than eps
-            # probs = jax.nn.sigmoid(x) if self.distribution == "Bernoulli" else jax.nn.softmax(x, axis=-1)
-            # probs = jnp.clip(probs, min=self.eps / probs.shape[-1])
-            # dist = straight_through_one_hot_wrapper(_dist)(probs=probs)
-            dist = straight_through_one_hot_wrapper(_dist)(logits=x)
-
-        elif self.distribution == "Deterministic" or self.distribution is None:
-            # Becomes deterministic
-            x = FADense(self.out_size, f_align=self.f_align)(x)
-            dist = distrax.Deterministic(x)
-
+            # Unimix
+            probs = jax.nn.sigmoid(x) if self.distribution == "Bernoulli" else jax.nn.softmax(x, axis=-1)
+            s = probs.shape[-1] if self.distribution == "Categorical" else out_size
+            probs = probs * (1 - self.eps) + self.eps / s
+            dist = straight_through_one_hot_wrapper(_dist)(probs=probs)
+            
         else:
-            raise ValueError(f"Unsupported distribution type: {self.distribution}")
+            dist = _dist(x)
 
         return dist
