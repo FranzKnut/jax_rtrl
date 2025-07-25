@@ -35,7 +35,7 @@ class SequenceLayerConfig:
     dropout: float = 0.0
     norm: str | None = None
     glu: bool = True
-    skip_connection: bool = True
+    skip_connection: bool = False
 
 
 @dataclass
@@ -124,8 +124,8 @@ class SequenceLayer(nn.Module):
         drop = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)
         x = drop(normalization(inputs))  # pre normalization
 
-        # hidden dropout should not affect rnn aux state
-        # TODO: implement as zoneout (replacing by previous hidden state)
+        # hidden dropout is not recommended for RNNs
+        # TODO: implement zoneout (replacing by previous hidden state)
         # hidden = (drop(hidden[0]), *hidden[1:]) if isinstance(hidden, tuple) else drop(hidden)
 
         # call seq model
@@ -139,7 +139,7 @@ class SequenceLayer(nn.Module):
         if self.config.glu:
             # Gated Linear Unit
             x *= jax.nn.sigmoid(FADense(self.d_output or hidden.shape[-1])(x))
-        x = drop(x)
+        x = drop(normalization(x))
         return hidden, x
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
