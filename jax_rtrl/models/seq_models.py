@@ -14,10 +14,9 @@ from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.s5 import S5Config
-from numpy import isin
 
-from .jax_util import zeros_like_tree
-from .mlp import MLP, DistributionLayer, FADense
+from .jax_util import zeros_like_tree, get_normalization_fn
+from .feedforward import MLP, DistributionLayer, FADense
 
 
 @dataclass
@@ -113,16 +112,10 @@ class SequenceLayer(nn.Module):
     @nn.compact
     def __call__(self, hidden, inputs, training=True, *args, **kwargs):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
-        if self.config.norm in ["layer"]:
-            normalization = nn.LayerNorm()
-        elif self.config.norm in ["batch"]:
-            normalization = nn.BatchNorm(use_running_average=not training, axis_name="batch")
-        else:
-            normalization = lambda x: x  # noqa
-
-        # input dropout
+        normalization = get_normalization_fn(self.config.norm, training=training)
         drop = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)
-        x = drop(normalization(inputs))  # pre normalization
+
+        x = drop(normalization(inputs))  # input normalization
 
         # hidden dropout is not recommended for RNNs
         # TODO: implement zoneout (replacing by previous hidden state)
@@ -428,6 +421,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 DistributionLayer,
                 split_rngs=True,
                 axis_size=self.config.num_modules,
+                norm=self.config.layer_config.norm,
             )(self.config.out_size, distribution=self.config.out_dist, name="dists")
 
     def _postprocessing(self, outs, x):

@@ -8,7 +8,7 @@ from simple_parsing import Serializable
 
 from jax_rtrl.models import make_rnn_ensemble_config
 from jax_rtrl.models.autoencoders import ConvEncoder
-from jax_rtrl.models.mlp import MLPEnsemble
+from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble
 
 

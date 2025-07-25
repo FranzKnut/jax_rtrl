@@ -9,6 +9,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jax_rtrl.models.jax_util import get_normalization_fn
+
 
 class FADense(nn.Dense):
     """Dense Layer with feedback alignment."""
@@ -97,24 +99,45 @@ class FAAffine(nn.Module):
 
 
 class MLP(nn.Module):
-    """MLP built with Flax.
+    """Multi-Layer Perceptron (MLP) implementation using Flax.
 
-    activation_fn is applied after every layer except the last one.
-    If f_align is true, each layer uses feedback alignment instead of backpropagation.
-
-    TODO: Add support for dropout and batch normalization.
+    This module implements a feedforward neural network with configurable layers,
+    activation functions, and optional feedback alignment training.
+    Attributes:
+        layers (list): List of integers specifying the number of units in each layer.
+                      The last element determines the output dimension.
+        activation_fn (Callable, optional): Activation function applied after each
+                                          hidden layer. Defaults to jax.nn.relu.
+        f_align (bool, optional): If True, uses feedback alignment instead of
+                                 standard backpropagation. Defaults to False.
+        kernel_init (nn.initializers.Initializer, optional): Weight initialization
+                                                            strategy. Defaults to
+                                                            lecun_normal().
+        norm (str | None, optional): Type of normalization to apply. Can be 'layer'
+                                    for layer normalization, 'batch' for batch
+                                    normalization, or None for no normalization.
+                                    Defaults to None.
+    Note:
+        The activation function is applied after every layer except the output layer.
+        Normalization (if specified) is applied before each layer transformation.
+    TODO:
+        Add support for dropout regularization.
     """
 
     layers: list
     activation_fn: Callable = jax.nn.relu
     f_align: bool = False
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    norm: str | None = None  # 'layer' or 'batch'
 
     @nn.compact
     def __call__(self, x, training: bool = True):
         """Call MLP."""
+        normalization = get_normalization_fn(self.norm, training=training)
         for size in self.layers[:-1]:
+            normalization(x)
             x = self.activation_fn(FADense(size, f_align=self.f_align, kernel_init=self.kernel_init)(x))
+        normalization(x)
         x = FADense(self.layers[-1], f_align=self.f_align, kernel_init=self.kernel_init)(x)
         return x
 
@@ -256,6 +279,7 @@ class DistributionLayer(nn.Module):
     distribution: str | None = "Normal"
     eps: float = 0.01  # Unimix epsilon TODO: rename and write doc for Normal
     f_align: bool = False
+    norm: str | None = None  # 'layer' or 'batch'
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
 
     @nn.compact
@@ -267,6 +291,7 @@ class DistributionLayer(nn.Module):
                 activation_fn=jax.nn.relu,
                 f_align=self.f_align,
                 kernel_init=self.kernel_init,
+                norm=self.norm,
             )(x)
 
         out_size = self.out_size
@@ -301,7 +326,7 @@ class DistributionLayer(nn.Module):
             s = probs.shape[-1] if self.distribution == "Categorical" else out_size
             probs = probs * (1 - self.eps) + self.eps / s
             dist = straight_through_one_hot_wrapper(_dist)(probs=probs)
-            
+
         else:
             dist = _dist(x)
 

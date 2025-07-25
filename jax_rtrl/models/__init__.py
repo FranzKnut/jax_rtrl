@@ -7,7 +7,7 @@ import flax.linen
 import jax
 
 from jax_rtrl.models.cells import CELL_TYPES, ONLINE_CELL_TYPES  # noqa
-from jax_rtrl.models.mlp import FADense, FAAffine  # noqa
+from jax_rtrl.models.feedforward import FADense, FAAffine  # noqa
 
 from .s5 import S5Config
 from .seq_models import RNNEnsembleConfig, SequenceLayerConfig

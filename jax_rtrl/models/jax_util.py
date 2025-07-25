@@ -8,6 +8,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import flax.linen as nn
 import numpy as np
 import optax
 import orbax.checkpoint
@@ -262,3 +263,15 @@ def set_matching_leaves(tree, pattern, new_values):
         else:
             flattened[i] = flattened[i][1]
     return jax.tree_util.tree_unflatten(treedef, flattened)
+
+
+def get_normalization_fn(norm_type, training=True, **kwargs):
+    """Get normalization function based on type."""
+    if norm_type is None:
+        return lambda x: x
+    if norm_type == "layer":
+        return nn.LayerNorm(**kwargs)
+    elif norm_type == "batch":
+        return nn.BatchNorm(use_running_average=not training, axis_name="batch", **kwargs)
+    else:
+        raise ValueError(f"Unknown normalization type: {norm_type}")
