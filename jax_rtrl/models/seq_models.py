@@ -34,7 +34,7 @@ class SequenceLayerConfig:
     dropout: float = 0.0
     norm: str | None = None
     glu: bool = True
-    skip_connection: bool = False
+    skip_connection: bool = True
 
 
 @dataclass
@@ -112,27 +112,28 @@ class SequenceLayer(nn.Module):
     @nn.compact
     def __call__(self, hidden, inputs, training=True, *args, **kwargs):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
-        normalization = get_normalization_fn(self.config.norm, training=training)
-        drop = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)
 
-        x = drop(normalization(inputs))  # input normalization
-
-        # hidden dropout is not recommended for RNNs
-        # TODO: implement zoneout (replacing by previous hidden state)
-        # hidden = (drop(hidden[0]), *hidden[1:]) if isinstance(hidden, tuple) else drop(hidden)
+        x = get_normalization_fn(self.config.norm, training=training)(inputs)  # input normalization
+        x = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)(x)  # input dropout
 
         # call seq model
         hidden, x = self.seq(hidden, x, *args, **kwargs)
+        # hidden = get_normalization_fn(self.config.norm, training=training)(hidden)  # normalize hidden state
+        # hidden dropout is not recommended for RNNs
+        # TODO: implement zoneout (replacing by previous hidden state)
+        # hidden = (drop(hidden[0]), *hidden[1:]) if isinstance(hidden, tuple) else drop(hidden)
 
         # Optional skip connection
         if self.config.skip_connection:
             x = x + inputs
 
-        x = FADense(self.d_output or hidden.shape[-1])(drop(x))
+        x = FADense(self.d_output or hidden.shape[-1])(x)
         if self.config.glu:
             # Gated Linear Unit
             x *= jax.nn.sigmoid(FADense(self.d_output or hidden.shape[-1])(x))
-        x = drop(normalization(x))
+
+        x = get_normalization_fn(self.config.norm, training=training)(x)
+        x = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)(x)  # input dropout
         return hidden, x
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):

@@ -101,8 +101,6 @@ class FAAffine(nn.Module):
 class MLP(nn.Module):
     """Multi-Layer Perceptron (MLP) implementation using Flax.
 
-    This module implements a feedforward neural network with configurable layers,
-    activation functions, and optional feedback alignment training.
     Attributes:
         layers (list): List of integers specifying the number of units in each layer.
                       The last element determines the output dimension.
@@ -125,7 +123,7 @@ class MLP(nn.Module):
     """
 
     layers: list
-    activation_fn: Callable = jax.nn.relu
+    activation_fn: Callable = jax.nn.silu
     f_align: bool = False
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
     norm: str | None = None  # 'layer' or 'batch'
@@ -133,11 +131,11 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x, training: bool = True):
         """Call MLP."""
-        normalization = get_normalization_fn(self.norm, training=training)
         for size in self.layers[:-1]:
-            normalization(x)
-            x = self.activation_fn(FADense(size, f_align=self.f_align, kernel_init=self.kernel_init)(x))
-        normalization(x)
+            x = FADense(size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
+            x = get_normalization_fn(self.norm, training=training)(x)
+            x = self.activation_fn(x)
+        x = get_normalization_fn(self.norm, training=training)(x)
         x = FADense(self.layers[-1], f_align=self.f_align, kernel_init=self.kernel_init)(x)
         return x
 
