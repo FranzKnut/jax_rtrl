@@ -2,12 +2,18 @@
 
 import os
 import re
+import zipfile
 from collections.abc import Iterable
 import jax
 
+from typing import NamedTuple
+import numpy as np
+from numpy.lib._format_impl import _read_array_header
 from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
+import flashbax as fbx
+from flashbax.vault import Vault
 
 
 def split_train_test(dataset, percent_eval: float = 0.2):
@@ -68,10 +74,7 @@ def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=
     """
     first_set = data if isinstance(data, jax.Array) else data[0]
     starts = jnp.arange(len(first_set) - seq_len + 1, step=seq_len - overlap)
-    sliced = [
-        jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts)
-        for d in data
-    ]
+    sliced = [jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts) for d in data]
     return [jnp.stack(s, axis=0) for s in sliced]
 
 
@@ -83,40 +86,133 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
     :param num_files: If not None, only loads the specified number of files
     :return:
     """
-    files = [
-        os.path.join(path, d)
-        for d in os.listdir(path)
-        if d.endswith(".npz" if is_npz else ".npy")
-    ]
+    files = [os.path.join(path, d) for d in os.listdir(path) if d.endswith(".npz" if is_npz else ".npy")]
     # Sort numbered files
     files.sort(key=lambda f: int(re.sub(r"\D", "", f)))
     print(f"Loading {len(files[:num_files])} files from {path}")
     data = []
-    with jax.default_device(jax.devices("cpu")[0]):
-        for f in tqdm(files[:num_files]):
-            d = jnp.load(f, allow_pickle=True)
-            if is_npz:
-                d = dict(d)
-            data.append(d)
-
+    for f in tqdm(files[:num_files]):
+        d = np.load(f, allow_pickle=True, mmap_mode="r")
         if is_npz:
-            output = jax.tree.map(lambda *x: jnp.concatenate(x, axis=0), *data)
-            num_steps = len(output[list(output.keys())[0]])
-            num_steps_per_file = [len(d[list(d.keys())[0]]) for d in data]
-        else:
-            output = jnp.concatenate(data, axis=0)
-            num_steps_per_file = [len(d) for d in data]
-            file_starts = jnp.zeros(num_steps)
-            num_steps = len(output)
+            d = dict(d)
+        data.append(d)
 
-        # An Array that is zero everywhere except at the start of each file
-        start_indices = jnp.concatenate(
-            [jnp.zeros(1), jnp.cumsum(jnp.array(num_steps_per_file[:-1]))], dtype=int
-        )
-        file_starts = jnp.zeros(num_steps).at[start_indices].set(1)
+    if is_npz:
+        output = jax.tree.map(lambda *x: np.concatenate(x, axis=0), *data)
+        num_steps = len(output[list(output.keys())[0]])
+        num_steps_per_file = [len(d[list(d.keys())[0]]) for d in data]
+    else:
+        output = np.concatenate(data, axis=0)
+        num_steps_per_file = [len(d) for d in data]
+        file_starts = np.zeros(num_steps)
+        num_steps = len(output)
+
+    # An Array that is zero everywhere except at the start of each file
+    start_indices = np.concatenate([np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int)
+    file_starts = np.zeros(num_steps).at[start_indices].set(1)
 
     print(f"Files contained {num_steps:d} steps total")
     return output, file_starts
+
+
+def npy_headers(f):
+    """
+    Takes a .npy file handle.
+    Generates a tuple of (shape, np.dtype).
+    """
+    version = np.lib.format.read_magic(f)
+    shape, fortran, dtype = _read_array_header(f, version)
+    return shape, dtype
+
+
+def npz_headers(npz):
+    """
+    Takes a path to an .npz file, which is a Zip archive of .npy files.
+    Generates a sequence of (name, shape, np.dtype).
+    """
+    with zipfile.ZipFile(npz) as archive:
+        for name in archive.namelist():
+            if not name.endswith(".npy"):
+                continue
+
+            npy = archive.open(name)
+            shape, dtype = npy_headers(npy)
+            yield name[:-4], shape, dtype
+
+
+def load_into_vault(path, is_npz=True, num_files: int = None):
+    """Load a set of npz or npz files from a folder and store them in a flashbax Vault.
+
+    :param name: Environment name
+    :param is_npz: If True, the files in the folder are assumed to be .npz files containing multiple fields
+    :param num_files: If not None, only loads the specified number of files
+    :param write_freq: How often to write to the vault
+    :return:
+    """
+    files = [os.path.join(path, d) for d in os.listdir(path) if d.endswith(".npz" if is_npz else ".npy")]
+
+    # Sort numbered files
+    files.sort(key=lambda f: int(re.sub(r"\D", "", f)))
+    print(f"Loading {len(files[:num_files])} files from {path}")
+    num_steps_per_file = []
+    print("Determining total length of files...")
+
+    for f in tqdm(files[:num_files]):
+        if is_npz:
+            # Best effort assuming all contained have the same leading dimension
+            num_steps_per_file.append(list(npz_headers(f))[0][1][0])
+        else:
+            # TODO: Test this
+            with open(f, "rb") as _file:
+                num_steps_per_file.append(npy_headers(_file)[0][0])
+
+    total_num_steps = sum(num_steps_per_file)
+    # add_batch_size = np.gcd.reduce(num_steps_per_file)
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        buffer = fbx.make_trajectory_buffer(
+            add_batch_size=1,
+            max_length_time_axis=max(num_steps_per_file) + 1,
+            sample_batch_size=1,
+            sample_sequence_length=1,
+            min_length_time_axis=1,
+            period=1,
+        )
+
+        add_batch = jax.jit(buffer.add, donate_argnums=0)
+
+        d = jnp.load(files[0], allow_pickle=True)
+
+        class Data(NamedTuple):
+            img: jnp.ndarray
+            observation: jnp.ndarray
+            action: jnp.ndarray
+
+        def _prep_data(_d):
+            if is_npz:
+                _d = dict(_d)
+            _d = {k: jnp.array(v) for k, v in _d.items() if k in ["observation", "action", "data"]}
+            _d["img"] = _d["data"]
+            del _d["data"]
+            _d = jax.tree_util.tree_map(lambda x: x[None], _d)
+            return Data(**_d)
+
+        init_data = jax.tree_util.tree_map(lambda x: x[0][0], _prep_data(d))
+        buffer_state = buffer.init(init_data)
+        vault = Vault(vault_name="MMDVS", experience_structure=buffer_state.experience)
+
+        for f in tqdm(files[:num_files]):
+            d = np.load(f, allow_pickle=True, mmap_mode="r")
+            data = _prep_data(d)
+            buffer_state = add_batch(buffer_state, data)
+            vault.write(buffer_state)
+
+        # An Array that is zero everywhere except at the start of each file
+        start_indices = np.concatenate([np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int)
+        file_starts = np.zeros(total_num_steps).at[start_indices].set(1)
+
+    print(f"Files contained {total_num_steps:d} steps total")
+    return vault, file_starts
 
 
 # Toy datasets -----------------------------------------------------------------
@@ -150,7 +246,7 @@ def sine(length=100, offset=2, num_periods=3):
 
 def rollouts(data_folder, with_time=False):
     """Load a dataset from the BulletEnv simulator.
-    
+
     TODO: redundant with load_np_files_from_folder, refactor to use it.
 
     :param name: Environment name
@@ -158,13 +254,7 @@ def rollouts(data_folder, with_time=False):
     :param act_in_obs: If True, the actions are included in the observations
     :return:
     """
-    files = sorted(
-        [
-            os.path.join(data_folder, d)
-            for d in os.listdir(data_folder)
-            if d.endswith(".npz")
-        ]
-    )
+    files = sorted([os.path.join(data_folder, d) for d in os.listdir(data_folder) if d.endswith(".npz")])
 
     all_x = []
     if with_time:
@@ -195,3 +285,7 @@ def rollouts(data_folder, with_time=False):
     if with_time:
         return all_x, all_y, all_t, all_dones
     return all_x, all_y, all_dones
+
+
+if __name__ == "__main__":
+    load_into_vault("data/dvs_only_256p_100hz")
