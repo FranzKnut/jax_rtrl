@@ -67,13 +67,17 @@ def restore_params_and_config(path):
     orbax_path = os.path.join(path, "ckpt")
 
     checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-    params = checkpointer.restore(
-        orbax_path,
-        restore_args=jax.tree.map(
-            lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray),
-            checkpointer.metadata(orbax_path),
-        ),
-    )
+    try:
+        params = checkpointer.restore(
+            orbax_path,
+            restore_args=jax.tree.map(
+                lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray),
+                checkpointer.metadata(orbax_path),
+            ),
+        )
+    except FileNotFoundError:
+        print(f"Checkpoint not found at {orbax_path}. Returning None.")
+        params = None
 
     if os.path.exists(hparams_file_path):
         with open(hparams_file_path) as f:
@@ -113,7 +117,9 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
-        _params = jax.tree.map(lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params)
+        _params = jax.tree.map(
+            lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
+        )
         return checkpointer.save(orbax_path, _params, force=True)
 
     restored_params = None
@@ -272,6 +278,8 @@ def get_normalization_fn(norm_type, training=True, **kwargs):
     if norm_type == "layer":
         return nn.LayerNorm(**kwargs)
     elif norm_type == "batch":
-        return nn.BatchNorm(use_running_average=not training, axis_name="batch", **kwargs)
+        return nn.BatchNorm(
+            use_running_average=not training, axis_name="batch", **kwargs
+        )
     else:
         raise ValueError(f"Unknown normalization type: {norm_type}")
