@@ -445,18 +445,17 @@ class RNNEnsemble(nn.RNNCellBase):
                 name="mlps_out",
             )
 
-        if self.config.out_size is not None:
-            # Make distribution for each submodule
-            self.dists = make_batched_model(
-                DistributionLayer,
-                split_rngs=True,
-                axis_size=self.config.num_modules,
-            )(
-                self.config.out_size,
-                distribution=self.config.out_dist,
-                norm=self.config.layer_config.norm,
-                name="dists",
-            )
+        # Make distribution for each submodule
+        self.dists = make_batched_model(
+            DistributionLayer,
+            split_rngs=True,
+            axis_size=self.config.num_modules,
+        )(
+            self.config.out_size,
+            distribution=self.config.out_dist,
+            norm=self.config.layer_config.norm,
+            name="dists",
+        )
 
     def _postprocessing(self, outs, x):
         # Outup FF layers
@@ -466,16 +465,15 @@ class RNNEnsemble(nn.RNNCellBase):
         # Make distribution for each submodule
         if self.config.out_size is not None:
             outs = self.dists(outs)
-
-        # Aggregate outputs
-        if not self.config.out_dist:
-            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
-        else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
             outs = distrax.MixtureSameFamily(
                 distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs
             )
+        else:
+            # Aggregate outputs
+            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
+
         return outs
 
     def __call__(
