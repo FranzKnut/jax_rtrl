@@ -56,10 +56,7 @@ class Policy(nn.Module):
         out = self(*args, **kwargs)
         if self.use_rnn:
             *rest, out = out
-        if self.config.stochastic:
-            action = out.sample(seed=rng)
-        else:
-            action = jnp.mean(out, axis=-2)
+        action = out.sample(seed=rng)
         if self.use_rnn:
             return *rest, action
         else:
@@ -194,9 +191,5 @@ class PolicyRTRL(PolicyRNN):
         loss, rnn_grads = self.rnn.loss_and_grad_async(loss_fn, carry, hidden, x, target)
         return loss, {
             "params": {"rnn": rnn_grads["params"]},
-            **{
-                k: jax.tree.map(lambda x: jnp.zeros_like(x), v)
-                for k, v in self.variables.items()
-                if k != "params"
-            },
+            **{k: jax.tree.map(lambda x: jnp.zeros_like(x), v) for k, v in self.variables.items() if k != "params"},
         }

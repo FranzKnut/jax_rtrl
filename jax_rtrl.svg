@@ -101,7 +101,7 @@
 <g id="node48" class="node">
 <title>models_mlp</title><style>.edge>path:hover{stroke-width:8}</style>
 <ellipse fill="#3d4c8f" stroke="black" cx="2475" cy="-612.47" rx="39.38" ry="18"/>
-<text text-anchor="middle" x="2475" y="-609.97" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#ffffff">models.mlp</text>
+<text text-anchor="middle" x="2475" y="-609.97" font-family="Helvetica,sans-Serif" font-size="10.00" fill="#ffffff">models.feedforward</text>
 </g>
 <!-- distrax&#45;&gt;models_mlp -->
 <g id="edge7" class="edge">
