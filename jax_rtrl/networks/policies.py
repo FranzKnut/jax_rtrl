@@ -26,10 +26,10 @@ class PolicyConfig(Serializable):
     num_layers: int = 1
     stochastic: bool = False
     output_layers: tuple[int] | None = (128,)
-    skip_connection: bool = True
+    skip_connection: bool = False
+    norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
 
     # RNN specific
-    # gradient_mode: str = "rflo"
     model_config: dict = field(default_factory=dict, hash=False)
     glu: bool = False
     dropout: float = 0.0
@@ -81,7 +81,7 @@ class PolicyMLP(Policy):
             out_size=self.a_dim,
             num_modules=self.config.num_modules,
             out_dist="Normal" if self.config.stochastic else None,
-            kwargs={"layers": layers},
+            kwargs={"layers": layers, "norm": self.config.norm},
             name="mlp",
             skip_connection=self.config.skip_connection,
         )(x, training)
@@ -110,6 +110,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
                 skip_connection=self.config.skip_connection,
                 glu=self.config.glu,
                 dropout=self.config.dropout,
+                norm=self.config.norm,
             ),
             num_submodule_extra_args=self.num_submodule_extra_args,
             name="rnn",
