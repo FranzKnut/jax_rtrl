@@ -441,9 +441,9 @@ class RNNEnsemble(nn.RNNCellBase):
 
         # Make distribution for each submodule
         if self.config.out_size is not None:
-            outs = self.dists(outs)
+            _dists = self.dists(outs)
             # outs = jax.tree.map(lambda *_x: _x.swapaxes(-2, -1), *outs)
-            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
+            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(_dists.loc.shape)), _dists)
         else:
             # Aggregate outputs
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)

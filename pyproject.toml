@@ -16,6 +16,7 @@ distrax        = "*"
 tqdm           = "^4.67.0"
 poethepoet     = "*"
 jaxtyping      = "*"
+jax         = "<0.7.0"
 
 
 [build-system]
@@ -23,4 +24,4 @@ requires      = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poe.tasks]
-install_jax_cuda12 = "pip install --upgrade \"jax[cuda12_pip]\" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"
+cuda = "poetry run pip install jax[cuda]"
