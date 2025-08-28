@@ -32,6 +32,7 @@ Example usage for online continual learning:
 """
 
 import operator
+from typing import Literal
 import jax
 import jax.numpy as jnp
 from flax.struct import dataclass
@@ -41,28 +42,51 @@ from jaxtyping import PyTree
 
 @dataclass
 class WeightConsolidationState:
-    """Configuration for online weight consolidation.
-
-    TODO: Consider renaming to OnlineConsolidationState for clarity.
-    """
+    """Configuration for online weight consolidation."""
 
     omega: PyTree  # Importance weights (approximates Fisher Information)
     reg_strength: jax.Array  # Regularization strength per parameter
     theta_ref: jax.Array  # Reference parameters from last consolidation
-    decay: float = 0.9  # Decay factor for online updates
 
 
-def init_weight_consolidation_state(decay, theta):
+class WeightConsolidation(object):
+    """Online weight consolidation for continual learning."""
+
+    def __init__(self, cons_type: Literal["ewc", "si"] | None, decay: float):
+        self.cons_type = cons_type
+        self.decay = decay
+
+    def init(self, theta: jax.Array) -> WeightConsolidationState:
+        if self.cons_type is None:
+            return None
+        return init_weight_consolidation_state(theta)
+
+    def step(
+        self, state, dL_dtheta: jax.Array, dtheta_dt: jax.Array
+    ) -> WeightConsolidationState:
+        """Update the consolidation state with new parameters and gradients."""
+        if self.cons_type == "ewc":
+            return update_fisher_information(state, dL_dtheta, self.decay)
+        elif self.cons_type == "si":
+            return update_omega(state, dL_dtheta, dtheta_dt)
+        elif self.cons_type is not None:
+            raise ValueError(f"Unknown consolidation type: {self.cons_type}")
+
+    def episode(self, state, new_theta: jax.Array) -> WeightConsolidationState:
+        """Update the reference parameters at the end of an episode."""
+        if self.cons_type == "si":
+            return update_reg_strength(state, new_theta, self.decay, reset_omega=True)
+        else:
+            return set_theta_ref(state, new_theta)
+
+
+def init_weight_consolidation_state(theta):
     """Initialize the state for online weight consolidation.
 
-    TODO: Consider renaming to init_online_consolidation_state for clarity.
-
     Args:
-        decay: Decay factor for exponential moving averages.
         theta: Initial parameters.
     """
     return WeightConsolidationState(
-        decay=decay,
         omega=zeros_like_tree(theta),
         reg_strength=zeros_like_tree(theta),
         theta_ref=theta,
@@ -79,15 +103,15 @@ def set_theta_ref(state: WeightConsolidationState, new_theta_ref: jax.Array):
     return state.replace(theta_ref=new_theta_ref)
 
 
+@jax.jit
 def update_reg_strength(
     state: WeightConsolidationState,
     new_theta,
-    reset_omega: bool = False,
+    decay: float,
+    reset_omega: bool = True,
     xi: float = 1e-6,
 ):
-    """Update the regularization strength for online weight consolidation.
-
-    TODO: Consider renaming to update_online_reg_strength for clarity.
+    """Update the regularization strength for synaptic intelligence.
 
     Args:
         state: The current consolidation state.
@@ -104,7 +128,7 @@ def update_reg_strength(
         # Online update: balance between accumulated importance (omega) and parameter drift
         param_drift = (t - t_ref) ** 2 + xi
         importance_contribution = omega / param_drift
-        return state.decay * reg_st + (1 - state.decay) * importance_contribution
+        return decay * reg_st + importance_contribution
 
     new_reg_strength = jax.tree.map(
         _update_reg_strength,
@@ -120,7 +144,8 @@ def update_reg_strength(
     )
 
 
-def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt, use_abs: bool = False):
+@jax.jit
+def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
     """Update the importance weights (omega) for online continual learning.
 
     Args:
@@ -134,21 +159,15 @@ def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt, use_abs:
         we use exponential moving average to adapt to distribution changes.
     """
 
-    # Online Synaptic Intelligence approximation
-    def _update_omega_online(old_omega, grad, param_update):
-        # Compute importance as interaction between gradient and parameter change
-        new_importance = grad**2
-        # if use_abs:
-        #     new_importance = jax.tree.map(jnp.abs, new_importance)
-        # Use exponential moving average for online adaptation
-        return state.decay * old_omega + (1 - state.decay) * new_importance
-        # return new_importance + old_omega
-
-    return state.replace(omega=jax.tree.map(_update_omega_online, state.omega, dL_dtheta, dtheta_dt))
+    # Synaptic Intelligence approximation
+    return state.replace(
+        omega=jax.tree.map(lambda o, g, d: o - g * d, state.omega, dL_dtheta, dtheta_dt)
+    )
 
 
-def update_fisher_information(state: WeightConsolidationState, dL_dtheta):
-    """Update the approximation of the Fisher Information Matrix for online continual learning.
+@jax.jit
+def update_fisher_information(state: WeightConsolidationState, dL_dtheta, decay: float):
+    """Update the approximation of the Fisher Information Matrix for online elastic weight consolidation.
 
     Args:
         state: The current consolidation state.
@@ -168,10 +187,12 @@ def update_fisher_information(state: WeightConsolidationState, dL_dtheta):
         # if use_abs:
         #     new_importance = jax.tree.map(jnp.abs, new_importance)
         # Use exponential moving average for online adaptation
-        return state.decay * old_strength + new_importance
+        return decay * old_strength + new_importance
         # return new_importance + old_omega
 
-    return state.replace(reg_strength=jax.tree.map(_update_fi, state.reg_strength, dL_dtheta))
+    return state.replace(
+        reg_strength=jax.tree.map(_update_fi, state.reg_strength, dL_dtheta)
+    )
 
 
 def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
@@ -195,7 +216,10 @@ def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
 
 
 def should_consolidate(
-    state: WeightConsolidationState, current_theta, threshold: float = 0.01, min_steps: int = 100
+    state: WeightConsolidationState,
+    current_theta,
+    threshold: float = 0.01,
+    min_steps: int = 100,
 ) -> bool:
     """Determine if consolidation should occur based on parameter drift.
 
