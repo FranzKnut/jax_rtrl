@@ -158,21 +158,6 @@ def mae_loss(y_hat, y):
     return jnp.mean(jnp.abs(y - y_hat))
 
 
-def sparsity_log_penalty(x):
-    """Penalty to encourage output Sparse Coding.
-
-    See: http://ufldl.stanford.edu/tutorial/unsupervised/SparseCoding/#:~:text=Sparse%20coding%20is%20a%20class,1ai%CF%95i
-    """
-
-    def _f(x):
-        return jnp.log(1 + jnp.abs(x) ** 2).mean()
-
-    if isinstance(x, jnp.ndarray):
-        return _f(x)
-    else:
-        return jax.tree.reduce(lambda _x, _y: _x + _f(_y), x, initializer=0)
-
-
 def rbf_kernel(X, gamma=None):
     """Radial Basis Function Kernel."""
     if gamma is None:

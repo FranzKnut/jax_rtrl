@@ -36,18 +36,16 @@ def make_rnn_ensemble_config(
     model_name,
     hidden_size,
     out_size=None,
-    num_modules=1,
-    num_blocks=1,
     num_layers=1,
     stochastic=False,
     model_kwargs=None,
-    output_layers=None,
     skip_connection=True,
     glu=True,
     f_align=False,
     norm=None,
     dropout=0.0,
     wiring=None,
+    **kwargs,
 ):
     """Make configuration for an RNN ensemble model.
 
@@ -70,23 +68,23 @@ def make_rnn_ensemble_config(
     Returns:
         RNNEnsembleConfig: The configuration object for the RNN ensemble model.
     """
-    kwargs = model_kwargs or {}
+    rnn_kwargs = model_kwargs or {}
     if wiring == "ncp":
-        kwargs["interneurons"] = hidden_size - (out_size + 1)
+        rnn_kwargs["interneurons"] = hidden_size - (out_size + 1)
 
     elif model_name in ["s5", "s5_rtrl"]:
-        kwargs = {"config": S5Config(**kwargs)}
+        rnn_kwargs = {"config": S5Config(**rnn_kwargs)}
     if model_name not in ["bptt", "rtrl", "rflo"]:
-        if "wiring" in kwargs:
+        if "wiring" in rnn_kwargs:
             # print(f"WARNING specifying wiring does not work with model {model_name}. Deleting from kwargs")
-            del kwargs["wiring"]
-        if "wiring_kwargs" in kwargs:
+            del rnn_kwargs["wiring"]
+        if "wiring_kwargs" in rnn_kwargs:
             # print(f"WARNING specifying wiring_kwargs does not work with model {model_name}. Deleting from kwargs")
-            del kwargs["wiring_kwargs"]
+            del rnn_kwargs["wiring_kwargs"]
 
     match = model_name and re.search(r"(rflo|rtrl)", model_name)
     if match:
-        kwargs["plasticity"] = match.group(1)
+        rnn_kwargs["plasticity"] = match.group(1)
 
     layer_config = SequenceLayerConfig(
         norm=norm,
@@ -99,11 +97,9 @@ def make_rnn_ensemble_config(
         model_name=model_name,
         layers=(hidden_size,) * num_layers,
         out_size=out_size,
-        num_modules=num_modules,
         out_dist="Normal" if stochastic else "Deterministic",
-        rnn_kwargs=kwargs,
-        output_layers=output_layers,
+        rnn_kwargs=rnn_kwargs,
         fa_type="fa" if f_align else "bp",
         layer_config=layer_config,
-        num_blocks=num_blocks,
+        **kwargs,
     )

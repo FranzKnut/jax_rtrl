@@ -4,11 +4,12 @@
 from dataclasses import dataclass, field
 from functools import partial
 import re
-from typing import Tuple
+from typing import Literal, Tuple
 
 import distrax
 import jax
 import jax.numpy as jnp
+import jax.random as jrandom
 from chex import PRNGKey
 from flax import linen as nn
 
@@ -45,6 +46,7 @@ class RNNEnsembleConfig:
         model_name: Name of the RNN model.
         num_modules: Number of RNN modules in the ensemble.
         layers: Tuple specifying the number of layers in each module.
+        method: Method for combining the outputs of the RNN modules.
         num_blocks: Number of input chunks for parallel processing.
         glu: Whether to use Gated Linear Unit structure.
         out_size: Output size of the model.
@@ -52,12 +54,15 @@ class RNNEnsembleConfig:
         input_layers: Configuration for input layers (if any).
         output_layers: Configuration for output layers (if any).
         fa_type: Feedback alignment type ('bp', 'fa', 'dfa').
+        ensemble_in_visible_prob: float = 1.0  # If < 1, sample mask from bernoulli for each input element
+        ensemble_in_first_full: bool = True  # If True, use full input for the first module
         rnn_kwargs: Additional arguments for the RNN model.
         layer_config: Configuration for the sequence layer.
     """
 
     model_name: str | None
     layers: tuple[int, ...]
+    method: Literal["linear", "dist", None] = "dist"
     num_modules: int = 1
     num_blocks: int = 1
     out_size: int | None = None
@@ -65,6 +70,9 @@ class RNNEnsembleConfig:
     input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
+    ensemble_in_visible_prob: float = 1.0
+    ensemble_in_first_full: bool = True
+    static_rng_seed: int = 0  # Used for ensemble input mask
     rnn_kwargs: dict = field(default_factory=dict)
     layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
 
@@ -96,7 +104,9 @@ class SequenceLayer(nn.Module):
     rnn_cls: type[nn.RNNCellBase]  # RNN class
     rnn_size: int  # Size of the RNN layer
     d_output: int = None  # output layer size, defaults to hidden_size
-    config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)  # configuration for the layer
+    config: SequenceLayerConfig = field(
+        default_factory=SequenceLayerConfig
+    )  # configuration for the layer
     num_blocks: int = 1  # Number of input chunks for parallel processing
     rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN
 
@@ -113,8 +123,12 @@ class SequenceLayer(nn.Module):
     def __call__(self, hidden, inputs, training=True, *args, **kwargs):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
 
-        x = get_normalization_fn(self.config.norm, training=training)(inputs)  # input normalization
-        x = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)(x)  # input dropout
+        x = get_normalization_fn(self.config.norm, training=training)(
+            inputs
+        )  # input normalization
+        x = nn.Dropout(
+            self.config.dropout, broadcast_dims=[0], deterministic=not training
+        )(x)  # input dropout
 
         # call seq model
         hidden, x = self.seq(hidden, x, *args, **kwargs)
@@ -133,7 +147,9 @@ class SequenceLayer(nn.Module):
             x *= jax.nn.sigmoid(FADense(self.d_output or hidden.shape[-1])(x))
 
         x = get_normalization_fn(self.config.norm, training=training)(x)
-        x = nn.Dropout(self.config.dropout, broadcast_dims=[0], deterministic=not training)(x)  # input dropout
+        x = nn.Dropout(
+            self.config.dropout, broadcast_dims=[0], deterministic=not training
+        )(x)  # input dropout
         return hidden, x
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
@@ -184,7 +200,10 @@ class MultiLayerRNN(nn.RNNCellBase):
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
         shapes = [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]]
         # Create a list of tuples of initial states for each layer
-        states = [_l.initialize_carry(rng, batch_size + in_size) for _l, in_size in zip(self.layers, shapes)]
+        states = [
+            _l.initialize_carry(rng, batch_size + in_size)
+            for _l, in_size in zip(self.layers, shapes)
+        ]
         return self._make_tuple_of_list_from_carries(states)
 
     def _make_tuple_of_list_from_carries(self, carries):
@@ -205,7 +224,9 @@ class MultiLayerRNN(nn.RNNCellBase):
         x = self.input(x)
         new_carries = []
         for i, rnn in enumerate(self.layers):
-            _carry = carries[0][i] if len(carries) <= 1 else tuple(c[i] for c in carries)
+            _carry = (
+                carries[0][i] if len(carries) <= 1 else tuple(c[i] for c in carries)
+            )
             _carry, x = rnn(_carry, x, training, *args, **kwargs)
             new_carries.append(_carry)
         return self._make_tuple_of_list_from_carries(new_carries), x
@@ -219,13 +240,17 @@ class FAMultiLayerRNN(MultiLayerRNN):
         fa_type: Feedback alignment type ('bp', 'fa', 'dfa').
     """
 
-    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal(in_axis=-1, out_axis=-2)
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal(
+        in_axis=-1, out_axis=-2
+    )
     fa_type: str = "bp"
 
     def setup(self):
         """Initialize submodules."""
         self.layers = self._make_layers()
-        self.input = FADense(self.sizes[0], f_align=self.fa_type in ["fa", "dfa"], name="input")
+        self.input = FADense(
+            self.sizes[0], f_align=self.fa_type in ["fa", "dfa"], name="input"
+        )
 
     @nn.compact
     def __call__(self, carries, x, training=True, *args, **kwargs):
@@ -255,7 +280,11 @@ class FAMultiLayerRNN(MultiLayerRNN):
             x, vjp_in = nn.vjp(FADense.__call__, mdl.input, x)
             _new_carries = []
             for i, rnn in enumerate(mdl.layers):
-                _carry = tuple(c[i] for c in _carries) if isinstance(_carries, tuple) else _carries[i]
+                _carry = (
+                    tuple(c[i] for c in _carries)
+                    if isinstance(_carries, tuple)
+                    else _carries[i]
+                )
                 (_carry, x), vjp_func = nn.vjp(SequenceLayer.__call__, rnn, _carry, x)
                 _new_carries.append(_carry)
                 vjps.append(vjp_func)
@@ -304,7 +333,9 @@ class BlockWrapper(nn.RNNCellBase):
     size: int  # Size of the RNN layer
     rnn_cls: type[nn.RNNCellBase]  # RNN class
     num_blocks: int  # Number of chunks to split the input into
-    rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN class
+    rnn_kwargs: dict = field(
+        default_factory=dict
+    )  # Additional arguments for the RNN class
 
     def setup(self):
         self.block_rnns = nn.vmap(
@@ -319,7 +350,9 @@ class BlockWrapper(nn.RNNCellBase):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN submodel."""
-        assert input_shape[-1] % self.num_blocks == 0, "input dimension must be divisible by num_blocks."
+        assert input_shape[-1] % self.num_blocks == 0, (
+            "input dimension must be divisible by num_blocks."
+        )
         block_shape = (*input_shape[:-1], input_shape[-1] // self.num_blocks)
         rng = jax.random.split(rng, self.num_blocks)
         # Block shape is the same for all blocks
@@ -332,7 +365,9 @@ class BlockWrapper(nn.RNNCellBase):
     def __call__(self, carry, x, *args, **kwargs):
         """Split input, process with vmap over RNN submodel, and combine output."""
         # Split input into chunks and stack along a new dimension
-        x_split = jnp.reshape(x, (*x.shape[:-1], self.num_blocks, x.shape[-1] // self.num_blocks))
+        x_split = jnp.reshape(
+            x, (*x.shape[:-1], self.num_blocks, x.shape[-1] // self.num_blocks)
+        )
 
         # Give every block the same args
         (args, kwargs) = jax.tree.map(
@@ -387,17 +422,15 @@ class RNNEnsemble(nn.RNNCellBase):
     """
 
     config: RNNEnsembleConfig
-    num_submodule_extra_args: int = (
-        0  # set to number of additional args for submodule, MAKE SURE THIS IS SET CORRECTLY!
-    )
+    num_submodule_extra_args: int = 0  # set to number of additional args for submodule!
 
     def setup(self):
         """Initialize submodules."""
         self.ensembles = make_batched_model(
             FAMultiLayerRNN,
             split_rngs=True,
-            # h, x, training, (*call_args, **call_kwargs)
-            in_axes=(0, None, None) + (None,) * self.num_submodule_extra_args,
+            # [h, x, training, (*call_args, **call_kwargs)]
+            in_axes=(0, 0, None) + (None,) * self.num_submodule_extra_args,
             axis_size=self.config.num_modules,
         )(
             self.config.layers,
@@ -409,6 +442,10 @@ class RNNEnsemble(nn.RNNCellBase):
             layer_config=self.config.layer_config,  # Use the config directly
         )
 
+        if self.config.num_modules > 1:
+            # Since we don't know the input shape yet, we just fix the rng here for creating the mask later
+            self.ensemble_input_mask_rng = jrandom.PRNGKey(self.config.static_rng_seed)
+
         if self.config.output_layers:
             self.mlps_out = make_batched_model(
                 MLP,
@@ -418,6 +455,13 @@ class RNNEnsemble(nn.RNNCellBase):
                 self.config.output_layers,
                 f_align=self.config.rnn_kwargs.get("f_align", False),
                 name="mlps_out",
+            )
+
+        if self.config.method == "linear":
+            self.combine_layer = FADense(
+                self.config.num_modules,
+                f_align=self.config.rnn_kwargs.get("f_align", False),
+                name="combine_layer",
             )
 
         # Make distribution for each submodule
@@ -439,16 +483,27 @@ class RNNEnsemble(nn.RNNCellBase):
         if self.config.output_layers:
             outs = self.mlps_out(outs)
 
-        # Make distribution for each submodule
-        if self.config.out_size is not None:
-            _dists = self.dists(outs)
-            # outs = jax.tree.map(lambda *_x: _x.swapaxes(-2, -1), *outs)
-            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(_dists.loc.shape)), _dists)
+        # Combine Ensemble predictions
+        if self.config.out_size is None or self.config.method is None:
+            if self.config.out_size is not None or self.config.method is not None:
+                print("WARNING: out_size or method is None, skipped output processing.")
         else:
-            # Aggregate outputs
-            outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-2), *outs)
-
-        return outs
+            _dists = self.dists(outs)
+            if self.config.method == "linear":
+                # Compute linear combination of outputs
+                out_gates = self.combine_layer(
+                    jnp.concatenate([outs.flatten(), x], axis=-1)
+                )
+                out_gates = jax.nn.softmax(out_gates, axis=-1)
+                combined_dist = jax.tree.map(
+                    lambda d: jnp.sum(d * out_gates[None], axis=-1), _dists
+                )
+            elif self.config.method == "dist":
+                outs = distrax.MixtureSameFamily(
+                    distrax.Categorical(logits=jnp.zeros(_dists.loc.shape)), _dists
+                )
+                combined_dist = outs.sample(seed=self.make_rng("sample"))
+        return combined_dist, _dists
 
     def __call__(
         self,
@@ -478,12 +533,26 @@ class RNNEnsemble(nn.RNNCellBase):
         _type_
             _description_
         """
-        if h is None:
-            h = self.initialize_carry(jax.random.key(0), x.shape)
-        outs = []
-        carry_out = []
-        # loop over rnn submodules
-        carry_out, outs = self.ensembles(h, x, training, *call_args, **call_kwargs)
+        # Mask x for ensemble modules
+        x_tiled = x[None] * jnp.ones((self.config.num_modules,) + (1,) * (x.ndim))
+        if self.config.num_modules > 1:
+            ensemble_input_mask = jax.random.bernoulli(
+                self.ensemble_input_mask_rng,
+                self.config.ensemble_in_visible_prob,
+                (self.config.num_modules,) + x.shape,
+            )
+            if self.config.ensemble_in_first_full:
+                ensemble_input_mask.at[0].set(1.0)
+            x_tiled = x_tiled * ensemble_input_mask
+        elif self.config.ensemble_in_visible_prob < 1.0:
+            print("WARNING: num_modules is 1 so ensemble_in_visible_prob is ignored.")
+
+        h = h or self.initialize_carry(jax.random.key(0), x_tiled.shape)
+
+        # call rnn submodules
+        carry_out, outs = self.ensembles(
+            h, x_tiled, training, *call_args, **call_kwargs
+        )
 
         # Post-process and aggregate outputs
         outs = self._postprocessing(outs, x)
@@ -509,9 +578,9 @@ class RNNEnsemble(nn.RNNCellBase):
         # Compute parameter gradients for each RNN
         # FIXME
         for i, (c, d) in enumerate(zip(carry, df_dh)):
-            grads["params"][f"layers_{i}"] = CELL_TYPES[self.config.model_name].rtrl_gradient(
-                c, d, plasticity=self.config.rnn_kwargs["plasticity"]
-            )[0]
+            grads["params"][f"layers_{i}"] = CELL_TYPES[
+                self.config.model_name
+            ].rtrl_gradient(c, d, plasticity=self.config.rnn_kwargs["plasticity"])[0]
         return loss, grads
 
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):

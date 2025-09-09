@@ -31,6 +31,7 @@ Example usage for online continual learning:
             state = update_reg_strength(state, params, reset=False)
 """
 
+from functools import partial
 import operator
 from typing import Literal
 import jax
@@ -79,6 +80,29 @@ class WeightConsolidation(object):
         else:
             return set_theta_ref(state, new_theta)
 
+    def loss(self, theta, state: WeightConsolidationState):
+        return compute_weight_consolidation_loss(theta, state)
+
+
+def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
+    """Compute the weight consolidation loss for online continual learning.
+
+    The consolidation loss is: L_consolidation = λ * Σ reg_strength_i * (θ_i - θ*_i)²
+    """
+
+    def _consolidation_loss(strength, t, t_ref):
+        return jnp.mean(strength * (t - t_ref) ** 2)
+
+    return jax.tree.reduce(
+        operator.add,
+        jax.tree.map(
+            _consolidation_loss,
+            state.reg_strength,
+            theta,
+            state.theta_ref,
+        ),
+    )
+
 
 def init_weight_consolidation_state(theta):
     """Initialize the state for online weight consolidation.
@@ -103,7 +127,7 @@ def set_theta_ref(state: WeightConsolidationState, new_theta_ref: jax.Array):
     return state.replace(theta_ref=new_theta_ref)
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("reset_omega",))
 def update_reg_strength(
     state: WeightConsolidationState,
     new_theta,
@@ -192,26 +216,6 @@ def update_fisher_information(state: WeightConsolidationState, dL_dtheta, decay:
 
     return state.replace(
         reg_strength=jax.tree.map(_update_fi, state.reg_strength, dL_dtheta)
-    )
-
-
-def compute_weight_consolidation_loss(theta, state: WeightConsolidationState):
-    """Compute the weight consolidation loss for online continual learning.
-
-    The consolidation loss is: L_consolidation = λ * Σ reg_strength_i * (θ_i - θ*_i)²
-    """
-
-    def _consolidation_loss(strength, t, t_ref):
-        return jnp.mean(strength * (t - t_ref) ** 2)
-
-    return jax.tree.reduce(
-        operator.add,
-        jax.tree.map(
-            _consolidation_loss,
-            state.reg_strength,
-            theta,
-            state.theta_ref,
-        ),
     )
 
 

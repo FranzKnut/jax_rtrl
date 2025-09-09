@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Literal
 from chex import PRNGKey
 from jax import numpy as jnp
 
@@ -22,12 +23,14 @@ class PolicyConfig(Serializable):
     agent_type: str = "mlp"
     hidden_size: int = 256
     num_modules: int = 5
+    ensemble_method: Literal["linear", "dist", None] = "linear"
     num_blocks: int = 1
     num_layers: int = 1
     stochastic: bool = False
     output_layers: tuple[int] | None = (128,)
     skip_connection: bool = False
     norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
+    ensemble_visible_obs_prob: float = 1.0
 
     # RNN specific
     model_config: dict = field(default_factory=dict, hash=False)
@@ -56,7 +59,7 @@ class Policy(nn.Module):
         out = self(*args, **kwargs)
         if self.use_rnn:
             *rest, out = out
-        action = out.sample(seed=rng)
+        action = out[0].sample(seed=rng)
         if self.use_rnn:
             return *rest, action
         else:
@@ -72,7 +75,9 @@ class PolicyMLP(Policy):
     def __call__(self, x, training: bool = False):
         """Compute Action from observation."""
         if self.config.use_cnn:
-            x = ConvEncoder(latent_size=self.config.latent_size, c_hid=self.config.c_hid)(x)
+            x = ConvEncoder(
+                latent_size=self.config.latent_size, c_hid=self.config.c_hid
+            )(x)
         layers = [self.config.hidden_size] * self.config.num_layers
         if self.config.output_layers:
             layers += list(self.config.output_layers)
@@ -111,6 +116,8 @@ class PolicyRNN(nn.RNNCellBase, Policy):
                 glu=self.config.glu,
                 dropout=self.config.dropout,
                 norm=self.config.norm,
+                ensemble_in_visible_prob=self.config.ensemble_visible_obs_prob,
+                method=self.config.ensemble_method,
             ),
             num_submodule_extra_args=self.num_submodule_extra_args,
             name="rnn",
@@ -145,8 +152,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
             input_shape = x.shape
 
         # Step RNN
-        if carry is None:
-            carry = self.rnn.initialize_carry(jax.random.key(0), input_shape)
+        carry = carry or self.rnn.initialize_carry(jax.random.key(0), input_shape)
         carry, x = self.rnn(carry, x, training, *args, **kwargs)
         return carry, x
 
@@ -158,7 +164,9 @@ class PolicyRNN(nn.RNNCellBase, Policy):
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the RNN cell carry."""
         if self.config.use_cnn:
-            input_shape = input_shape[:-1] + (self.config.latent_size + input_shape[-1],)
+            input_shape = input_shape[:-1] + (
+                self.config.latent_size + input_shape[-1],
+            )
         return self.rnn.initialize_carry(rng, input_shape)
 
 
@@ -189,8 +197,14 @@ class PolicyRTRL(PolicyRNN):
         - loss (Any): Computed loss.
         - gradients (dict): Dictionary containing gradients for the RNN parameters and zeroed gradients for other parameters.
         """
-        loss, rnn_grads = self.rnn.loss_and_grad_async(loss_fn, carry, hidden, x, target)
+        loss, rnn_grads = self.rnn.loss_and_grad_async(
+            loss_fn, carry, hidden, x, target
+        )
         return loss, {
             "params": {"rnn": rnn_grads["params"]},
-            **{k: jax.tree.map(lambda x: jnp.zeros_like(x), v) for k, v in self.variables.items() if k != "params"},
+            **{
+                k: jax.tree.map(lambda x: jnp.zeros_like(x), v)
+                for k, v in self.variables.items()
+                if k != "params"
+            },
         }
