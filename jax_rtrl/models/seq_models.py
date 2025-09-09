@@ -62,7 +62,7 @@ class RNNEnsembleConfig:
 
     model_name: str | None
     layers: tuple[int, ...]
-    method: Literal["linear", "dist", None] = "dist"
+    method: Literal["linear", "dist", None] = None
     num_modules: int = 1
     num_blocks: int = 1
     out_size: int | None = None
@@ -487,6 +487,8 @@ class RNNEnsemble(nn.RNNCellBase):
         if self.config.out_size is None or self.config.method is None:
             if self.config.out_size is not None or self.config.method is not None:
                 print("WARNING: out_size or method is None, skipped output processing.")
+            return outs
+
         else:
             _dists = self.dists(outs)
             if self.config.method == "linear":
@@ -499,10 +501,12 @@ class RNNEnsemble(nn.RNNCellBase):
                     lambda d: jnp.sum(d * out_gates[None], axis=-1), _dists
                 )
             elif self.config.method == "dist":
-                outs = distrax.MixtureSameFamily(
+                combined_dist = distrax.MixtureSameFamily(
                     distrax.Categorical(logits=jnp.zeros(_dists.loc.shape)), _dists
                 )
-                combined_dist = outs.sample(seed=self.make_rng("sample"))
+            else:
+                # Do not combine, return all distributions
+                return _dists
         return combined_dist, _dists
 
     def __call__(

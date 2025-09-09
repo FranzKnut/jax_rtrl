@@ -136,7 +136,9 @@ class MLP(nn.Module):
             x = get_normalization_fn(self.norm, training=training)(x)
             x = self.activation_fn(x)
         x = get_normalization_fn(self.norm, training=training)(x)
-        x = FADense(self.layers[-1], f_align=self.f_align, kernel_init=self.kernel_init)(x)
+        x = FADense(
+            self.layers[-1], f_align=self.f_align, kernel_init=self.kernel_init
+        )(x)
         return x
 
 
@@ -206,7 +208,9 @@ class MLPEnsemble(nn.Module):
         else:
             # Last dim is batch in distrax
             outs = jax.tree.map(lambda *_x: jnp.stack(_x, axis=-1), *outs)
-            outs = distrax.MixtureSameFamily(distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs)
+            outs = distrax.MixtureSameFamily(
+                distrax.Categorical(logits=jnp.zeros(outs.loc.shape)), outs
+            )
 
         return outs
 
@@ -266,7 +270,11 @@ def straight_through_one_hot_wrapper(  # pylint: disable=invalid-name
 
     parent_name = Distribution.__name__
     # Return a new object, overriding sample.
-    return type("StraightThrough" + parent_name, (Distribution,), {"sample": sample, "mode": mode})
+    return type(
+        "StraightThrough" + parent_name,
+        (Distribution,),
+        {"sample": sample, "mode": mode},
+    )
 
 
 class DistributionLayer(nn.Module):
@@ -281,7 +289,7 @@ class DistributionLayer(nn.Module):
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, training: bool = True):
         """Make the distribution from given vector."""
         if self.layers:
             x = MLP(
@@ -290,13 +298,16 @@ class DistributionLayer(nn.Module):
                 f_align=self.f_align,
                 kernel_init=self.kernel_init,
                 norm=self.norm,
-            )(x)
+            )(x, training=training)
 
         out_size = self.out_size
+        x = get_normalization_fn(self.norm, training=training)(x)
 
         if self.distribution in ["Normal", "ScaledNormal"]:
             out_size = 2 * out_size
-        elif self.distribution in ["Categorical", "Bernoulli"] and isinstance(out_size, tuple):
+        elif self.distribution in ["Categorical", "Bernoulli"] and isinstance(
+            out_size, tuple
+        ):
             out_size = np.prod(out_size)
 
         x = FADense(out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
@@ -309,8 +320,12 @@ class DistributionLayer(nn.Module):
             dist = _dist(loc, jax.nn.softplus(scale) + self.eps)
             if self.distribution.startswith("Scaled"):
                 # Define limits and scale for bounded distributions
-                min_val = self.param("min_val", nn.initializers.constant(-1.0), self.out_size)
-                max_val = self.param("max_val", nn.initializers.constant(1.0), self.out_size)
+                min_val = self.param(
+                    "min_val", nn.initializers.constant(-1.0), self.out_size
+                )
+                max_val = self.param(
+                    "max_val", nn.initializers.constant(1.0), self.out_size
+                )
                 # sigmoid_transform = distrax.Sigmoid()
                 bij = distrax.ScalarAffine(min_val, max_val - min_val)
                 # bij = distrax.Chain([scaling_transform, sigmoid_transform])
@@ -320,7 +335,11 @@ class DistributionLayer(nn.Module):
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
             # Unimix
-            probs = jax.nn.sigmoid(x) if self.distribution == "Bernoulli" else jax.nn.softmax(x, axis=-1)
+            probs = (
+                jax.nn.sigmoid(x)
+                if self.distribution == "Bernoulli"
+                else jax.nn.softmax(x, axis=-1)
+            )
             s = probs.shape[-1] if self.distribution == "Categorical" else out_size
             probs = probs * (1 - self.eps) + self.eps / s
             dist = straight_through_one_hot_wrapper(_dist)(probs=probs)
