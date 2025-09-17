@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from functools import partial
 import re
 from typing import Literal, Tuple
+from simple_parsing import Serializable
+
 
 import distrax
 import jax
@@ -30,16 +32,18 @@ class SequenceLayerConfig:
         norm: Type of normalization to use ('layer' or 'batch').
         glu: Whether to use Gated Linear Unit structure.
         skip_connection: Whether to use skip connections.
+        learnable_scale_rnn_out: If true, the RNN output will be scaled by a learnable parameter which is initialized to zero. Only used if skip_connection is True.
     """
 
     dropout: float = 0.0
     norm: str | None = None
     glu: bool = True
     skip_connection: bool = True
+    learnable_scale_rnn_out: bool = True
 
 
 @dataclass
-class RNNEnsembleConfig:
+class RNNEnsembleConfig(Serializable):
     """Configuration for RNNEnsemble.
 
     Attributes:
@@ -85,11 +89,12 @@ class RNNEnsembleConfig:
         elif self.model_name in ["s5", "s5_rtrl"]:
             self.rnn_kwargs = {"config": S5Config(**self.rnn_kwargs)}
         if self.model_name not in ["bptt", "rtrl", "rflo"]:
+            if "wiring" in self.rnn_kwargs or "wiring_kwargs" in self.rnn_kwargs:
+                print(
+                    f"WARNING specifying wiring does not work with model {self.model_name}. Deleting from kwargs"
+                )
             self.rnn_kwargs.pop("wiring", None)
             self.rnn_kwargs.pop("wiring_kwargs", None)
-            # print(
-            #     f"WARNING specifying wiring does not work with model {self.model_name}. Deleting from kwargs"
-            # )
 
 
 class SequenceLayer(nn.Module):
@@ -139,6 +144,12 @@ class SequenceLayer(nn.Module):
 
         # Optional skip connection
         if self.config.skip_connection:
+            if self.config.learnable_scale_rnn_out:
+                scale = self.param(
+                    "rnn_out_scale", nn.initializers.zeros, (self.rnn_size)
+                )
+                x *= scale
+
             x = x + inputs
 
         x = FADense(self.d_output or hidden.shape[-1])(x)

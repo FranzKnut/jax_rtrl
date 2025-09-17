@@ -5,16 +5,15 @@ from jax import numpy as jnp
 
 from flax import linen as nn
 import jax
-from simple_parsing import Serializable
 
 from jax_rtrl.models import make_rnn_ensemble_config
 from jax_rtrl.models.autoencoders import ConvEncoder
 from jax_rtrl.models.feedforward import MLPEnsemble
-from jax_rtrl.models.seq_models import RNNEnsemble
+from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
 
 
 @dataclass(unsafe_hash=True)
-class PolicyConfig(Serializable):
+class PolicyConfig(RNNEnsembleConfig):
     """Config for Policy.
 
     TODO: this repeats many parameters found in the RNNEnsemble config.

@@ -50,15 +50,22 @@ class WeightConsolidationState:
     theta_ref: jax.Array  # Reference parameters from last consolidation
 
 
+@dataclass
+class WeightConsolidationConfig:
+    """Configuration for online weight consolidation."""
+
+    cons_type: Literal["ewc", "si", None] = None  # Type of consolidation
+    decay: float = 0.95  # Decay factor for importance weights
+
+
 class WeightConsolidation(object):
     """Online weight consolidation for continual learning."""
 
-    def __init__(self, cons_type: Literal["ewc", "si"] | None, decay: float):
-        self.cons_type = cons_type
-        self.decay = decay
+    def __init__(self, config: WeightConsolidationConfig):
+        self.config = config
 
     def init(self, theta: jax.Array) -> WeightConsolidationState:
-        if self.cons_type is None:
+        if self.config.cons_type is None:
             return None
         return init_weight_consolidation_state(theta)
 
@@ -66,21 +73,35 @@ class WeightConsolidation(object):
         self, state, dL_dtheta: jax.Array, dtheta_dt: jax.Array
     ) -> WeightConsolidationState:
         """Update the consolidation state with new parameters and gradients."""
-        if self.cons_type == "ewc":
-            return update_fisher_information(state, dL_dtheta, self.decay)
-        elif self.cons_type == "si":
+        if self.config.cons_type == "ewc":
+            return update_fisher_information(state, dL_dtheta, self.config.decay)
+        elif self.config.cons_type == "si":
             return update_omega(state, dL_dtheta, dtheta_dt)
-        elif self.cons_type is not None:
-            raise ValueError(f"Unknown consolidation type: {self.cons_type}")
+        elif self.config.cons_type is not None:
+            raise ValueError(f"Unknown consolidation type: {self.config.cons_type}")
 
     def episode(self, state, new_theta: jax.Array) -> WeightConsolidationState:
         """Update the reference parameters at the end of an episode."""
-        if self.cons_type == "si":
-            return update_reg_strength(state, new_theta, self.decay, reset_omega=True)
+        if self.config.cons_type == "si":
+            return update_reg_strength(
+                state, new_theta, self.config.decay, reset_omega=True
+            )
         else:
-            return set_theta_ref(state, new_theta)
+            return self.set_theta_ref(state, new_theta)
+
+    def set_theta_ref(self, state: WeightConsolidationState, new_theta_ref: jax.Array):
+        """Set the reference parameters (theta_ref) for online weight consolidation.
+
+        Args:
+            state: The current consolidation state.
+            new_theta_ref: The new reference parameters.
+        """
+        return state.replace(theta_ref=new_theta_ref)
 
     def loss(self, theta, state: WeightConsolidationState):
+        if self.config.cons_type is None:
+            print("WARNING: No consolidation type set, skipping consolidation loss.")
+            return 0.0
         return compute_weight_consolidation_loss(theta, state)
 
 
@@ -115,16 +136,6 @@ def init_weight_consolidation_state(theta):
         reg_strength=zeros_like_tree(theta),
         theta_ref=theta,
     )
-
-
-def set_theta_ref(state: WeightConsolidationState, new_theta_ref: jax.Array):
-    """Set the reference parameters (theta_ref) for online weight consolidation.
-
-    Args:
-        state: The current consolidation state.
-        new_theta_ref: The new reference parameters.
-    """
-    return state.replace(theta_ref=new_theta_ref)
 
 
 @partial(jax.jit, static_argnames=("reset_omega",))
