@@ -142,7 +142,7 @@ def init_weight_consolidation_state(theta):
 def update_reg_strength(
     state: WeightConsolidationState,
     new_theta,
-    decay: float,
+    decay: float = 1.0,
     reset_omega: bool = True,
     xi: float = 1e-6,
 ):
@@ -180,18 +180,15 @@ def update_reg_strength(
 
 
 @jax.jit
-def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
-    """Update the importance weights (omega) for online continual learning.
+def update_omega(
+    state: WeightConsolidationState, dL_dtheta, dtheta_dt, decay: float = 0.0
+):
+    """Update the importance weights (omega) for online continual learning with synaptic intelligence (Zenke, 2017).
 
     Args:
         state: The current consolidation state.
         dL_dtheta: The gradient of the loss with respect to the parameter.
         dtheta_dt: The update that was applied to the parameter.
-
-    Note:
-        This function approximates the Fisher Information Matrix using the
-        relationship between gradients and parameter updates. For online learning,
-        we use exponential moving average to adapt to distribution changes.
     """
 
     # Synaptic Intelligence approximation

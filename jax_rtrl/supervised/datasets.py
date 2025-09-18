@@ -74,7 +74,10 @@ def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=
     """
     first_set = data if isinstance(data, jax.Array) else data[0]
     starts = jnp.arange(len(first_set) - seq_len + 1, step=seq_len - overlap)
-    sliced = [jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts) for d in data]
+    sliced = [
+        jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts)
+        for d in data
+    ]
     return [jnp.stack(s, axis=0) for s in sliced]
 
 
@@ -86,7 +89,11 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
     :param num_files: If not None, only loads the specified number of files
     :return:
     """
-    files = [os.path.join(path, d) for d in os.listdir(path) if d.endswith(".npz" if is_npz else ".npy")]
+    files = [
+        os.path.join(path, d)
+        for d in os.listdir(path)
+        if d.endswith(".npz" if is_npz else ".npy")
+    ]
     # Sort numbered files
     files.sort(key=lambda f: int(re.sub(r"\D", "", f)))
     print(f"Loading {len(files[:num_files])} files from {path}")
@@ -108,7 +115,9 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
         num_steps = len(output)
 
     # An Array that is zero everywhere except at the start of each file
-    start_indices = np.concatenate([np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int)
+    start_indices = np.concatenate(
+        [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int
+    )
     file_starts = np.zeros(num_steps).at[start_indices].set(1)
 
     print(f"Files contained {num_steps:d} steps total")
@@ -140,16 +149,22 @@ def npz_headers(npz):
             yield name[:-4], shape, dtype
 
 
-def load_into_vault(path, is_npz=True, num_files: int = None):
+def load_into_vault(
+    path, vault_name, is_npz=True, num_files: int = None, vault_uid=None
+) -> tuple[Vault, jax.Array]:
     """Load a set of npz or npz files from a folder and store them in a flashbax Vault.
 
-    :param name: Environment name
+    :param name: Path of rollout files
     :param is_npz: If True, the files in the folder are assumed to be .npz files containing multiple fields
     :param num_files: If not None, only loads the specified number of files
     :param write_freq: How often to write to the vault
-    :return:
+    :return: (Vault, file_starts)
     """
-    files = [os.path.join(path, d) for d in os.listdir(path) if d.endswith(".npz" if is_npz else ".npy")]
+    files = [
+        os.path.join(path, d)
+        for d in os.listdir(path)
+        if d.endswith(".npz" if is_npz else ".npy")
+    ]
 
     # Sort numbered files
     files.sort(key=lambda f: int(re.sub(r"\D", "", f)))
@@ -191,7 +206,11 @@ def load_into_vault(path, is_npz=True, num_files: int = None):
         def _prep_data(_d):
             if is_npz:
                 _d = dict(_d)
-            _d = {k: jnp.array(v) for k, v in _d.items() if k in ["observation", "action", "data"]}
+            _d = {
+                k: jnp.array(v)
+                for k, v in _d.items()
+                if k in ["observation", "action", "data"]
+            }
             _d["img"] = _d["data"]
             del _d["data"]
             _d = jax.tree_util.tree_map(lambda x: x[None], _d)
@@ -199,7 +218,15 @@ def load_into_vault(path, is_npz=True, num_files: int = None):
 
         init_data = jax.tree_util.tree_map(lambda x: x[0][0], _prep_data(d))
         buffer_state = buffer.init(init_data)
-        vault = Vault(vault_name="MMDVS", experience_structure=buffer_state.experience)
+
+        # Create vault
+        vault = Vault(
+            vault_name=vault_name,
+            experience_structure=buffer_state.experience,
+            vault_uid=vault_uid,
+        )
+        if vault.vault_index:
+            return vault, None  # Already exists
 
         for f in tqdm(files[:num_files]):
             d = np.load(f, allow_pickle=True, mmap_mode="r")
@@ -208,7 +235,9 @@ def load_into_vault(path, is_npz=True, num_files: int = None):
             vault.write(buffer_state)
 
         # An Array that is zero everywhere except at the start of each file
-        start_indices = np.concatenate([np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int)
+        start_indices = np.concatenate(
+            [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int
+        )
         file_starts = np.zeros(total_num_steps).at[start_indices].set(1)
 
     print(f"Files contained {total_num_steps:d} steps total")
@@ -254,7 +283,13 @@ def rollouts(data_folder, with_time=False):
     :param act_in_obs: If True, the actions are included in the observations
     :return:
     """
-    files = sorted([os.path.join(data_folder, d) for d in os.listdir(data_folder) if d.endswith(".npz")])
+    files = sorted(
+        [
+            os.path.join(data_folder, d)
+            for d in os.listdir(data_folder)
+            if d.endswith(".npz")
+        ]
+    )
 
     all_x = []
     if with_time:
@@ -288,4 +323,4 @@ def rollouts(data_folder, with_time=False):
 
 
 if __name__ == "__main__":
-    load_into_vault("data/dvs_only_256p_100hz")
+    load_into_vault("data/dvs_only_256p_100hz", vault_name="MMDVS")

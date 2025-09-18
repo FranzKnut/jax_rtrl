@@ -19,7 +19,7 @@ class PolicyConfig(RNNEnsembleConfig):
     TODO: this repeats many parameters found in the RNNEnsemble config.
     """
 
-    agent_type: str = "mlp"
+    model_name: str = "rflo"
     hidden_size: int = 256
     num_modules: int = 5
     ensemble_method: Literal["linear", "dist", None] = "linear"
@@ -32,7 +32,6 @@ class PolicyConfig(RNNEnsembleConfig):
     ensemble_visible_obs_prob: float = 1.0
 
     # RNN specific
-    model_config: dict = field(default_factory=dict, hash=False)
     glu: bool = False
     dropout: float = 0.0
 
@@ -102,7 +101,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         """Initialize and set up the RNN configuration."""
         self.rnn = RNNEnsemble(
             make_rnn_ensemble_config(
-                model_name=self.config.agent_type,
+                model_name=self.config.model_name,
                 hidden_size=self.config.hidden_size,
                 out_size=self.a_dim,
                 num_modules=self.config.num_modules,
@@ -110,7 +109,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
                 num_layers=self.config.num_layers,
                 output_layers=self.config.output_layers,
                 stochastic=self.config.stochastic,
-                model_kwargs=self.config.model_config,
+                model_kwargs=self.config.rnn_kwargs,
                 skip_connection=self.config.skip_connection,
                 glu=self.config.glu,
                 dropout=self.config.dropout,

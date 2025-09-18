@@ -4,8 +4,9 @@
 from dataclasses import dataclass, field
 from functools import partial
 import re
-from typing import Literal, Tuple
+from typing import Literal
 from simple_parsing import Serializable
+from ml_collections import FrozenConfigDict
 
 
 import distrax
@@ -22,7 +23,7 @@ from .jax_util import zeros_like_tree, get_normalization_fn
 from .feedforward import MLP, DistributionLayer, FADense
 
 
-@dataclass
+@dataclass(frozen=True)
 class SequenceLayerConfig:
     """Configuration for SequenceLayer.
 
@@ -49,7 +50,9 @@ class RNNEnsembleConfig(Serializable):
     Attributes:
         model_name: Name of the RNN model.
         num_modules: Number of RNN modules in the ensemble.
-        layers: Tuple specifying the number of layers in each module.
+        num_layers: Number of layers in the modules. Ignored if layers is specified.
+        hidden_size: Size of the hidden state in each RNN module. Ignored if layers is specified.
+        layers: Tuple specifying the number of layers in each module. This can be use to have heterogeneous layer sizes.
         method: Method for combining the outputs of the RNN modules.
         num_blocks: Number of input chunks for parallel processing.
         glu: Whether to use Gated Linear Unit structure.
@@ -65,7 +68,9 @@ class RNNEnsembleConfig(Serializable):
     """
 
     model_name: str | None
-    layers: tuple[int, ...]
+    layers: tuple[int, ...] | None = None
+    num_layers: tuple[int, ...] | None = 1
+    hidden_size: int | None = None
     method: Literal["linear", "dist", None] = None
     num_modules: int = 1
     num_blocks: int = 1
@@ -77,24 +82,33 @@ class RNNEnsembleConfig(Serializable):
     ensemble_in_visible_prob: float = 1.0
     ensemble_in_first_full: bool = True
     static_rng_seed: int = 0  # Used for ensemble input mask
-    rnn_kwargs: dict = field(default_factory=dict)
     layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
+    rnn_kwargs: dict = field(default_factory=dict)
 
     def __post_init__(self):
         """Post-initialization logic for RNNEnsembleConfig."""
-        # Handle special cases for model_kwargs
-        match = self.model_name and re.search(r"(rflo|rtrl)", self.model_name)
-        if match:
-            self.rnn_kwargs["plasticity"] = match.group(1)
-        elif self.model_name in ["s5", "s5_rtrl"]:
-            self.rnn_kwargs = {"config": S5Config(**self.rnn_kwargs)}
-        if self.model_name not in ["bptt", "rtrl", "rflo"]:
-            if "wiring" in self.rnn_kwargs or "wiring_kwargs" in self.rnn_kwargs:
-                print(
-                    f"WARNING specifying wiring does not work with model {self.model_name}. Deleting from kwargs"
-                )
-            self.rnn_kwargs.pop("wiring", None)
-            self.rnn_kwargs.pop("wiring_kwargs", None)
+        # Handle special cases for rnn_kwargs
+        if not isinstance(self.rnn_kwargs, FrozenConfigDict):
+            match = self.model_name and re.search(r"(rflo|rtrl)", self.model_name)
+            if match:
+                self.rnn_kwargs["plasticity"] = match.group(1)
+            elif self.model_name in ["s5", "s5_rtrl"]:
+                self.rnn_kwargs = {"config": S5Config(**self.rnn_kwargs)}
+            if self.model_name not in ["bptt", "rtrl", "rflo"]:
+                if "wiring" in self.rnn_kwargs or "wiring_kwargs" in self.rnn_kwargs:
+                    print(
+                        f"WARNING specifying wiring does not work with model {self.model_name}. Deleting from kwargs"
+                    )
+                self.rnn_kwargs.pop("wiring", None)
+                self.rnn_kwargs.pop("wiring_kwargs", None)
+            else:
+                if self.rnn_kwargs.get("wiring") == "ncp":
+                    assert self.hidden_size is not None, (
+                        "NCP not supported when layers list is specified."
+                    )
+                    self.rnn_kwargs["interneurons"] = self.hidden_size - (self.out_size + 1)
+
+            self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
 
 class SequenceLayer(nn.Module):
@@ -163,7 +177,7 @@ class SequenceLayer(nn.Module):
         )(x)  # input dropout
         return hidden, x
 
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the carry (hidden state) for the sequence model."""
         return self.seq.initialize_carry(rng, input_shape)
 
@@ -206,7 +220,7 @@ class MultiLayerRNN(nn.RNNCellBase):
         self.layers = self._make_layers()
         self.input = FADense(self.sizes[0], name="input")
 
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN layers."""
         batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
         shapes = [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]]
@@ -359,7 +373,7 @@ class BlockWrapper(nn.RNNCellBase):
             # methods=["__call__", "initialize_carry"],
         )(self.size // self.num_blocks, **self.rnn_kwargs)
 
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN submodel."""
         assert input_shape[-1] % self.num_blocks == 0, (
             "input dimension must be divisible by num_blocks."
@@ -598,7 +612,7 @@ class RNNEnsemble(nn.RNNCellBase):
             ].rtrl_gradient(c, d, plasticity=self.config.rnn_kwargs["plasticity"])[0]
         return loss, grads
 
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
         # return self.ensembles.initialize_carry(rng, input_shape)
         return jax.vmap(

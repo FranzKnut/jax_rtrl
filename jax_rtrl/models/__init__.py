@@ -7,9 +7,8 @@ import flax.linen
 import jax
 
 from jax_rtrl.models.cells import CELL_TYPES, ONLINE_CELL_TYPES  # noqa
-from jax_rtrl.models.feedforward import FADense, FAAffine  # noqa
+from jax_rtrl.models.feedforward import FADense, FAAffine
 
-from .s5 import S5Config
 from .seq_models import RNNEnsembleConfig, SequenceLayerConfig
 
 
@@ -63,28 +62,12 @@ def make_rnn_ensemble_config(
         f_align (bool, optional): Whether to use Feedback Alignment. Defaults to False.
         norm (str, optional): Normalization type. Defaults to "layer".
         dropout (float, optional): Dropout probability. Defaults to 0.0.
-        TODO: document wiring
+        TODO: Remove: every
 
     Returns:
         RNNEnsembleConfig: The configuration object for the RNN ensemble model.
     """
     rnn_kwargs = model_kwargs or {}
-    if wiring == "ncp":
-        rnn_kwargs["interneurons"] = hidden_size - (out_size + 1)
-
-    elif model_name in ["s5", "s5_rtrl"]:
-        rnn_kwargs = {"config": S5Config(**rnn_kwargs)}
-    if model_name not in ["bptt", "rtrl", "rflo"]:
-        if "wiring" in rnn_kwargs:
-            # print(f"WARNING specifying wiring does not work with model {model_name}. Deleting from kwargs")
-            del rnn_kwargs["wiring"]
-        if "wiring_kwargs" in rnn_kwargs:
-            # print(f"WARNING specifying wiring_kwargs does not work with model {model_name}. Deleting from kwargs")
-            del rnn_kwargs["wiring_kwargs"]
-
-    match = model_name and re.search(r"(rflo|rtrl)", model_name)
-    if match:
-        rnn_kwargs["plasticity"] = match.group(1)
 
     layer_config = SequenceLayerConfig(
         norm=norm,
