@@ -83,7 +83,7 @@ class RNNEnsembleConfig(Serializable):
     ensemble_in_first_full: bool = True
     static_rng_seed: int = 0  # Used for ensemble input mask
     layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
-    rnn_kwargs: dict = field(default_factory=dict)
+    rnn_kwargs: dict = field(default_factory=dict, hash=False)
 
     def __post_init__(self):
         """Post-initialization logic for RNNEnsembleConfig."""
@@ -108,7 +108,7 @@ class RNNEnsembleConfig(Serializable):
                     )
                     self.rnn_kwargs["interneurons"] = self.hidden_size - (self.out_size + 1)
 
-            self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
+            # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
 
 class SequenceLayer(nn.Module):
