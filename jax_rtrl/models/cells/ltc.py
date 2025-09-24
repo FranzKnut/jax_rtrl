@@ -15,7 +15,7 @@ from flax.linen import nowrap
 from ..wirings import make_mask_initializer
 
 
-def ctrnn_ode(params, h, x):
+def ltc_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
     W, tau = params
     # Concatenate input and hidden state
@@ -95,7 +95,7 @@ class LTCCell(nn.RNNCellBase):
         return 1
 
 
-def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
+def rtrl_ltc(cell, carry, params, x, ode=ltc_ode):
     """Compute jacobian trace update for RTRL."""
     h, jp, jx = carry
 
@@ -204,19 +204,19 @@ class OnlineLTCCell(LTCCell):
             carry = self.initialize_carry(self.make_rng(), x.shape)
 
         if self.plasticity == "bptt":
-            return CTRNNCell.__call__(self, carry, x)
+            return LTCCell.__call__(self, carry, x)
 
         def _trace_update(carry, _p, x):
             if self.plasticity == "rtrl":
-                traces = rtrl_ctrnn(self, carry, _p, x)
+                traces = rtrl_ltc(self, carry, _p, x)
             elif self.plasticity == "rflo":
-                traces = rflo_murray(self, carry, _p, x)
+                traces = rflo_ltc(self, carry, _p, x)
             else:
                 raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
             return traces
 
         def f(mdl, carry, x):
-            h_next, out = CTRNNCell.__call__(mdl, carry[0], x)
+            h_next, out = LTCCell.__call__(mdl, carry[0], x)
             if force_trace_compute:
                 traces = _trace_update(carry, mdl.variables["params"], x)
             else:
@@ -225,7 +225,7 @@ class OnlineLTCCell(LTCCell):
 
         def fwd(mdl, carry, x):
             """Forward pass with tmp for backward pass."""
-            out, _ = CTRNNCell.__call__(mdl, carry[0], x)
+            out, _ = LTCCell.__call__(mdl, carry[0], x)
             traces = _trace_update(carry, mdl.variables["params"], x)
             return (
                 (out, *traces),
@@ -284,7 +284,7 @@ if __name__ == "__main__":
     x = jnp.linspace(0, 5 * np.pi, 100)[:, None]
     y = jnp.sin(x) + 2
 
-    cell = CTRNNCell(32)
+    cell = LTCCell(32)
     carry = cell.initialize_carry(jrand.PRNGKey(0), (1,))
     params = cell.init(jrand.PRNGKey(0), carry, x[0])
 

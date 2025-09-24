@@ -60,31 +60,45 @@ def zeros_like_tree(tree, batch_size=None):
         return jax.tree.map(lambda x: jnp.zeros_like(x), tree)
 
 
-def restore_params_and_config(path):
-    """Restore params and config from checkpoint."""
+def restore_config(path):
+    """Restore config from checkpoint."""
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
-    orbax_path = os.path.join(path, "ckpt")
-
-    checkpointer = orbax.checkpoint.PyTreeCheckpointer()
-    try:
-        params = checkpointer.restore(
-            orbax_path,
-            restore_args=jax.tree.map(
-                lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray),
-                checkpointer.metadata(orbax_path),
-            ),
-        )
-    except FileNotFoundError:
-        print(f"Checkpoint not found at {orbax_path}. Returning None.")
-        params = None
 
     if os.path.exists(hparams_file_path):
         with open(hparams_file_path) as f:
             restored_hparams = json.load(f)
     else:
         restored_hparams = {}
-    return params, restored_hparams
+    return restored_hparams
+
+
+def restore_params(path, tree=None):
+    """Restore params and config from checkpoint."""
+    path = os.path.abspath(path)
+    orbax_path = os.path.join(path, "ckpt")
+
+    checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    try:
+        params = checkpointer.restore(
+            orbax_path,
+            tree,
+            # restore_args=jax.tree.map(
+            #     lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray),
+            #     checkpointer.metadata(orbax_path),
+            # ),
+        )
+    except FileNotFoundError:
+        print(f"Checkpoint not found at {orbax_path}. Returning None.")
+        params = None
+    return params
+
+
+def restore_params_and_config(path):
+    """Restore params and config from checkpoint."""
+    params = restore_params(path)
+    config = restore_config(path)
+    return params, config
 
 
 def checkpointing(path, fresh=False, hparams: dict = None):
@@ -268,3 +282,10 @@ def get_normalization_fn(norm_type, training=True, **kwargs):
         )
     else:
         raise ValueError(f"Unknown normalization type: {norm_type}")
+
+
+def majority_vote(outputs):
+    """Return the most popular discrete output."""
+    return jnp.min(
+        jnp.where(jnp.bincount(outputs) == jnp.max(jnp.bincount(outputs)))[0]
+    )

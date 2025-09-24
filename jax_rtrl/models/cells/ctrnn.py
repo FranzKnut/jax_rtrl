@@ -70,8 +70,8 @@ class CTRNNCell(nn.RNNCellBase):
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
 
         def _initializer(key, *_):
-            _w_in = nn.initializers.orthogonal(0.1)(key, (self.num_units, x.shape[-1]))
-            _w_rec = nn.initializers.orthogonal(0.1)(
+            _w_in = nn.initializers.glorot_normal()(key, (self.num_units, x.shape[-1]))
+            _w_rec = nn.initializers.glorot_normal()(
                 key, (self.num_units, self.num_units)
             )
             _bias = jnp.zeros((self.num_units, 1))
@@ -301,9 +301,9 @@ class OnlineCTRNNCell(CTRNNCell):
                 elif self.ode_type == "tau_softplus":
                     traces = rflo_tau_softplus(self, carry, _p, x)
                 else:
-                    raise ValueError(f"ODE type {self.ode_type} not recognized.")
+                    raise ValueError(f"ODE type {self.ode_type} not supported.")
             else:
-                raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
+                raise ValueError(f"Plasticity mode {self.plasticity} not supported.")
             return traces
 
         def f(mdl, carry, x):
@@ -362,21 +362,21 @@ class OnlineCTRNNCell(CTRNNCell):
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
 
         # HACK: if we are inside a batched setting, we need to replicate for self.init
-        # _h = h
-        # if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-        #     _outer_batch_size = rng._trace.axis_data.size
-        #     _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
-        #     _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
-        #     input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
+        _h = h
+        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
+            _outer_batch_size = rng._trace.axis_data.size
+            _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
+            _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
+            input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
         # initialize to get the parameter shapes
         params = self.init(
             rng,
-            (h, None, None),
+            (_h, None, None),
             jnp.zeros(input_shape),
         )
         # # Now we also have to "unbatch" the params
-        # if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-        #     params = jax.tree.map(lambda x: x[0], params)
+        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
+            params = jax.tree.map(lambda x: x[0], params)
 
         # Initialize the jacobian traces
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
