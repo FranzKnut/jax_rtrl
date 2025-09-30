@@ -509,9 +509,8 @@ class RNNEnsemble(nn.RNNCellBase):
             outs = self.mlps_out(outs)
 
         # Combine Ensemble predictions
-        if self.config.out_size is None or self.config.method is None:
-            if self.config.out_size is not None or self.config.method is not None:
-                print("WARNING: out_size or method is None, skipped output processing.")
+        if self.config.out_size is None:
+            print("WARNING: RNNEnsemble out_size is None, skipped output processing.")
             return outs
 
         else:

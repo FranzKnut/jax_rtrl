@@ -8,7 +8,11 @@ import jax
 
 from typing import NamedTuple
 import numpy as np
-from numpy.lib._format_impl import _read_array_header
+from numpy.lib._version import NumpyVersion
+if NumpyVersion(np.__version__) >= "2.0.0":
+    from numpy.lib._format import _read_array_header
+else:
+    from numpy.lib.format import _read_array_header
 from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
