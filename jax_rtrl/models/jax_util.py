@@ -78,15 +78,12 @@ def restore_params(path, tree=None):
     path = os.path.abspath(path)
     orbax_path = os.path.join(path, "ckpt")
 
-    checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    checkpointer = orbax.checkpoint.StandardCheckpointer()
     try:
         params = checkpointer.restore(
             orbax_path,
-            tree,
-            # restore_args=jax.tree.map(
-            #     lambda _: orbax.checkpoint.RestoreArgs(restore_type=np.ndarray),
-            #     checkpointer.metadata(orbax_path),
-            # ),
+            jax.tree_util.tree_map(
+            orbax.checkpoint.utils.to_shape_dtype_struct, tree)
         )
     except FileNotFoundError:
         print(f"Checkpoint not found at {orbax_path}. Returning None.")
@@ -94,14 +91,14 @@ def restore_params(path, tree=None):
     return params
 
 
-def restore_params_and_config(path):
+def restore_params_and_config(path, tree=None):
     """Restore params and config from checkpoint."""
-    params = restore_params(path)
+    params = restore_params(path, tree)
     config = restore_config(path)
     return params, config
 
 
-def checkpointing(path, fresh=False, hparams: dict = None):
+def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
     """Set up checkpointing at given path.
 
     Parameters
@@ -112,6 +109,9 @@ def checkpointing(path, fresh=False, hparams: dict = None):
         If True, overwrite existing checkpoint. Default is False.
     hparams : dict, optional
         Hyper-parameters to be saved alongside model params.
+    tree : PyTree, optional
+        A PyTree structure that matches the parameters to be restored. 
+        See `orbax.checkpoint.PyTreeCheckpointer.restore` for details.
 
     Returns
     -------
@@ -127,7 +127,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
 
-    checkpointer = orbax.checkpoint.PyTreeCheckpointer()
+    checkpointer = orbax.checkpoint.StandardCheckpointer()
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
@@ -146,7 +146,7 @@ def checkpointing(path, fresh=False, hparams: dict = None):
         if fresh:
             print("Overwriting existing checkpoint")
         else:
-            restored_params, restored_hparams = restore_params_and_config(path)
+            restored_params, restored_hparams = restore_params_and_config(path, tree)
             print("Restored checkpoint")
 
     if (not exists or fresh) and hparams is not None:
