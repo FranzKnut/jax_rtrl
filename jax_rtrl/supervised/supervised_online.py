@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import jax.random as jrand
 import matplotlib.pyplot as plt
 import optax
+from jax_rtrl.models.cells.ctrnn import clip_tau
 from jax_rtrl.models.seq_models import RNNEnsembleConfig
 from jax_rtrl.supervised.datasets import sine
 
@@ -22,11 +23,13 @@ jax.config.update("jax_debug_nans", True)
 
 class Model(nn.Module):
     outsize: int
-    out_dist: str = None  # 'Normal'
+    out_dist: str = "Deterministic"
     hidden_size: int = 32
+    num_blocks: int = 1
     num_modules: int = 1
-    dt: float = 1
-    model_name: str = "lru_rtrl"
+    dt: float = 1.0
+    model_name: str = "rflo"
+    ensemble_method: str = "linear"
 
     def setup(self):
         if self.model_name in ["rtrl", "rflo"]:
@@ -39,10 +42,12 @@ class Model(nn.Module):
                 layers=(self.hidden_size,) * 2,
                 out_size=self.outsize,
                 num_modules=self.num_modules,
+                num_blocks=self.num_blocks,
                 out_dist=self.out_dist,
                 rnn_kwargs=kwargs,
                 output_layers=None,
                 fa_type="bp",
+                method=self.ensemble_method,
             ),
             name="rnn",
         )
@@ -80,8 +85,10 @@ if __name__ == "__main__":
     def loss(p, __x, __y, rnn_state=None):
         # MSE loss
         rnn_state, y_hat = model.apply(p, __x, rnn_state)
-        if model.out_dist is None:
-            loss = jnp.mean((__y - y_hat) ** 2)
+        if model.ensemble_method is not None:
+            y_hat = y_hat[0]
+        if model.out_dist == "Deterministic":
+            loss = jnp.mean((__y - y_hat.mode()) ** 2)
         else:
             loss = jnp.mean(-y_hat.log_prob(__y))
         return loss, rnn_state
@@ -89,12 +96,7 @@ if __name__ == "__main__":
     optimizer = optax.adam(1e-4)
 
     params, losses = train(
-        loss,
-        optimizer,
-        params,
-        (x, y),
-        key_train,
-        h0,
+        loss, optimizer, params, (x, y), key_train, h0, param_post_update_fn=clip_tau
     )
 
     plt.figure(figsize=(10, 5))
@@ -107,6 +109,9 @@ if __name__ == "__main__":
     plt.subplot(1, 2, 2)
 
     y_hat = predict(model, params, x)
+    if model.ensemble_method is not None:
+        y_hat = y_hat[0]
+    y_hat = y_hat.mode()
     print(f"Final loss: {jnp.mean((y - y_hat) ** 2):.3f}")
     plt.plot(x, y, label="target")
     plt.plot(x, y_hat.squeeze(), label="trained")

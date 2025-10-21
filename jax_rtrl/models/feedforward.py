@@ -282,7 +282,7 @@ class DistributionLayer(nn.Module):
 
     out_size: int
     layers: tuple[int, ...] = ()
-    distribution: str | None = "Normal"
+    distribution: str = "Normal"
     eps: float = 0.01  # Unimix epsilon TODO: rename and write doc for Normal
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
@@ -301,7 +301,7 @@ class DistributionLayer(nn.Module):
             )(x, training=training)
 
         out_size = self.out_size
-        x = get_normalization_fn(self.norm, training=training)(x)
+        # x = get_normalization_fn(self.norm, training=training)(x)
 
         if self.distribution in ["Normal", "ScaledNormal"]:
             out_size = 2 * out_size

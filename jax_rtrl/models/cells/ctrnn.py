@@ -1,6 +1,5 @@
 """CTRNN implementation."""
 
-from dataclasses import field
 from functools import partial
 
 import flax.linen as nn
@@ -9,32 +8,33 @@ import jax.numpy as jnp
 import jax.random as jrand
 from chex import PRNGKey
 
-from ..wirings import make_mask_initializer
+from jax_rtrl.models.cells.ode import ODECell
+
 from ..jax_util import set_matching_leaves, get_matching_leaves
+
+## CTRNN ODE functions
 
 
 def ctrnn_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
-    W, tau = params
     # Concatenate input and hidden state and ones for bias
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    u = y @ W.T
+    u = y @ params["W"].T
     act = jnp.tanh(u)
     # Subtract decay and divide by tau
-    return (act - h) / tau
+    return (act - h) / params["tau"]
 
 
 def ctrnn_ode_tau_softplus(params, h, x, min_tau=1.0):
     """Compute euler integration step or CTRNN ODE."""
-    W, b_tau = params
     # Concatenate input and hidden state and ones for bias
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    u = y @ W.T
+    u = y @ params["W"].T
     act = jnp.tanh(u)
     # Subtract decay and divide by tau
-    return (act - h) / (jax.nn.softplus(b_tau) + min_tau)
+    return (act - h) / (jax.nn.softplus(params["tau"]) + min_tau)
 
 
 def ctrnn_tg(params, h, x):
@@ -51,21 +51,27 @@ def ctrnn_tg(params, h, x):
     return (act - h) * tau
 
 
-class CTRNNCell(nn.RNNCellBase):
+def clip_tau(params, tau_min=1.0):
+    """HACK: clip tau to >= tau_min."""
+    return set_matching_leaves(
+        params,
+        ".*tau.*",
+        jax.tree.map(
+            partial(jnp.clip, min=tau_min), get_matching_leaves(params, ".*tau.*")
+        ),
+    )
+
+
+class CTRNNCell(ODECell):
     """Simple CTRNN cell."""
 
-    num_units: int
-    dt: float = 1.0
+    # num_units: int
     ode_type: str = "tau_softplus"
-    wiring: str | None = None
-    wiring_kwargs: dict = field(default_factory=dict)
+    # wiring: str | None = None
+    # wiring_kwargs: dict = field(default_factory=dict)
     tau_min: float = 1.0  # minimum value for tau used in ctrnn_ode_tau_softplus
 
-    @nn.compact
-    def __call__(self, h, x):  # noqa
-        """Compute euler integration step or CTRNN ODE."""
-        if h is None:
-            h = self.initialize_carry(self.make_rng(), x.shape)
+    def _make_params(self, x, mask=None):
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
 
@@ -78,40 +84,33 @@ class CTRNNCell(nn.RNNCellBase):
             return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
 
         W = self.param("W", _initializer, w_shape)
+        if mask is not None:
+            W = mask * W
 
-        if self.wiring is not None:
-            mask = self.variable(
-                "wiring",
-                "mask",
-                make_mask_initializer(self.wiring, **self.wiring_kwargs),
-                self.make_rng() if self.has_rng("params") else None,
-                w_shape,
-                int,
-            ).value
-            W = jax.lax.stop_gradient(mask) * W
-
-        # Compute updates
-        if self.ode_type == "murray":
+        if self.ode_type in ["murray", "tau_softplus"]:
             tau = self.param(
                 "tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,)
             )
-            df_dt = ctrnn_ode((W, tau), h, x)
-        elif self.ode_type == "tau_softplus":
-            tau = self.param(
-                "tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,)
-            )
-            df_dt = ctrnn_ode_tau_softplus((W, tau), h, x, min_tau=self.tau_min)
+            params = (W, tau)
         elif self.ode_type == "tg":
             W_tau = self.param(
                 "W_tau",
                 nn.initializers.he_normal(in_axis=-1, out_axis=-2),
                 (self.num_units, x.shape[-1] + self.num_units + 1),
             )
-            df_dt = ctrnn_tg((W, W_tau), h, x)
+            params = (W, W_tau)
+        return params
 
-        # Euler integration step with dt
-        out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
-        return out, out
+    def _f(self, h, x):
+        """Compute the derivative of the state."""
+        params = self.variables["params"]
+        if self.ode_type == "murray":
+            df_dt = ctrnn_ode(params, h, x)
+        elif self.ode_type == "tau_softplus":
+            df_dt = ctrnn_ode_tau_softplus(params, h, x, min_tau=self.tau_min)
+        elif self.ode_type == "tg":
+            df_dt = ctrnn_tg(params, h, x)
+        return df_dt
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
@@ -123,15 +122,7 @@ class CTRNNCell(nn.RNNCellBase):
         return 1
 
 
-def clip_tau(params):
-    """HACK: clip tau to >= 1.0."""
-    return set_matching_leaves(
-        params,
-        ".*tau.*",
-        jax.tree.map(
-            partial(jnp.clip, min=1.0), get_matching_leaves(params, ".*tau.*")
-        ),
-    )
+## CTRNN Jacobian functions
 
 
 def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
@@ -162,6 +153,7 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
 
 
 def hebbian(pre, post):
+    # TODO, also: infomax
     return jnp.outer(post, pre)
 
 
@@ -436,7 +428,7 @@ if __name__ == "__main__":
     def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-4, batch_size=64):
         """Train network. We use Stochastic Gradient Descent with a constant learning rate."""
         _x, _y = data
-        optimizer = optax.lion(lr)
+        optimizer = optax.adam(lr)
         opt_state = optimizer.init(_params)
 
         def step(carry, n):

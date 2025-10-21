@@ -25,11 +25,14 @@ def train_rnn_online(
     pbar = trange(int(num_steps), maxinterval=2)
 
     def run_episode(ep_carry, n):
+        print("Tracing run_episode.")
         def step(carry, _data):
             __params, _opt_state, _key, h = carry
             __x, __y = _data
             # _key, key_batch = jrand.split(_key)
-            (current_loss, h), grads = jax.value_and_grad(loss_fn, has_aux=True)(__params, __x, __y, h)
+            (current_loss, h), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                __params, __x, __y, h
+            )
             updates, _opt_state = optimizer.update(grads, _opt_state, __params)
             __params = optax.apply_updates(__params, updates)
 
@@ -50,7 +53,9 @@ def train_rnn_online(
 
         def print_progress(i, loss):
             pbar.update()
-            pbar.set_description(f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False)
+            pbar.set_description(
+                f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False
+            )
 
         jax.debug.callback(print_progress, n, current_loss)
         return step_carry, current_loss
@@ -64,11 +69,49 @@ def train_rnn_online(
     return params, _losses
 
 
+def print_progress(i, loss):
+    if i % 1000 == 0:
+        print(f"Iteration {i} | Loss: {loss:.3f}")
+
+
+def train_rnn_offline(
+    _loss_fn,
+    optimizer,
+    _params,
+    data,
+    _key,
+    num_steps=10_000,
+):
+    # We use Stochastic Gradient Descent with a constant learning rate
+    _x, _y = data
+
+    # mask = jax.tree.map(lambda x: True, _params)
+    # mask["params"]["layers_0"]["cell"]["tau"] = False
+    # optimizer = optax.adamw(lr, mask=mask) # Mask tau from weight decay
+
+    opt_state = optimizer.init(_params)
+
+    def step(carry, n):
+        __params, _opt_state, _key = carry
+        # _key, key_batch = jrand.split(_key)
+        current_loss, grads = jax.value_and_grad(_loss_fn)(__params, _x, _y)
+        updates, _opt_state = optimizer.update(grads, _opt_state, __params)
+        __params = optax.apply_updates(__params, updates)
+        jax.debug.callback(print_progress, n, current_loss)
+        return (__params, _opt_state, _key), current_loss
+
+    (_params, *_), _losses = jax.lax.scan(
+        step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=jnp.int32)
+    )
+    print(f"Final loss: {_losses[-1]:.3f}")
+    return _params, _losses
+
+
 def predict(model: nn.RNNCellBase, params, *inputs):
     """Predict a sequence of outputs given an input sequence."""
 
     def _step(carry, _x):
-        return model.apply(params, carry, *_x)
+        return model.apply(params, *_x, carry)
 
     h0 = model.apply(
         params,

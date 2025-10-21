@@ -17,14 +17,15 @@ from ..wirings import make_mask_initializer
 
 def ltc_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
-    W, tau = params
+    a, b, e, W = params
     # Concatenate input and hidden state
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    u = y @ W.T
-    act = jnp.tanh(u)
+    gating = jax.nn.sigmoid(a @ y.T + b).T
+    potential = y - e
+    y_dot = jnp.sum(W * gating * potential, axis=-1)
     # Subtract decay and divide by tau
-    return (act - h) / tau
+    return y_dot
 
 
 def ctrnn_tg(params, h, x):
@@ -55,25 +56,38 @@ class LTCCell(nn.RNNCellBase):
         """Compute euler integration step or CTRNN ODE."""
         if h is None:
             h = self.initialize_carry(self.make_rng(), x.shape)
+
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        W = self.param("W", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
+        a = self.param(
+            "a", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
+        )
+        b = self.param(
+            "b", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
+        )
+        e = self.param(
+            "e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
+        )
 
         if self.wiring is not None:
-            mask = self.variable(
-                "wiring",
-                "mask",
-                make_mask_initializer(self.wiring, **self.wiring_kwargs),
-                self.make_rng() if self.has_rng("params") else None,
-                w_shape,
-                int,
-            ).value
-            W = jax.lax.stop_gradient(mask) * W
+            mask = jax.lax.stop_gradient(
+                self.variable(
+                    "wiring",
+                    "mask",
+                    make_mask_initializer(self.wiring, **self.wiring_kwargs),
+                    self.make_rng() if self.has_rng("params") else None,
+                    w_shape,
+                    int,
+                ).value
+            )
+            a, b, e = jax.tree.map(lambda W: W * mask, (a, b, e))
         # Compute updates
-        if self.ode_type == "murray":
-            tau = self.param("tau", partial(jrand.uniform, minval=1, maxval=10), (self.num_units,))
-            df_dt = ctrnn_ode((W, tau), h, x)
-        elif self.ode_type == "tg":
+        if self.ode_type == "SA":
+            tau = self.param(
+                "tau", partial(jrand.uniform, minval=1, maxval=10), (self.num_units,)
+            )
+            df_dt = ltc_ode((W, tau), h, x)
+        elif self.ode_type == "NA":
             W_tau = self.param(
                 "W_tau",
                 nn.initializers.he_normal(in_axis=-1, out_axis=-2),
@@ -156,9 +170,13 @@ def rflo_murray(cell: LTCCell, carry, params, x):
     df_dw = {"W": jw, "tau": jtau}
     dh_dx = jnp.outer(
         df_dh,
-        (jnp.concatenate([jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))], axis=-1) @ W.T)[
-            ..., : x.shape[-1]
-        ],
+        (
+            jnp.concatenate(
+                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
+                axis=-1,
+            )
+            @ W.T
+        )[..., : x.shape[-1]],
     )
     # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
     return df_dw, dh_dx  # , hebb
@@ -237,7 +255,9 @@ class OnlineLTCCell(LTCCell):
             """Backward pass using RTRL."""
             # carry, jp, jx, hebb = tmp
             df_dy = y_bar[-1]
-            grads_p, grads_x = self.rtrl_gradient(tmp, df_dy, plasticity=self.plasticity)
+            grads_p, grads_x = self.rtrl_gradient(
+                tmp, df_dy, plasticity=self.plasticity
+            )
             # grads_p['W'] += hebb
             carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
             return ({"params": grads_p}, carry, grads_x)
@@ -269,7 +289,9 @@ class OnlineLTCCell(LTCCell):
         jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
         params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
         leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
-        jp = jax.tree.map(lambda x: jnp.zeros(leading_shape + x.shape), params["params"])
+        jp = jax.tree.map(
+            lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
+        )
         return h, jp, jx
 
 
@@ -336,7 +358,9 @@ if __name__ == "__main__":
             jax.debug.callback(print_progress, n, current_loss)
             return (__params, _opt_state, _key), current_loss
 
-        (_params, *_), _losses = jax.lax.scan(step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32))
+        (_params, *_), _losses = jax.lax.scan(
+            step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32)
+        )
         print(f"Final loss: {_losses[-1]:.3f}")
         return _params, _losses
 

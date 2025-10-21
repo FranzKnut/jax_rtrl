@@ -10,6 +10,8 @@ import numpy as np
 import optax
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+from jax_rtrl.models.jax_util import mse_loss
+from jax_rtrl.supervised.training_utils import train_rnn_offline as train
 from models.cells import CTRNNCell
 from models import FADense
 
@@ -32,46 +34,14 @@ params = model.init(key_model, x)
 def loss(p, __x, __y):
     # MSE loss
     y_hat = model.apply(p, __x)
-    return jax.numpy.sum((y_hat - __y) ** 2)
+    return mse_loss(y_hat, __y)
 
 
 loss(params, x, y)
 
-
-def print_progress(i, loss):
-    if i % 1000 == 0:
-        print(f"Iteration {i} | Loss: {loss:.3f}")
-
-
-def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-3):
-    # We use Stochastic Gradient Descent with a constant learning rate
-    _x, _y = data
-    
-    # mask = jax.tree.map(lambda x: True, _params)
-    # mask["params"]["layers_0"]["cell"]["tau"] = False
-    # optimizer = optax.adamw(lr, mask=mask) # Mask tau from weight decay
-
-    optimizer = optax.adam(lr)
-    opt_state = optimizer.init(_params)
-
-    def step(carry, n):
-        __params, _opt_state, _key = carry
-        # _key, key_batch = jrand.split(_key)
-        current_loss, grads = jax.value_and_grad(_loss_fn)(__params, _x, _y)
-        updates, _opt_state = optimizer.update(grads, _opt_state, __params)
-        __params = optax.apply_updates(__params, updates)
-        jax.debug.callback(print_progress, n, current_loss)
-        return (__params, _opt_state, _key), current_loss
-
-    (_params, *_), _losses = jax.lax.scan(
-        step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=np.int32)
-    )
-    print(f"Final loss: {_losses[-1]:.3f}")
-    return _params, _losses
-
-
 key, key_train = jrand.split(key_data)
-params, losses = train(loss, params, (x, y), key_train)
+optimizer = optax.adam(1e-3)
+params, losses = train(loss, optimizer, params, (x, y), key_train)
 
 plt.figure(figsize=(10, 5))
 

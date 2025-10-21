@@ -9,7 +9,6 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import flax.linen as nn
-import numpy as np
 import optax
 import orbax.checkpoint
 
