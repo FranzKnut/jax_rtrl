@@ -27,8 +27,9 @@ class Model(nn.Module):
     hidden_size: int = 32
     num_blocks: int = 1
     num_modules: int = 1
+    num_layers: int = 1
     dt: float = 1.0
-    model_name: str = "rflo"
+    model_name: str = "ltc"
     ensemble_method: str = "linear"
 
     def setup(self):
@@ -39,7 +40,7 @@ class Model(nn.Module):
         self.rnn = RNNEnsemble(
             RNNEnsembleConfig(
                 model_name=self.model_name,
-                layers=(self.hidden_size,) * 2,
+                layers=(self.hidden_size,) * self.num_layers,
                 out_size=self.outsize,
                 num_modules=self.num_modules,
                 num_blocks=self.num_blocks,

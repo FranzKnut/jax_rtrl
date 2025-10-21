@@ -23,9 +23,20 @@ class ODECell(nn.RNNCellBase):
         """Compute the derivative of the state."""
         raise NotImplementedError("_f must be implemented in subclasses.")
 
-    def _make_params(self, x, mask):
+    def _make_params(self, x):
         """Create parameters for ODECell."""
-        raise NotImplementedError("make_params must be implemented in subclasses.")
+        # Define params
+        w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
+        if self.wiring is not None:
+            print("Using wiring:", self.wiring)
+            self.variable(
+                "wiring",
+                "mask",
+                make_mask_initializer(self.wiring, **self.wiring_kwargs),
+                self.make_rng() if self.has_rng("params") else None,
+                w_shape,
+                int,
+            ).value
 
     def solve(self, h, x, mask=None):
         """Solve ODE over time T with step dt."""
@@ -50,23 +61,10 @@ class ODECell(nn.RNNCellBase):
         if h is None:
             h = self.initialize_carry(self.make_rng(), x.shape)
 
-        # Define params
-        w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        if self.wiring is not None:
-            mask = jax.lax.stop_gradient(
-                self.variable(
-                    "wiring",
-                    "mask",
-                    make_mask_initializer(self.wiring, **self.wiring_kwargs),
-                    self.make_rng() if self.has_rng("params") else None,
-                    w_shape,
-                    int,
-                ).value
-            )
-        self._make_params(x, mask if self.wiring is not None else None)
+        self._make_params(x)
 
         # Solve
-        out = self.solve(h, x, mask if self.wiring is not None else None)
+        out = self.solve(h, x)
         return out, out
 
     @property

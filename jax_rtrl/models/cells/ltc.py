@@ -2,6 +2,7 @@
 
 from dataclasses import field
 from functools import partial
+from tkinter import W
 from typing import Tuple
 
 import flax.linen as nn
@@ -12,7 +13,7 @@ import jax.random as jrand
 from chex import PRNGKey
 from flax.linen import nowrap
 
-from ..wirings import make_mask_initializer
+from jax_rtrl.models.cells.ode import ODECell
 
 
 def ltc_ode(params, h, x):
@@ -42,61 +43,42 @@ def ctrnn_tg(params, h, x):
     return (act - h) * tau
 
 
-class LTCCell(nn.RNNCellBase):
+class LTCCell(ODECell):
     """Simple CTRNN cell."""
 
-    num_units: int
+    # num_units: int
     dt: float = 1.0
-    ode_type: str = "murray"
-    wiring: str | None = "fully_connected"
+    ode_type: str = "hasani"
+    # wiring: str | None = "fully_connected"
     wiring_kwargs: dict = field(default_factory=dict)
 
-    @nn.compact
-    def __call__(self, h, x):  # noqa
-        """Compute euler integration step or CTRNN ODE."""
-        if h is None:
-            h = self.initialize_carry(self.make_rng(), x.shape)
-
+    def _make_params(self, x, mask):
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        a = self.param(
-            "a", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
-        )
+        a = self.param("a", nn.initializers.ones, w_shape)
         b = self.param(
             "b", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
         )
         e = self.param(
             "e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
         )
+        W = self.param(
+            "W", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
+        )
 
-        if self.wiring is not None:
-            mask = jax.lax.stop_gradient(
-                self.variable(
-                    "wiring",
-                    "mask",
-                    make_mask_initializer(self.wiring, **self.wiring_kwargs),
-                    self.make_rng() if self.has_rng("params") else None,
-                    w_shape,
-                    int,
-                ).value
-            )
-            a, b, e = jax.tree.map(lambda W: W * mask, (a, b, e))
-        # Compute updates
-        if self.ode_type == "SA":
-            tau = self.param(
-                "tau", partial(jrand.uniform, minval=1, maxval=10), (self.num_units,)
-            )
-            df_dt = ltc_ode((W, tau), h, x)
-        elif self.ode_type == "NA":
-            W_tau = self.param(
-                "W_tau",
-                nn.initializers.he_normal(in_axis=-1, out_axis=-2),
-                (self.num_units, x.shape[-1] + self.num_units + 1),
-            )
-            df_dt = ctrnn_tg((W, W_tau), h, x)
-        # Euler integration step with dt
-        out = jax.tree.map(lambda a, b: a + b * self.dt, h, df_dt)
-        return out, out
+        super()._make_params(x)
+
+    def _f(self, h, x):  # noqa
+        """Compute euler integration step or CTRNN ODE."""
+        params = self.variables["params"]
+
+        if "mask" in self.variables():
+            params = jax.tree.map(lambda W: W * params["mask"], params)
+        if self.ode_type == "hasani":
+            df_dt = ltc_ode(params, h, x)
+        else:
+            raise ValueError(f"Unknown ode_type: {self.ode_type}")
+        return df_dt
 
     @nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
@@ -136,11 +118,7 @@ def rtrl_ltc(cell, carry, params, x, ode=ltc_ode):
     return dh_dw, dh_dx
 
 
-def hebbian(pre, post):
-    return jnp.outer(post, pre)
-
-
-def rflo_murray(cell: LTCCell, carry, params, x):
+def rflo_ltc(cell: LTCCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
     W, tau = params.values()

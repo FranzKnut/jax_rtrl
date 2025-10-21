@@ -2,12 +2,11 @@ import os
 import sys
 
 import flax.linen as nn
-import jax
-import jax.numpy as jnp
 import jax.random as jrand
 import matplotlib.pyplot as plt
-import numpy as np
 import optax
+
+from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from jax_rtrl.models.jax_util import mse_loss
@@ -21,9 +20,23 @@ key = jrand.PRNGKey(0)
 key, key_model, key_data, key_train = jrand.split(key, 4)
 x, y = sine()
 
+config = RNNEnsembleConfig(
+    model_name="bptt",
+    layers=(32,) * 2,
+    out_size=1,
+    num_modules=1,
+    num_blocks=1,
+    out_dist="Deterministic",
+    rnn_kwargs={},
+    output_layers=None,
+    fa_type="bp",
+    method="linear",
+)
+
+
 model = nn.Sequential(
     [
-        nn.RNN(CTRNNCell(32)),
+        nn.RNN(RNNEnsemble(config)),
         FADense(1),
     ]
 )

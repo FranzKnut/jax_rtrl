@@ -71,7 +71,7 @@ class CTRNNCell(ODECell):
     # wiring_kwargs: dict = field(default_factory=dict)
     tau_min: float = 1.0  # minimum value for tau used in ctrnn_ode_tau_softplus
 
-    def _make_params(self, x, mask=None):
+    def _make_params(self, x):
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
 
@@ -84,8 +84,8 @@ class CTRNNCell(ODECell):
             return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
 
         W = self.param("W", _initializer, w_shape)
-        if mask is not None:
-            W = mask * W
+        if "mask" in self.variables:
+            W = jax.lax.stop_gradient(self.variables()["mask"]) * W
 
         if self.ode_type in ["murray", "tau_softplus"]:
             tau = self.param(
@@ -131,8 +131,7 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
 
     # immediate jacobian (this step)
     W, tau = params.values()
-    df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])((W, tau), h, x)
-    df_dw = {"W": df_dw[0], "tau": df_dw[1]}  # , "b": df_dw[1]
+    df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
 
     # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
     dh_dh = df_dh * cell.dt  # + jnp.identity(cell.num_units)
