@@ -29,7 +29,7 @@ class Model(nn.Module):
     num_modules: int = 1
     num_layers: int = 1
     dt: float = 1.0
-    model_name: str = "ltc"
+    model_name: str = "rtrl"
     ensemble_method: str = "linear"
 
     def setup(self):

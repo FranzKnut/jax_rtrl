@@ -1,13 +1,7 @@
 """LTC implementation. TODO!"""
 
-from dataclasses import field
-from functools import partial
-from tkinter import W
-from typing import Tuple
-
 import flax.linen as nn
 import jax
-import jax.interpreters
 import jax.numpy as jnp
 import jax.random as jrand
 from chex import PRNGKey
@@ -18,62 +12,42 @@ from jax_rtrl.models.cells.ode import ODECell
 
 def ltc_ode(params, h, x):
     """Compute euler integration step or CTRNN ODE."""
-    a, b, e, W = params
     # Concatenate input and hidden state
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    gating = jax.nn.sigmoid(a @ y.T + b).T
-    potential = y - e
-    y_dot = jnp.sum(W * gating * potential, axis=-1)
-    # Subtract decay and divide by tau
+    gating = jax.nn.sigmoid(params["a"] * y[None] + params["b"])
+    potential = params["e"] - y
+    # w = jnp.exp(params["W"])
+    w = jax.nn.softplus(params["W"])
+    y_dot = jnp.sum(w * gating * potential, axis=-1)
     return y_dot
-
-
-def ctrnn_tg(params, h, x):
-    """Compute euler integration step or CTRNN ODE."""
-    W, W_tau = params
-    # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    # This way we only need one FC layer for recurrent and input connections
-    act = jnp.tanh(y @ W.T)
-    # tau = jax.nn.softplus(y @ W_tau.T) + 1
-    # tau = jax.nn.softmax(y @ W_tau.T)
-    tau = jax.nn.sigmoid(y @ W_tau.T)
-    # Subtract decay and divide by tau
-    return (act - h) * tau
 
 
 class LTCCell(ODECell):
     """Simple CTRNN cell."""
 
     # num_units: int
-    dt: float = 1.0
+    # dt: float = 1.0
     ode_type: str = "hasani"
     # wiring: str | None = "fully_connected"
-    wiring_kwargs: dict = field(default_factory=dict)
+    # wiring_kwargs: dict = field(default_factory=dict)
 
-    def _make_params(self, x, mask):
+    def _make_params(self, x):
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        a = self.param("a", nn.initializers.ones, w_shape)
-        b = self.param(
-            "b", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
-        )
-        e = self.param(
-            "e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
-        )
-        W = self.param(
-            "W", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape
-        )
-
+        self.param("a", nn.initializers.ones, w_shape)
+        self.param("b", nn.initializers.zeros, w_shape)
+        self.param("e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
+        self.param("W", nn.initializers.uniform(1), w_shape)
         super()._make_params(x)
 
     def _f(self, h, x):  # noqa
         """Compute euler integration step or CTRNN ODE."""
         params = self.variables["params"]
 
-        if "mask" in self.variables():
-            params = jax.tree.map(lambda W: W * params["mask"], params)
+        if "mask" in self.variables:
+            mask = jax.lax.stop_gradient(self.variables["mask"])
+            params = jax.tree.map(lambda W: W * mask, params)
         if self.ode_type == "hasani":
             df_dt = ltc_ode(params, h, x)
         else:
@@ -81,7 +55,7 @@ class LTCCell(ODECell):
         return df_dt
 
     @nowrap
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
         return jnp.zeros(input_shape[:-1] + (self.num_units,))
 
@@ -98,7 +72,6 @@ def rtrl_ltc(cell, carry, params, x, ode=ltc_ode):
     # immediate jacobian (this step)
     W, tau = params.values()
     df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])((W, tau), h, x)
-    df_dw = {"W": df_dw[0], "tau": df_dw[1]}  # , "b": df_dw[1]
 
     # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
     dh_dh = df_dh * cell.dt  # + jnp.identity(cell.num_units)
@@ -257,7 +230,7 @@ class OnlineLTCCell(LTCCell):
         grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
         return grads_p, grads_x
 
-    def initialize_carry(self, rng: PRNGKey, input_shape: Tuple[int, ...]):
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the carry with jacobian traces."""
         h = super().initialize_carry(rng, input_shape)
         if self.plasticity == "bptt":

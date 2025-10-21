@@ -80,7 +80,7 @@ def train_rnn_offline(
     _params,
     data,
     _key,
-    num_steps=10_000,
+    num_steps=100_000,
 ):
     # We use Stochastic Gradient Descent with a constant learning rate
     _x, _y = data

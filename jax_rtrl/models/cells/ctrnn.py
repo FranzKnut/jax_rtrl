@@ -134,7 +134,7 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
 
     # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
-    dh_dh = df_dh * cell.dt  # + jnp.identity(cell.num_units)
+    dh_dh = df_dh * cell.dt #+ jnp.identity(cell.num_units)
 
     # jacobian trace (previous step * dh_h)
     comm = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), jp)
@@ -149,11 +149,6 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     dh_dx = df_dx + jx
 
     return dh_dw, dh_dx
-
-
-def hebbian(pre, post):
-    # TODO, also: infomax
-    return jnp.outer(post, pre)
 
 
 def rflo_murray(cell: CTRNNCell, carry, params, x):
@@ -240,6 +235,10 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
     # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
     return df_dw, dh_dx  # , hebb
 
+
+# def hebbian(pre, post):
+#     # TODO, also: infomax
+#     return jnp.outer(post, pre)
 
 # def rflo_tg(cell: CTRNNCell, carry, params, x):
 #     """Compute jacobian trace for RFLO."""
