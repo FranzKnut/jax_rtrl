@@ -41,7 +41,8 @@ class LTCCell(ODECell):
         self.param("a", nn.initializers.ones, w_shape)
         self.param("b", nn.initializers.zeros, w_shape)
         self.param("e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
-        self.param("W", nn.initializers.uniform(1), w_shape)
+        self.param("G", nn.initializers.uniform(1), w_shape)
+        self.param("G_l", nn.initializers.uniform(1), w_shape)
         super()._make_params(x)
 
     def _f(self, h, x):  # noqa

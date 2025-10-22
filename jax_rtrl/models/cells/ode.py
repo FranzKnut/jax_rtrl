@@ -15,7 +15,6 @@ class ODECell(nn.RNNCellBase):
     dt: float = 1.0
     T: float = 1.0
     solver: Literal["euler"] = "euler"
-    return_sequences: bool = False
     wiring: str | None = None
     wiring_kwargs: dict = field(default_factory=dict)
 
@@ -38,7 +37,7 @@ class ODECell(nn.RNNCellBase):
                 int,
             ).value
 
-    def solve(self, h, x):
+    def solve(self, h, x, mask=None, return_sequences=False):
         """Solve ODE over time T with step dt."""
         outs = []
         if self.solver == "euler":
@@ -46,17 +45,17 @@ class ODECell(nn.RNNCellBase):
             for _step in jnp.arange(0, self.T, self.dt):
                 h_dot = self._f(h, x)
                 h = jax.tree.map(lambda a, b: a + b * self.dt, h, h_dot)
-                if self.return_sequences:
+                if return_sequences:
                     outs.append(h)
         else:
             raise ValueError(f"Unknown solver: {self.solver}")
 
-        if self.return_sequences:
+        if return_sequences:
             return tree_stack(outs)
-        return h
+        return [h]
 
     @nn.compact
-    def __call__(self, h, x):  # noqa
+    def __call__(self, h, x, return_sequences=False):  # noqa
         """Call ODE solver."""
         if h is None:
             h = self.initialize_carry(self.make_rng(), x.shape)
@@ -64,8 +63,8 @@ class ODECell(nn.RNNCellBase):
         self._make_params(x)
 
         # Solve
-        out = self.solve(h, x)
-        return out, out
+        out = self.solve(h, x, return_sequences)
+        return out[-1], out if return_sequences else out[-1]
 
     @property
     def num_feature_axes(self) -> int:

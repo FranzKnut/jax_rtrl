@@ -40,7 +40,7 @@ x, y = sine()
 
 model = nn.Sequential(
     [
-        nn.RNN(LTCCell(8, dt=0.2)),
+        nn.RNN(CTRNNCell(8, dt=0.2)),
         FADense(1),
     ]
 )

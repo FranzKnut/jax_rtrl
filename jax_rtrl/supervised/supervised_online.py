@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field, replace
 import os
 import sys
 
@@ -7,6 +8,7 @@ import jax.numpy as jnp
 import jax.random as jrand
 import matplotlib.pyplot as plt
 import optax
+import simple_parsing
 from jax_rtrl.models.cells.ctrnn import clip_tau
 from jax_rtrl.models.seq_models import RNNEnsembleConfig
 from jax_rtrl.supervised.datasets import sine
@@ -20,43 +22,37 @@ from supervised.training_utils import train_rnn_online as train
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_debug_nans", True)
 
-LR = 1e-4
+
+@dataclass
+class TrainingConfig:
+    rnn_config: RNNEnsembleConfig = field(
+        default_factory=lambda: RNNEnsembleConfig(
+            model_name="rtrl",
+            layers=(32,),
+            num_modules=1,
+            num_blocks=1,
+            out_dist="Deterministic",
+            rnn_kwargs={"dt": 0.2},
+            output_layers=None,
+            fa_type="bp",
+            method="linear",
+        )
+    )
+
+
+cfg = simple_parsing.parse(TrainingConfig)
 
 
 class Model(nn.Module):
-    outsize: int
-    out_dist: str = "Deterministic"
-    hidden_size: int = 8
-    num_blocks: int = 1
-    num_modules: int = 1
-    num_layers: int = 1
-    dt: float = 0.2
-    model_name: str = "ltc_rtrl"
-    ensemble_method: str = "linear"
+    out_size: int
+    rnn_config: RNNEnsembleConfig
 
     def setup(self):
-        kwargs = {"dt": self.dt, "plasticity": self.model_name}
-        self.rnn = RNNEnsemble(
-            RNNEnsembleConfig(
-                model_name=self.model_name,
-                layers=(self.hidden_size,) * self.num_layers,
-                out_size=self.outsize,
-                num_modules=self.num_modules,
-                num_blocks=self.num_blocks,
-                out_dist=self.out_dist,
-                rnn_kwargs=kwargs,
-                output_layers=None,
-                fa_type="bp",
-                method=self.ensemble_method,
-            ),
-            name="rnn",
-        )
+        _config = replace(self.rnn_config, out_size=self.out_size)
+        self.rnn = RNNEnsemble(_config, name="rnn")
 
     @nn.compact
     def __call__(self, x, carry=None, key=None):
-        if carry is None:
-            carry = self.rnn.initialize_carry(key, x.shape)
-            key = jrand.fold_in(key, key[0])
         carry, out = self.rnn(carry, x)
         return carry, out
 
@@ -64,9 +60,9 @@ class Model(nn.Module):
         return self.rnn.initialize_carry(key, input_shape)
 
 
-def make_model(initial_input, key, kwargs={}):
+def make_model(initial_input, key, kwargs: RNNEnsembleConfig):
     key, key_model = jrand.split(key)
-    model = Model(1, **kwargs)
+    model = Model(1, kwargs)
     params = model.init(key_model, initial_input, key=key_model)
     h0 = model.apply(
         params, key_model, initial_input.shape[-1:], method=model.initialize_carry
@@ -80,7 +76,7 @@ if __name__ == "__main__":
 
     x, y = sine()
 
-    model, params, h0 = make_model(x[0], key)
+    model, params, h0 = make_model(x[0], key, cfg.rnn_config)
 
     def loss(p, __x, __y, rnn_state=None):
         # MSE loss

@@ -39,8 +39,8 @@ class SequenceLayerConfig:
     dropout: float = 0.0
     norm: str | None = None
     glu: bool = True
-    skip_connection: bool = True
-    learnable_scale_rnn_out: bool = True
+    skip_connection: bool = False
+    learnable_scale_rnn_out: bool = False
 
 
 @dataclass
@@ -87,6 +87,9 @@ class RNNEnsembleConfig(Serializable):
 
     def __post_init__(self):
         """Post-initialization logic for RNNEnsembleConfig."""
+        assert not (
+            self.layer_config.skip_connection and self.model_name in ["s5", "s5_rtrl"]
+        ), "Skip connections are not supported for S5 models."
         # Handle special cases for rnn_kwargs
         if not isinstance(self.rnn_kwargs, FrozenConfigDict):
             match = self.model_name and re.search(r"(rflo|rtrl)", self.model_name)
@@ -106,7 +109,9 @@ class RNNEnsembleConfig(Serializable):
                     assert self.hidden_size is not None, (
                         "NCP not supported when layers list is specified."
                     )
-                    self.rnn_kwargs["interneurons"] = self.hidden_size - (self.out_size + 1)
+                    self.rnn_kwargs["interneurons"] = self.hidden_size - (
+                        self.out_size + 1
+                    )
 
             # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
@@ -158,13 +163,11 @@ class SequenceLayer(nn.Module):
 
         # Optional skip connection
         if self.config.skip_connection:
-            if self.config.learnable_scale_rnn_out:
-                scale = self.param(
-                    "rnn_out_scale", nn.initializers.zeros, (self.rnn_size)
-                )
-                x *= scale
-
             x = x + inputs
+
+        if self.config.learnable_scale_rnn_out:
+            scale = self.param("rnn_out_scale", nn.initializers.zeros, (self.rnn_size))
+            x *= scale
 
         x = FADense(self.d_output or hidden.shape[-1])(x)
         if self.config.glu:
