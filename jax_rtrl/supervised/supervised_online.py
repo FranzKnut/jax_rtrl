@@ -20,23 +20,22 @@ from supervised.training_utils import train_rnn_online as train
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_debug_nans", True)
 
+LR = 1e-4
+
 
 class Model(nn.Module):
     outsize: int
     out_dist: str = "Deterministic"
-    hidden_size: int = 32
+    hidden_size: int = 8
     num_blocks: int = 1
     num_modules: int = 1
     num_layers: int = 1
-    dt: float = 1.0
-    model_name: str = "rtrl"
+    dt: float = 0.2
+    model_name: str = "ltc_rtrl"
     ensemble_method: str = "linear"
 
     def setup(self):
-        if self.model_name in ["rtrl", "rflo"]:
-            kwargs = {"dt": self.dt, "plasticity": self.model_name}
-        else:
-            kwargs = {}
+        kwargs = {"dt": self.dt, "plasticity": self.model_name}
         self.rnn = RNNEnsemble(
             RNNEnsembleConfig(
                 model_name=self.model_name,
@@ -94,7 +93,7 @@ if __name__ == "__main__":
             loss = jnp.mean(-y_hat.log_prob(__y))
         return loss, rnn_state
 
-    optimizer = optax.adam(1e-4)
+    optimizer = optax.adam(LR)
 
     params, losses = train(
         loss, optimizer, params, (x, y), key_train, h0, param_post_update_fn=clip_tau

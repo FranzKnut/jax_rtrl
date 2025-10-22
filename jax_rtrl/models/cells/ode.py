@@ -38,7 +38,7 @@ class ODECell(nn.RNNCellBase):
                 int,
             ).value
 
-    def solve(self, h, x, mask=None):
+    def solve(self, h, x):
         """Solve ODE over time T with step dt."""
         outs = []
         if self.solver == "euler":

@@ -7,6 +7,7 @@ import jax.random as jrand
 from chex import PRNGKey
 from flax.linen import nowrap
 
+from jax_rtrl.models.cells.ctrnn import rtrl_ctrnn
 from jax_rtrl.models.cells.ode import ODECell
 
 
@@ -17,8 +18,10 @@ def ltc_ode(params, h, x):
     # This way we only need one FC layer for recurrent and input connections
     gating = jax.nn.sigmoid(params["a"] * y[None] + params["b"])
     potential = params["e"] - y
-    # w = jnp.exp(params["W"])
-    w = jax.nn.softplus(params["W"])
+    w = params["W"]
+    # Optional: enforce positivity on weights
+    # w = jnp.exp(w)
+    # w = jax.nn.softplus(w)
     y_dot = jnp.sum(w * gating * potential, axis=-1)
     return y_dot
 
@@ -63,32 +66,6 @@ class LTCCell(ODECell):
     def num_feature_axes(self) -> int:
         """Returns the number of feature axes of the RNN cell."""
         return 1
-
-
-def rtrl_ltc(cell, carry, params, x, ode=ltc_ode):
-    """Compute jacobian trace update for RTRL."""
-    h, jp, jx = carry
-
-    # immediate jacobian (this step)
-    W, tau = params.values()
-    df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])((W, tau), h, x)
-
-    # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
-    dh_dh = df_dh * cell.dt  # + jnp.identity(cell.num_units)
-
-    # jacobian trace (previous step * dh_h)
-    comm = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), jp)
-
-    def rtrl_step(p, rec, dh):
-        return p + rec + dh * cell.dt
-
-    # Update dh_dw approximation
-    dh_dw = jax.tree.map(rtrl_step, jp, comm, df_dw)
-
-    # Update dh_dx approximation
-    dh_dx = df_dx + jx
-
-    return dh_dw, dh_dx
 
 
 def rflo_ltc(cell: LTCCell, carry, params, x):
@@ -177,7 +154,7 @@ class OnlineLTCCell(LTCCell):
 
         def _trace_update(carry, _p, x):
             if self.plasticity == "rtrl":
-                traces = rtrl_ltc(self, carry, _p, x)
+                traces = rtrl_ctrnn(self, carry, _p, x, ode=ltc_ode)
             elif self.plasticity == "rflo":
                 traces = rflo_ltc(self, carry, _p, x)
             else:

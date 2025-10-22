@@ -1,6 +1,6 @@
 from jax_rtrl.models.cells.ctrnn import CTRNNCell, OnlineCTRNNCell
 from jax_rtrl.models.cells.lru import OnlineLRULayer
-from jax_rtrl.models.cells.ltc import LTCCell
+from jax_rtrl.models.cells.ltc import LTCCell, OnlineLTCCell
 from jax_rtrl.models.s5 import StackedEncoderModel
 
 ONLINE_CELL_TYPES = {
@@ -8,6 +8,8 @@ ONLINE_CELL_TYPES = {
     "rtrl": OnlineCTRNNCell,
     "lru_rtrl": OnlineLRULayer,
     "s5_rtrl": StackedEncoderModel,
+    "ltc_rtrl": OnlineLTCCell,
+    "rflo_rtrl": OnlineLTCCell,
 }
 
 

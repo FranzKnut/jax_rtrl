@@ -2,6 +2,7 @@
 
 from functools import partial
 
+import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -130,23 +131,22 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     h, jp, jx = carry
 
     # immediate jacobian (this step)
-    W, tau = params.values()
     df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
 
     # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
-    dh_dh = df_dh * cell.dt #+ jnp.identity(cell.num_units)
+    dh_dh = df_dh * cell.dt + jnp.identity(cell.num_units)
 
     # jacobian trace (previous step * dh_h)
     comm = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), jp)
 
-    def rtrl_step(p, rec, dh):
-        return p + rec + dh * cell.dt
+    def rtrl_step(rec, dh):
+        return rec + dh * cell.dt
 
     # Update dh_dw approximation
-    dh_dw = jax.tree.map(rtrl_step, jp, comm, df_dw)
+    dh_dw = jax.tree.map(rtrl_step, comm, df_dw)
 
     # Update dh_dx approximation
-    dh_dx = df_dx + jx
+    dh_dx = df_dx + jnp.tensordot(dh_dh, jx, axes=1) * cell.dt
 
     return dh_dw, dh_dx
 
