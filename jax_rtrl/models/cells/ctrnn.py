@@ -2,14 +2,13 @@
 
 from functools import partial
 
-import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import jax.random as jrand
 from chex import PRNGKey
 
-from jax_rtrl.models.cells.ode import ODECell
+from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
 
 from ..jax_util import set_matching_leaves, get_matching_leaves
 
@@ -146,8 +145,7 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     dh_dw = jax.tree.map(rtrl_step, comm, df_dw)
 
     # Update dh_dx approximation
-    dh_dx = df_dx + jnp.tensordot(dh_dh, jx, axes=1) * cell.dt
-
+    dh_dx = df_dx * cell.dt + jnp.tensordot(dh_dh, jx, axes=1) * cell.dt
     return dh_dw, dh_dx
 
 
@@ -269,111 +267,24 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
 #     return df_dw, dh_dx
 
 
-class OnlineCTRNNCell(CTRNNCell):
+class OnlineCTRNNCell(OnlineODECell, CTRNNCell):
     """Online CTRNN module."""
 
     plasticity: str = "rflo"
 
-    @nn.compact
-    def __call__(self, carry, x, force_trace_compute=False, force_bptt=False):  # noqa
-        if carry is None:
-            carry = self.initialize_carry(self.make_rng(), x.shape)
-
-        if self.plasticity == "bptt" or force_bptt:
-            return CTRNNCell.__call__(self, carry, x)
-
-        def _trace_update(carry, _p, x):
-            if self.plasticity == "rtrl":
-                traces = rtrl_ctrnn(self, carry, _p, x)
-            elif self.plasticity == "rflo":
-                if self.ode_type == "murray":
-                    traces = rflo_murray(self, carry, _p, x)
-                elif self.ode_type == "tau_softplus":
-                    traces = rflo_tau_softplus(self, carry, _p, x)
-                else:
-                    raise ValueError(f"ODE type {self.ode_type} not supported.")
+    def _trace_update(self, carry, _p, x):
+        if self.plasticity == "rtrl":
+            traces = rtrl_ctrnn(self, carry, _p, x)
+        elif self.plasticity == "rflo":
+            if self.ode_type == "murray":
+                traces = rflo_murray(self, carry, _p, x)
+            elif self.ode_type == "tau_softplus":
+                traces = rflo_tau_softplus(self, carry, _p, x)
             else:
-                raise ValueError(f"Plasticity mode {self.plasticity} not supported.")
-            return traces
-
-        def f(mdl, carry, x):
-            h_next, out = CTRNNCell.__call__(mdl, carry[0], x)
-            if force_trace_compute:
-                traces = _trace_update(carry, mdl.variables["params"], x)
-            else:
-                traces = carry[1:]
-            return (h_next, *traces), out
-
-        def fwd(mdl, carry, x):
-            """Forward pass with tmp for backward pass."""
-            out, _ = CTRNNCell.__call__(mdl, carry[0], x)
-            traces = _trace_update(carry, mdl.variables["params"], x)
-            return (
-                (out, *traces),
-                (out, *traces) if force_trace_compute else out,
-            ), (out, *traces)
-
-        def bwd(tmp, y_bar):
-            """Backward pass using RTRL."""
-            # carry, jp, jx, hebb = tmp
-            df_dy = y_bar[-1]
-            df_dy += y_bar[-2][0]  # Also include carry grad
-            grads_p, grads_x = self.rtrl_gradient(
-                tmp, df_dy, plasticity=self.plasticity
-            )
-            # grads_p['W'] += hebb
-            carry = jax.tree.map(jnp.zeros_like, tmp)
-            return ({"params": grads_p}, carry, grads_x)
-
-        f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        return f_grad(self, carry, x)
-
-    @staticmethod
-    def rtrl_gradient(carry, df_dy, plasticity="rflo"):
-        """Compute RTRL gradient."""
-        h, jp, jx = carry
-        if plasticity == "rflo":
-            grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
+                raise ValueError(f"ODE type {self.ode_type} not supported.")
         else:
-            grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
-        if len(df_dy.shape) > 1:
-            # has batch dim
-            grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
-        grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
-        return grads_p, grads_x
-
-    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
-        """Initialize the carry with jacobian traces."""
-        h = super().initialize_carry(rng, input_shape)
-        if self.plasticity == "bptt":
-            return h
-
-        # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
-        jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
-
-        # HACK: if we are inside a batched setting, we need to replicate for self.init
-        _h = h
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            _outer_batch_size = rng._trace.axis_data.size
-            _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
-            _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
-            input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
-        # initialize to get the parameter shapes
-        params = self.init(
-            rng,
-            (_h, None, None),
-            jnp.zeros(input_shape),
-        )
-        # # Now we also have to "unbatch" the params
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            params = jax.tree.map(lambda x: x[0], params)
-
-        # Initialize the jacobian traces
-        leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
-        jp = jax.tree.map(
-            lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
-        )
-        return h, jp, jx
+            raise ValueError(f"Plasticity mode {self.plasticity} not supported.")
+        return traces
 
 
 if __name__ == "__main__":

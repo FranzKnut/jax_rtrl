@@ -22,17 +22,21 @@ from supervised.training_utils import train_rnn_online as train
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_debug_nans", True)
 
+
 @dataclass
 class TrainingConfig:
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-3
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
-            model_name="rtrl",
+            model_name="ltc_rtrl",
             layers=(32,),
             num_modules=1,
             num_blocks=1,
             out_dist="Deterministic",
-            rnn_kwargs={"dt": 0.2},
+            rnn_kwargs={
+                "dt": 1.0,
+                "ode_type": "lrc",
+            },
             output_layers=None,
             fa_type="bp",
             method="linear",
@@ -107,7 +111,7 @@ if __name__ == "__main__":
     plt.subplot(1, 2, 2)
 
     y_hat = predict(model, params, x)
-    if model.ensemble_method is not None:
+    if cfg.rnn_config.method is not None:
         y_hat = y_hat[0]
     y_hat = y_hat.mode()
     print(f"Final loss: {jnp.mean((y - y_hat) ** 2):.3f}")

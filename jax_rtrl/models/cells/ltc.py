@@ -1,5 +1,6 @@
 """LTC implementation. TODO!"""
 
+from typing import Literal
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -8,11 +9,11 @@ from chex import PRNGKey
 from flax.linen import nowrap
 
 from jax_rtrl.models.cells.ctrnn import rtrl_ctrnn
-from jax_rtrl.models.cells.ode import ODECell
+from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
 
 
-def ltc_ode(params, h, x):
-    """Compute euler integration step or CTRNN ODE."""
+def ltc_hasani(params, h, x):
+    """."""
     # Concatenate input and hidden state
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
@@ -26,14 +27,48 @@ def ltc_ode(params, h, x):
     return y_dot
 
 
+def ltc_farsang(params, h, x):
+    """h' = -fi hi + ui eli.
+
+    fi = Pm+n  \sum gji sigmoid(aji yj + bji) + gli
+    ui = Pm+n  \sum kji sigmoid(aji yj + bji) + gli
+    kji = gji eji/eli
+    """
+    # Concatenate input and hidden state
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    # This way we only need one FC layer for recurrent and input connections
+    k = params["W"] * params["e"] / params["e_l"][:, None]
+    g = jnp.stack([params["W"], k], axis=0)
+    g_l = jnp.stack([params["g_l"], params["g_l"]], axis=0)
+    gating = jax.nn.sigmoid(params["a"] * y[None] + params["b"])
+    gating = jnp.stack([gating, gating], axis=0)
+    f_u = jnp.mean(g * gating + g_l[..., None], axis=-1)
+    f, u = f_u
+    y_dot = -f * h + u * params["e_l"]
+    return y_dot
+
+
+def lrc_ode(params, h, x):
+    """Compute euler integration step or CTRNN ODE."""
+    # Concatenate input and hidden state
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    # This way we only need one FC layer for recurrent and input connections
+    k = params["W"] * params["e"] / params["e_l"][:, None]
+    g = jnp.stack([params["W"], k], axis=0)
+    g_l = jnp.stack([params["g_l"], params["g_l"]], axis=0)
+    gating = jax.nn.sigmoid(params["a"] * y[None] + params["b"])
+    gating = jnp.stack([gating, gating], axis=0)
+    f, u = jnp.sum(g * gating + g_l[..., None], axis=-1)
+    y_dot = -jax.nn.sigmoid(f) * h + jax.nn.tanh(u) * params["e_l"]
+    capacitance = jax.nn.sigmoid(params["o"] @ y + params["p"])
+    y_dot = y_dot * capacitance
+    return y_dot
+
+
 class LTCCell(ODECell):
     """Simple CTRNN cell."""
 
-    # num_units: int
-    # dt: float = 1.0
-    ode_type: str = "hasani"
-    # wiring: str | None = "fully_connected"
-    # wiring_kwargs: dict = field(default_factory=dict)
+    ode_type: Literal["hasani", "farsang"] = "hasani"
 
     def _make_params(self, x):
         # Define params
@@ -42,6 +77,11 @@ class LTCCell(ODECell):
         self.param("b", nn.initializers.zeros, w_shape)
         self.param("e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
         self.param("W", nn.initializers.uniform(1), w_shape)
+        self.param("e_l", nn.initializers.uniform(-1), self.num_units)
+        self.param("g_l", nn.initializers.uniform(1), self.num_units)
+        if self.ode_type == "lrc":
+            self.param("o", nn.initializers.uniform(-1), w_shape)
+            self.param("p", nn.initializers.uniform(-1), self.num_units)
         super()._make_params(x)
 
     def _f(self, h, x):  # noqa
@@ -52,7 +92,11 @@ class LTCCell(ODECell):
             mask = jax.lax.stop_gradient(self.variables["mask"])
             params = jax.tree.map(lambda W: W * mask, params)
         if self.ode_type == "hasani":
-            df_dt = ltc_ode(params, h, x)
+            df_dt = ltc_hasani(params, h, x)
+        elif self.ode_type == "farsang":
+            df_dt = ltc_farsang(params, h, x)
+        elif self.ode_type == "lrc":
+            df_dt = lrc_ode(params, h, x)
         else:
             raise ValueError(f"Unknown ode_type: {self.ode_type}")
         return df_dt
@@ -139,88 +183,25 @@ def rflo_ltc(cell: LTCCell, carry, params, x):
 #     return df_dw, dh_dx
 
 
-class OnlineLTCCell(LTCCell):
+class OnlineLTCCell(OnlineODECell, LTCCell):
     """Online LTC module."""
 
-    plasticity: str = "rflo"
-
-    @nn.compact
-    def __call__(self, carry, x, force_trace_compute=False):  # noqa
-        if carry is None:
-            carry = self.initialize_carry(self.make_rng(), x.shape)
-
-        if self.plasticity == "bptt":
-            return LTCCell.__call__(self, carry, x)
-
-        def _trace_update(carry, _p, x):
-            if self.plasticity == "rtrl":
-                traces = rtrl_ctrnn(self, carry, _p, x, ode=ltc_ode)
-            elif self.plasticity == "rflo":
-                traces = rflo_ltc(self, carry, _p, x)
+    def _trace_update(self, carry, _p, x):
+        if self.plasticity == "rtrl":
+            if self.ode_type == "farsang":
+                _ode_fn = ltc_farsang
+            elif self.ode_type == "hasani":
+                _ode_fn = ltc_hasani
+            elif self.ode_type == "lrc":
+                _ode_fn = lrc_ode
             else:
-                raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
-            return traces
-
-        def f(mdl, carry, x):
-            h_next, out = LTCCell.__call__(mdl, carry[0], x)
-            if force_trace_compute:
-                traces = _trace_update(carry, mdl.variables["params"], x)
-            else:
-                traces = carry[1:]
-            return (h_next, *traces), out
-
-        def fwd(mdl, carry, x):
-            """Forward pass with tmp for backward pass."""
-            out, _ = LTCCell.__call__(mdl, carry[0], x)
-            traces = _trace_update(carry, mdl.variables["params"], x)
-            return (
-                (out, *traces),
-                (out, *traces) if force_trace_compute else out,
-            ), (out, *traces)
-
-        @jax.jit
-        def bwd(tmp, y_bar):
-            """Backward pass using RTRL."""
-            # carry, jp, jx, hebb = tmp
-            df_dy = y_bar[-1]
-            grads_p, grads_x = self.rtrl_gradient(
-                tmp, df_dy, plasticity=self.plasticity
-            )
-            # grads_p['W'] += hebb
-            carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
-            return ({"params": grads_p}, carry, grads_x)
-
-        f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        return f_grad(self, carry, x)
-
-    @staticmethod
-    def rtrl_gradient(carry, df_dy, plasticity="rflo"):
-        """Compute RTRL gradient."""
-        h, jp, jx = carry
-        if plasticity == "rflo":
-            grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
+                raise ValueError(f"ODE type {self.ode_type} not recognized.")
+            traces = rtrl_ctrnn(self, carry, _p, x, ode=_ode_fn)
+        elif self.plasticity == "rflo":
+            traces = rflo_ltc(self, carry, _p, x)
         else:
-            grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
-        if len(df_dy.shape) > 1:
-            # has batch dim
-            grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
-        grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
-        return grads_p, grads_x
-
-    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
-        """Initialize the carry with jacobian traces."""
-        h = super().initialize_carry(rng, input_shape)
-        if self.plasticity == "bptt":
-            return h
-
-        # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
-        jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
-        params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
-        leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
-        jp = jax.tree.map(
-            lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
-        )
-        return h, jp, jx
+            raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
+        return traces
 
 
 if __name__ == "__main__":
