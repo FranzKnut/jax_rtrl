@@ -9,6 +9,7 @@ import jax
 from typing import NamedTuple
 import numpy as np
 from numpy.lib._version import NumpyVersion
+
 if NumpyVersion(np.__version__) >= "2.0.0":
     from numpy.lib.format import read_array_header_1_0 as _read_array_header
 else:
@@ -20,7 +21,7 @@ import flashbax as fbx
 from flashbax.vault import Vault
 
 
-def split_train_test(dataset, percent_eval: float = 0.2):
+def split_train_test(dataset, percent_eval: float = 0.2, shuffle: bool = False):
     """Split the dataset into train and test sets along the first axis.
 
     Train episodes are taken from the beginning of the dataset, test episodes from the end.
@@ -28,6 +29,10 @@ def split_train_test(dataset, percent_eval: float = 0.2):
     :param percent_eval: float
     :return: train and eval tuples of (inputs, target)
     """
+    if shuffle:
+        key = jrandom.PRNGKey(0)
+        perm = jrandom.permutation(key, jnp.arange(jax.tree_util.tree_leaves(dataset)[0].shape[0]))
+        dataset = jax.tree.map(lambda x: x[perm], dataset)
     dataset_size = jax.tree.flatten(dataset)[0][0].shape[0]
     train_size = int(dataset_size * (1 - percent_eval))
     dataset_train = jax.tree.map(lambda x: x[:train_size], dataset)
@@ -251,8 +256,12 @@ def load_into_vault(
 # Toy datasets -----------------------------------------------------------------
 
 
-def spirals(dataset_size, key):
-    """Create a dataset of two spirals."""
+def spirals(dataset_size=100, key=jrandom.PRNGKey(0)):
+    """Create a dataset of two spirals.
+
+    Creates x: [dataset_size, time=16, 2] and y: [dataset_size, 1] 
+    where the two classes in y are spirals that wind in opposite directions.
+    """
     t = jnp.linspace(0, 2 * jnp.pi, 16)
     offset = jrandom.uniform(key, (dataset_size, 1), minval=0, maxval=2 * jnp.pi)
     x1 = jnp.sin(t + offset) / (1 + t)
@@ -263,7 +272,6 @@ def spirals(dataset_size, key):
     x1 = x1.at[:half_dataset_size].multiply(-1)
     y = y.at[:half_dataset_size].set(0)
     x = jnp.stack([x1, x2], axis=-1)
-
     return x, y
 
 

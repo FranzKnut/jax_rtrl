@@ -89,6 +89,10 @@ class RNNEnsembleConfig(Serializable):
         """Post-initialization logic for RNNEnsembleConfig."""
         # Handle special cases for rnn_kwargs
         if not isinstance(self.rnn_kwargs, FrozenConfigDict):
+            # TODO: add LTC variants
+            match = self.model_name and re.search(r"(lrc|ltc|fltc)", self.model_name)
+            if match: 
+                self.rnn_kwargs["ode_type"] = match.group(1)
             match = self.model_name and re.search(r"(rflo|rtrl)", self.model_name)
             if match:
                 self.rnn_kwargs["plasticity"] = match.group(1)

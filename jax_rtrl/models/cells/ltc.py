@@ -17,13 +17,13 @@ def ltc_hasani(params, h, x):
     # Concatenate input and hidden state
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    gating = jax.nn.sigmoid(params["a"] * y[None] + params["b"])
-    potential = params["e"] - y
+    gating = jax.nn.sigmoid(params["a"] * y[..., None,:] + params["b"])
+    potential = params["e"] - y[..., None, :]  # shape (..., 1, input+hidden+1)
     w = params["W"]
     # Optional: enforce positivity on weights
     # w = jnp.exp(w)
     # w = jax.nn.softplus(w)
-    y_dot = jnp.sum(w * gating * potential, axis=-1)
+    y_dot = jnp.mean(w * gating * potential, axis=-1)
     return y_dot
 
 
@@ -56,11 +56,17 @@ def lrc_ode(params, h, x):
     k = params["W"] * params["e"] / params["e_l"][:, None]
     g = jnp.stack([params["W"], k], axis=0)
     g_l = jnp.stack([params["g_l"], params["g_l"]], axis=0)
-    gating = jax.nn.sigmoid(params["a"] * y[None] + params["b"])
+    gating = jax.nn.sigmoid(params["a"] * y[..., None, :] + params["b"])
+    batched = y.ndim > 1
     gating = jnp.stack([gating, gating], axis=0)
-    f, u = jnp.sum(g * gating + g_l[..., None], axis=-1)
+    if batched:
+        gating = gating.swapaxes(0, 1)
+    f_u = jnp.sum(g * gating + g_l[..., None], axis=-1)
+    if batched:
+        f_u = f_u.swapaxes(0, 1)
+    f, u = f_u
     y_dot = -jax.nn.sigmoid(f) * h + jax.nn.tanh(u) * params["e_l"]
-    capacitance = jax.nn.sigmoid(params["o"] @ y + params["p"])
+    capacitance = jax.nn.sigmoid(params["o"] @ y.T).T
     y_dot = y_dot * capacitance
     return y_dot
 
@@ -81,7 +87,7 @@ class LTCCell(ODECell):
         self.param("g_l", nn.initializers.uniform(1), self.num_units)
         if self.ode_type == "lrc":
             self.param("o", nn.initializers.uniform(-1), w_shape)
-            self.param("p", nn.initializers.uniform(-1), self.num_units)
+            # self.param("p", nn.initializers.uniform(-1), self.num_units)
         super()._make_params(x)
 
     def _f(self, h, x):  # noqa
@@ -91,9 +97,9 @@ class LTCCell(ODECell):
         if "mask" in self.variables:
             mask = jax.lax.stop_gradient(self.variables["mask"])
             params = jax.tree.map(lambda W: W * mask, params)
-        if self.ode_type == "hasani":
+        if self.ode_type in ["hasani", "ltc"]:
             df_dt = ltc_hasani(params, h, x)
-        elif self.ode_type == "farsang":
+        elif self.ode_type in ["farsang", "fltc"]:
             df_dt = ltc_farsang(params, h, x)
         elif self.ode_type == "lrc":
             df_dt = lrc_ode(params, h, x)
@@ -188,9 +194,9 @@ class OnlineLTCCell(OnlineODECell, LTCCell):
 
     def _trace_update(self, carry, _p, x):
         if self.plasticity == "rtrl":
-            if self.ode_type == "farsang":
+            if self.ode_type in ["farsang", "fltc"]:
                 _ode_fn = ltc_farsang
-            elif self.ode_type == "hasani":
+            elif self.ode_type in ["hasani", "ltc"]:
                 _ode_fn = ltc_hasani
             elif self.ode_type == "lrc":
                 _ode_fn = lrc_ode

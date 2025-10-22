@@ -9,7 +9,7 @@ ONLINE_CELL_TYPES = {
     "lru_rtrl": OnlineLRULayer,
     "s5_rtrl": StackedEncoderModel,
     "ltc_rtrl": OnlineLTCCell,
-    "rflo_rtrl": OnlineLTCCell,
+    "lrc_rtrl": OnlineLTCCell,
 }
 
 

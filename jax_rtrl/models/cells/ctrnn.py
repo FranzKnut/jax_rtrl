@@ -99,6 +99,8 @@ class CTRNNCell(ODECell):
                 (self.num_units, x.shape[-1] + self.num_units + 1),
             )
             params = (W, W_tau)
+        else:
+            raise ValueError(f"ODE type {self.ode_type} not supported.")
         return params
 
     def _f(self, h, x):
