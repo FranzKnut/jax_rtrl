@@ -22,9 +22,9 @@ from supervised.training_utils import train_rnn_online as train
 # jax.config.update("jax_disable_jit", True)
 jax.config.update("jax_debug_nans", True)
 
-
 @dataclass
 class TrainingConfig:
+    learning_rate: float = 3e-4
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
             model_name="rtrl",
@@ -40,9 +40,6 @@ class TrainingConfig:
     )
 
 
-cfg = simple_parsing.parse(TrainingConfig)
-
-
 class Model(nn.Module):
     out_size: int
     rnn_config: RNNEnsembleConfig
@@ -53,6 +50,9 @@ class Model(nn.Module):
 
     @nn.compact
     def __call__(self, x, carry=None, key=None):
+        if carry is None:
+            carry = self.rnn.initialize_carry(key, x.shape)
+            key = jrand.fold_in(key, key[0])
         carry, out = self.rnn(carry, x)
         return carry, out
 
@@ -71,6 +71,8 @@ def make_model(initial_input, key, kwargs: RNNEnsembleConfig):
 
 
 if __name__ == "__main__":
+    cfg = simple_parsing.parse(TrainingConfig)
+
     key = jrand.PRNGKey(1)
     key, key_data, key_train = jrand.split(key, 3)
 
@@ -81,15 +83,15 @@ if __name__ == "__main__":
     def loss(p, __x, __y, rnn_state=None):
         # MSE loss
         rnn_state, y_hat = model.apply(p, __x, rnn_state)
-        if model.ensemble_method is not None:
+        if cfg.rnn_config.method is not None:
             y_hat = y_hat[0]
-        if model.out_dist == "Deterministic":
+        if cfg.rnn_config.out_dist == "Deterministic":
             loss = jnp.mean((__y - y_hat.mode()) ** 2)
         else:
             loss = jnp.mean(-y_hat.log_prob(__y))
         return loss, rnn_state
 
-    optimizer = optax.adam(LR)
+    optimizer = optax.adam(cfg.learning_rate)
 
     params, losses = train(
         loss, optimizer, params, (x, y), key_train, h0, param_post_update_fn=clip_tau

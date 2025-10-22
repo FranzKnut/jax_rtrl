@@ -87,9 +87,6 @@ class RNNEnsembleConfig(Serializable):
 
     def __post_init__(self):
         """Post-initialization logic for RNNEnsembleConfig."""
-        assert not (
-            self.layer_config.skip_connection and self.model_name in ["s5", "s5_rtrl"]
-        ), "Skip connections are not supported for S5 models."
         # Handle special cases for rnn_kwargs
         if not isinstance(self.rnn_kwargs, FrozenConfigDict):
             match = self.model_name and re.search(r"(rflo|rtrl)", self.model_name)
