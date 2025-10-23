@@ -38,7 +38,7 @@ class SequenceLayerConfig:
 
     dropout: float = 0.0
     norm: str | None = None
-    glu: bool = True
+    glu: bool = False
     skip_connection: bool = False
     learnable_scale_rnn_out: bool = False
 

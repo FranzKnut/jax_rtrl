@@ -14,7 +14,7 @@ from jax_rtrl.models.seq_models import RNNEnsembleConfig
 from jax_rtrl.supervised import datasets
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from models.seq_models import RNNEnsemble, make_batched_model
+from models.seq_models import RNNEnsemble, SequenceLayerConfig, make_batched_model
 from supervised.training_utils import predict
 from supervised.training_utils import train_rnn_online as train
 
@@ -25,20 +25,29 @@ jax.config.update("jax_debug_nans", True)
 
 @dataclass
 class TrainingConfig:
-    dataset: str = "spirals"
-    learning_rate: float = 1e-5
+    dataset: str = "sine"
+    # dataset: str = "spirals"
+    learning_rate: float = 3e-4
+    gradient_clip: float | None = None
+
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
-            # model_name="rtrl",
+            model_name="rtrl",
             # model_name="rflo",
             # model_name="ltc_rtrl",
-            model_name="lrc_rtrl",
-            layers=(4,),
+            # model_name="lrc_rtrl",
+            layers=(8,),
             num_modules=1,
             num_blocks=1,
-            out_dist="Bernoulli",
+            layer_config=SequenceLayerConfig(
+                # norm="layer",
+                glu=True,
+                skip_connection=True,
+            ),
+            out_dist="Deterministic",
             rnn_kwargs={
                 "dt": 1.0,
+                "ode_type": "murray",
             },
             output_layers=None,
             fa_type="bp",
@@ -48,12 +57,10 @@ class TrainingConfig:
 
 
 class Model(nn.Module):
-    out_size: int
     rnn_config: RNNEnsembleConfig
 
     def setup(self):
-        _config = replace(self.rnn_config, out_size=self.out_size)
-        self.rnn = RNNEnsemble(_config, name="rnn")
+        self.rnn = RNNEnsemble(self.rnn_config, name="rnn")
 
     @nn.compact
     def __call__(self, x, carry=None, key=None):
@@ -69,7 +76,7 @@ class Model(nn.Module):
 
 def make_model(initial_input, key, kwargs: RNNEnsembleConfig):
     key_model = jrand.split(key, initial_input.shape[0])
-    model = make_batched_model(Model, methods=["initialize_carry"])(1, kwargs)
+    model = make_batched_model(Model, methods=["initialize_carry"])(kwargs)
     params = model.init(key_model[0], initial_input, None, key_model)
     h0 = model.apply(
         params, key_model[0], initial_input.shape, method=model.initialize_carry
@@ -84,16 +91,20 @@ if __name__ == "__main__":
     key, key_data, key_train = jrand.split(key, 3)
 
     x, y = getattr(datasets, cfg.dataset)()
-    if x.ndim == 2:
-        x = x[:, None]
 
     # add missing time and feature dims
-    t = x.shape[1]
-    if y.ndim == 1:
-        y = y[None]
-    if y.ndim == 2:
-        # Repeat along the time dimension
-        y = y[:, None] * jnp.ones((1, t, 1))
+    t = x.shape[-2]
+    if x.ndim <= 2:
+        # Assume single batch
+        y = y * jnp.ones((1, 1, 1))
+    elif y.ndim == 2:
+        assert y.shape[0] == x.shape[0]
+        # Assume one label per sequence
+        # Repeat along batch and time dimension
+        y = y[:, None] * jnp.ones((x.shape[0], t, 1))
+
+    if x.ndim == 2:
+        x = x[None]
 
     batch_size = x.shape[0]
     if batch_size > 1:
@@ -113,7 +124,8 @@ if __name__ == "__main__":
     x_train = x_train.transpose(1, 0, 2)
     y_train = y_train.transpose(1, 0, 2)
 
-    model, params, h0 = make_model(x_train[0], key, cfg.rnn_config)
+    rnn_config = replace(cfg.rnn_config, out_size=y.shape[-1])
+    model, params, h0 = make_model(x_train[0], key, rnn_config)
 
     # @jax.vmap
     def loss(p, __x, __y, rnn_state=None):
@@ -127,7 +139,14 @@ if __name__ == "__main__":
             loss = jnp.mean(-y_hat.log_prob(__y))
         return loss, rnn_state
 
-    optimizer = optax.adam(cfg.learning_rate)
+    # Make optimizer
+    optimizer = optax.chain(
+        # Gradient clipping
+        optax.clip_by_block_rms(cfg.gradient_clip)
+        if cfg.gradient_clip
+        else optax.identity(),
+        optax.adam(cfg.learning_rate),
+    )
 
     params, losses = train(
         loss,
@@ -170,8 +189,8 @@ if __name__ == "__main__":
         plt.savefig("plots/spirals.png")
         plt.show()
     elif cfg.dataset == "sine":
-        plt.plot(x_test, y_test, label="target")
-        plt.plot(x_test, y_hat.squeeze(), label="trained")
+        plt.plot(x_test.squeeze(), y_test.squeeze(), label="target")
+        plt.plot(x_test.squeeze(), y_hat.squeeze(), label="trained")
         plt.legend()
         os.makedirs("plots", exist_ok=True)
         plt.savefig("plots/sinewave.png")
