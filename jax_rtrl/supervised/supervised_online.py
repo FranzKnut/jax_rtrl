@@ -27,13 +27,13 @@ jax.config.update("jax_debug_nans", True)
 class TrainingConfig:
     dataset: str = "sine"
     # dataset: str = "spirals"
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-3
     gradient_clip: float | None = None
 
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
-            model_name="rtrl",
-            # model_name="rflo",
+            # model_name="rtrl",
+            model_name="rflo",
             # model_name="ltc_rtrl",
             # model_name="lrc_rtrl",
             layers=(8,),
@@ -41,13 +41,13 @@ class TrainingConfig:
             num_blocks=1,
             layer_config=SequenceLayerConfig(
                 # norm="layer",
-                glu=True,
-                skip_connection=True,
+                # glu=True,
+                # skip_connection=True,
             ),
             out_dist="Deterministic",
             rnn_kwargs={
                 "dt": 1.0,
-                "ode_type": "murray",
+                # "ode_type": "murray",
             },
             output_layers=None,
             fa_type="bp",
@@ -118,7 +118,7 @@ if __name__ == "__main__":
         )
     else:
         x_train, y_train = x, y
-        x_test, y_test = x, y
+        x_test, y_test = x[0], y[0]
 
     # Transpose to time dim first
     x_train = x_train.transpose(1, 0, 2)
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     # Plot the trained model output
     plt.subplot(1, 2, 2)
 
-    y_hat = predict(model, params, x_test)
+    y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
     if cfg.rnn_config.method is not None:
         y_hat = y_hat[0]
     y_hat = y_hat.mode()

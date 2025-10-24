@@ -19,7 +19,7 @@ def train_rnn_online(
     data,
     key,
     h0,
-    num_steps=20_000,
+    num_steps=10_000,
     param_post_update_fn=None,
 ):
     """Train RNN using Stochastic Gradient Descent with a constant learning rate."""
@@ -58,11 +58,11 @@ def train_rnn_online(
         current_loss = __losses.sum()
 
         def print_progress(i, loss):
-            if i % 100 == 0:
+            if i % 10 == 0:
                 pbar.set_description(
                     f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False
                 )
-                pbar.update(100)
+                pbar.update(10)
 
         jax.debug.callback(print_progress, n, current_loss)
         return step_carry, current_loss
