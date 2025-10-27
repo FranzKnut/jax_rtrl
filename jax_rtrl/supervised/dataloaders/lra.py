@@ -1,4 +1,5 @@
 """Long Range Arena datasets"""
+
 import io
 import logging
 import os
@@ -108,7 +109,10 @@ class IMDB(SequenceDataset):
             tokenizer = list  # Just convert a string to a list of chars
         # Account for <bos> and <eos> tokens
         l_max = self.l_max - int(self.append_bos) - int(self.append_eos)
-        tokenize = lambda example: {"tokens": tokenizer(example["text"])[:l_max]}
+
+        def tokenize(example):
+            return {"tokens": tokenizer(example["text"])[:l_max]}
+
         dataset = dataset.map(
             tokenize,
             remove_columns=["text"],
@@ -127,13 +131,15 @@ class IMDB(SequenceDataset):
         )
         vocab.set_default_index(vocab["<unk>"])
 
-        numericalize = lambda example: {
-            "input_ids": vocab(
-                (["<bos>"] if self.append_bos else [])
-                + example["tokens"]
-                + (["<eos>"] if self.append_eos else [])
-            )
-        }
+        def numericalize(example):
+            return {
+                "input_ids": vocab(
+                    (["<bos>"] if self.append_bos else [])
+                    + example["tokens"]
+                    + (["<eos>"] if self.append_eos else [])
+                )
+            }
+
         dataset = dataset.map(
             numericalize,
             remove_columns=["tokens"],
@@ -169,7 +175,11 @@ class IMDB(SequenceDataset):
 
     @property
     def _cache_dir_name(self):
-        return f"l_max-{self.l_max}-level-{self.level}-min_freq-{self.min_freq}-append_bos-{self.append_bos}-append_eos-{self.append_eos}"
+        return (
+            f"l_max-{self.l_max}-level-{self.level}-min_freq-{self.min_freq}-append_bos"
+            f"-{self.append_bos}-append_eos-{self.append_eos}"
+        )
+
 
 class TabularDataset(torch.utils.data.Dataset):
     def __init__(
@@ -276,7 +286,8 @@ class ListOps(SequenceDataset):
 
         def collate_batch(batch):
             xs, ys = zip(*[(data["input_ids"], data["Target"]) for data in batch])
-            lengths = torch.tensor([len(x) for x in xs])
+            # Added zeros to the length for start of mask
+            lengths = torch.tensor([[0, len(x)] for x in xs])
             xs = nn.utils.rnn.pad_sequence(
                 xs, padding_value=self.vocab["<pad>"], batch_first=True
             )
@@ -308,7 +319,10 @@ class ListOps(SequenceDataset):
 
         # Account for <bos> and <eos> tokens
         l_max = self.l_max - int(self.append_bos) - int(self.append_eos)
-        tokenize = lambda example: {"tokens": tokenizer(example["Source"])[:l_max]}
+
+        def tokenize(example):
+            return {"tokens": tokenizer(example["Source"])[:l_max]}
+
         dataset = dataset.map(
             tokenize,
             remove_columns=["Source"],
@@ -326,13 +340,15 @@ class ListOps(SequenceDataset):
         )
         vocab.set_default_index(vocab["<unk>"])
 
-        numericalize = lambda example: {
-            "input_ids": vocab(
-                (["<bos>"] if self.append_bos else [])
-                + example["tokens"]
-                + (["<eos>"] if self.append_eos else [])
-            )
-        }
+        def numericalize(example):
+            return {
+                "input_ids": vocab(
+                    (["<bos>"] if self.append_bos else [])
+                    + example["tokens"]
+                    + (["<eos>"] if self.append_eos else [])
+                )
+            }
+
         dataset = dataset.map(
             numericalize,
             remove_columns=["tokens"],
@@ -365,6 +381,7 @@ class ListOps(SequenceDataset):
         with open(cache_dir / "vocab.pkl", "rb") as f:
             vocab = pickle.load(f)
         return dataset, tokenizer, vocab
+
 
 class PathFinderDataset(torch.utils.data.Dataset):
     """Path Finder dataset."""
@@ -486,12 +503,12 @@ class PathFinder(ImageResolutionSequenceDataset):
             )
 
         if self.cache_dir is not None:
-            if Path(self.cache_dir / (self._cache_dir_name + '.pt')).exists():
-                with open(self.cache_dir / (self._cache_dir_name + '.pt'), 'rb') as f:
+            if Path(self.cache_dir / (self._cache_dir_name + ".pt")).exists():
+                with open(self.cache_dir / (self._cache_dir_name + ".pt"), "rb") as f:
                     dset = torch.load(f)
-                self.dataset_train = dset['train']
-                self.dataset_val = dset['val']
-                self.dataset_test = dset['test']
+                self.dataset_train = dset["train"]
+                self.dataset_val = dset["val"]
+                self.dataset_test = dset["test"]
                 return None
 
         if stage == "test" and hasattr(self, "dataset_test"):
@@ -522,25 +539,31 @@ class PathFinder(ImageResolutionSequenceDataset):
             :param tag:
             :return:
             """
-            loader = torch.utils.data.DataLoader(dataset=dset, batch_size=len(dset), shuffle=False, drop_last=False)
+            loader = torch.utils.data.DataLoader(
+                dataset=dset, batch_size=len(dset), shuffle=False, drop_last=False
+            )
             inp, out = next(iter(loader))
             dset_compiled = torch.utils.data.TensorDataset(inp, out)
             return dset_compiled
 
         os.makedirs(self.cache_dir, exist_ok=True)
-        self.dataset_train = _compile_convert(self.dataset_train, tag='train')
-        self.dataset_val = _compile_convert(self.dataset_val, tag='val')
-        self.dataset_test = _compile_convert(self.dataset_test, tag='test')
+        self.dataset_train = _compile_convert(self.dataset_train, tag="train")
+        self.dataset_val = _compile_convert(self.dataset_val, tag="val")
+        self.dataset_test = _compile_convert(self.dataset_test, tag="test")
 
         # Cache.
-        cache_path = self.cache_dir / (self._cache_dir_name + '.pt')
+        cache_path = self.cache_dir / (self._cache_dir_name + ".pt")
         logger = logging.getLogger(__name__)
         logger.info(f"Saving to cache at {str(cache_path)}")
-        with open(cache_path, 'wb') as f:
-            torch.save({'train': self.dataset_train,
-                        'val': self.dataset_val,
-                        'test': self.dataset_test},
-                       f)
+        with open(cache_path, "wb") as f:
+            torch.save(
+                {
+                    "train": self.dataset_train,
+                    "val": self.dataset_val,
+                    "test": self.dataset_test,
+                },
+                f,
+            )
 
     @property
     def _cache_dir_name(self):
@@ -629,8 +652,8 @@ class AAN(SequenceDataset):
             # Pad both to same length
             # Shape (batch, length)
             L = max(xs1.size(1), xs2.size(1))
-            xs1 = F.pad(xs1, (0, L-xs1.size(1)), value=self.vocab["<pad>"])
-            xs2 = F.pad(xs2, (0, L-xs2.size(1)), value=self.vocab["<pad>"])
+            xs1 = F.pad(xs1, (0, L - xs1.size(1)), value=self.vocab["<pad>"])
+            xs2 = F.pad(xs2, (0, L - xs2.size(1)), value=self.vocab["<pad>"])
             ys = torch.tensor(ys)
             # return xs1, xs2, ys, lengths1, lengths2
 
@@ -668,10 +691,13 @@ class AAN(SequenceDataset):
         tokenizer = list  # Just convert a string to a list of chars
         # Account for <bos> and <eos> tokens
         l_max = self.l_max - int(self.append_bos) - int(self.append_eos)
-        tokenize = lambda example: {
-            "tokens1": tokenizer(example["text1"])[:l_max],
-            "tokens2": tokenizer(example["text2"])[:l_max],
-        }
+
+        def tokenize(example):
+            {
+                "tokens1": tokenizer(example["text1"])[:l_max],
+                "tokens2": tokenizer(example["text2"])[:l_max],
+            }
+
         dataset = dataset.map(
             tokenize,
             remove_columns=["text1", "text2"],
@@ -689,15 +715,19 @@ class AAN(SequenceDataset):
         )
         vocab.set_default_index(vocab["<unk>"])
 
-        encode = lambda text: vocab(
-            (["<bos>"] if self.append_bos else [])
-            + text
-            + (["<eos>"] if self.append_eos else [])
-        )
-        numericalize = lambda example: {
-            "input_ids1": encode(example["tokens1"]),
-            "input_ids2": encode(example["tokens2"]),
-        }
+        def encode(text):
+            vocab(
+                (["<bos>"] if self.append_bos else [])
+                + text
+                + (["<eos>"] if self.append_eos else [])
+            )
+
+        def numericalize(example):
+            {
+                "input_ids1": encode(example["tokens1"]),
+                "input_ids2": encode(example["tokens2"]),
+            }
+
         dataset = dataset.map(
             numericalize,
             remove_columns=["tokens1", "tokens2"],

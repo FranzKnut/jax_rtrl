@@ -14,6 +14,7 @@ from jax_rtrl.models.seq_models import RNNEnsembleConfig
 from jax_rtrl.supervised import datasets
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+from jax_rtrl.supervised.dataloading import Datasets
 from models.seq_models import RNNEnsemble, SequenceLayerConfig, make_batched_model
 from supervised.training_utils import predict
 from supervised.training_utils import train_rnn_online as train
@@ -90,7 +91,8 @@ if __name__ == "__main__":
     key = jrand.PRNGKey(1)
     key, key_data, key_train = jrand.split(key, 3)
 
-    x, y = getattr(datasets, cfg.dataset)()
+    # x, y = getattr(datasets, cfg.dataset)()
+    x, y = Datasets["imdb-classification"]()
 
     # add missing time and feature dims
     t = x.shape[-2]

@@ -5,14 +5,18 @@ import torch
 import torchaudio.functional as TF
 import torchvision
 from einops import rearrange
+from typing import Sequence
 
-from ..utils.util import is_list
+
+def is_list(x):
+    return isinstance(x, Sequence) and not isinstance(x, str)
 
 
 def deprecated(cls_or_func):
     def _deprecated(*args, **kwargs):
         print(f"{cls_or_func} is deprecated")
         return cls_or_func(*args, **kwargs)
+
     return _deprecated
 
 
@@ -24,10 +28,11 @@ default_data_path = default_data_path / "raw_data"
 class DefaultCollateMixin:
     """Controls collating in the DataLoader
 
-    The CollateMixin classes instantiate a dataloader by separating collate arguments with the rest of the dataloader arguments.
-    Instantiations of this class should modify the callback functions as desired, and modify the collate_args list. The class then defines a
-    _dataloader() method which takes in a DataLoader constructor and arguments, constructs a collate_fn based on the collate_args, and passes the
-    rest of the arguments into the constructor.
+    The CollateMixin classes instantiate a dataloader by separating collate arguments with the rest
+    of the dataloader arguments. Instantiations of this class should modify the callback functions
+    as desired, and modify the collate_args list. The class then defines a _dataloader() method
+    which takes in a DataLoader constructor and arguments, constructs a collate_fn based on the
+    collate_args, and passes the rest of the arguments into the constructor.
     """
 
     @classmethod
@@ -47,7 +52,9 @@ class DefaultCollateMixin:
         See InformerSequenceDataset for an example of this being used
         """
         x, y, *z = return_value
-        assert len(z) == len(cls._collate_arg_names), "Specify a name for each auxiliary data item returned by dataset"
+        assert len(z) == len(
+            cls._collate_arg_names
+        ), "Specify a name for each auxiliary data item returned by dataset"
         return x, y, {k: v for k, v in zip(cls._collate_arg_names, z)}
 
     @classmethod
@@ -79,7 +86,8 @@ class DefaultCollateMixin:
 
         Arguments:
             batch: list of (x, y) pairs
-            args, kwargs: extra arguments that get passed into the _collate_callback and _return_callback
+            args, kwargs: extra arguments that get passed into the _collate_callback and
+                _return_callback
         """
         x, y, *z = zip(*batch)
 
@@ -105,30 +113,41 @@ class DefaultCollateMixin:
 
 
 class SequenceResolutionCollateMixin(DefaultCollateMixin):
-    """self.collate_fn(resolution) produces a collate function that subsamples elements of the sequence"""
+    """self.collate_fn(resolution) produces a collate function that subsamples elements of the
+    sequence"""
 
     @classmethod
     def _collate_callback(cls, x, resolution=None):
         if resolution is None:
             pass
-        elif is_list(resolution): # Resize to first resolution, then apply resampling technique
+        elif is_list(resolution):  # Resize to first resolution, then apply resampling technique
             # Sample to first resolution
-            x = x.squeeze(-1) # (B, L)
+            x = x.squeeze(-1)  # (B, L)
             L = x.size(1)
-            x = x[:, ::resolution[0]]  # assume length is first axis after batch
+            x = x[:, :: resolution[0]]  # assume length is first axis after batch
             _L = L // resolution[0]
             for r in resolution[1:]:
-                x = TF.resample(x, _L, L//r)
+                x = TF.resample(x, _L, L // r)
                 _L = L // r
-            x = x.unsqueeze(-1) # (B, L, 1)
+            x = x.unsqueeze(-1)  # (B, L, 1)
         else:
             # Assume x is (B, L_0, L_1, ..., L_k, C) for x.ndim > 2 and (B, L) for x.ndim = 2
             assert x.ndim >= 2
-            n_resaxes = max(1, x.ndim - 2) # [AG 22/07/02] this line looks suspicious... are there cases with 2 axes?
-            # rearrange: b (l_0 res_0) (l_1 res_1) ... (l_k res_k) ... -> res_0 res_1 .. res_k b l_0 l_1 ...
+            n_resaxes = max(
+                1, x.ndim - 2
+            )  # [AG 22/07/02] this line looks suspicious... are there cases with 2 axes?
+            # rearrange:
+            # b (l_0 res_0) (l_1 res_1) ... (l_k res_k) ... -> res_0 res_1 .. res_k b l_0 l_1 ...
             lhs = "b " + " ".join([f"(l{i} res{i})" for i in range(n_resaxes)]) + " ..."
-            rhs = " ".join([f"res{i}" for i in range(n_resaxes)]) + " b " + " ".join([f"l{i}" for i in range(n_resaxes)]) + " ..."
-            x = rearrange(x, lhs + " -> " + rhs, **{f'res{i}': resolution for i in range(n_resaxes)})
+            rhs = (
+                " ".join([f"res{i}" for i in range(n_resaxes)])
+                + " b "
+                + " ".join([f"l{i}" for i in range(n_resaxes)])
+                + " ..."
+            )
+            x = rearrange(
+                x, lhs + " -> " + rhs, **{f"res{i}": resolution for i in range(n_resaxes)}
+            )
             x = x[tuple([0] * n_resaxes)]
 
         return x
@@ -137,11 +156,12 @@ class SequenceResolutionCollateMixin(DefaultCollateMixin):
     def _return_callback(cls, return_value, resolution=None):
         return (*return_value, {"rate": resolution})
 
-    collate_args = ['resolution']
+    collate_args = ["resolution"]
 
 
 class ImageResolutionCollateMixin(SequenceResolutionCollateMixin):
-    """self.collate_fn(resolution, img_size) produces a collate function that resizes inputs to size img_size/resolution"""
+    """self.collate_fn(resolution, img_size) produces a collate function that resizes inputs to
+    size img_size/resolution"""
 
     _interpolation = torchvision.transforms.InterpolationMode.BILINEAR
     _antialias = True
@@ -153,22 +173,22 @@ class ImageResolutionCollateMixin(SequenceResolutionCollateMixin):
         if img_size is None:
             x = super()._collate_callback(x, resolution=resolution)
         else:
-            x = rearrange(x, 'b ... c -> b c ...') if channels_last else x
-            _size = round(img_size/resolution)
+            x = rearrange(x, "b ... c -> b c ...") if channels_last else x
+            _size = round(img_size / resolution)
             x = torchvision.transforms.functional.resize(
                 x,
                 size=[_size, _size],
                 interpolation=cls._interpolation,
                 antialias=cls._antialias,
             )
-            x = rearrange(x, 'b c ... -> b ... c') if channels_last else x
+            x = rearrange(x, "b c ... -> b ... c") if channels_last else x
         return x
 
     @classmethod
     def _return_callback(cls, return_value, resolution=None, img_size=None, channels_last=True):
         return (*return_value, {"rate": resolution})
 
-    collate_args = ['resolution', 'img_size', 'channels_last']
+    collate_args = ["resolution", "img_size", "channels_last"]
 
 
 class TBPTTDataLoader(torch.utils.data.DataLoader):
@@ -176,17 +196,11 @@ class TBPTTDataLoader(torch.utils.data.DataLoader):
     Adapted from https://github.com/deepsound-project/samplernn-pytorch
     """
 
-    def __init__(
-        self,
-        dataset,
-        batch_size,
-        chunk_len,
-        overlap_len,
-        *args,
-        **kwargs
-    ):
+    def __init__(self, dataset, batch_size, chunk_len, overlap_len, *args, **kwargs):
         super().__init__(dataset, batch_size, *args, **kwargs)
-        assert chunk_len is not None and overlap_len is not None, "TBPTTDataLoader: chunk_len and overlap_len must be specified."
+        assert (
+            chunk_len is not None and overlap_len is not None
+        ), "TBPTTDataLoader: chunk_len and overlap_len must be specified."
 
         # Zero padding value, given by the dataset
         self.zero = dataset.zero if hasattr(dataset, "zero") else 0
@@ -199,13 +213,17 @@ class TBPTTDataLoader(torch.utils.data.DataLoader):
 
     def __iter__(self):
         for batch in super().__iter__():
-            x, y, z = batch # (B, L) (B, L, 1) {'lengths': (B,)}
+            x, y, z = batch  # (B, L) (B, L, 1) {'lengths': (B,)}
 
             # Pad with self.overlap_len - 1 zeros
-            pad = lambda x, val: torch.cat([x.new_zeros((x.shape[0], self.overlap_len - 1, *x.shape[2:])) + val, x], dim=1)
+            def pad(x, val):
+                return torch.cat(
+                    [x.new_zeros((x.shape[0], self.overlap_len - 1, *x.shape[2:])) + val, x], dim=1
+                )
+
             x = pad(x, self.zero)
             y = pad(y, 0)
-            z = { k: pad(v, 0) for k, v in z.items() if v.ndim > 1 }
+            z = {k: pad(v, 0) for k, v in z.items() if v.ndim > 1}
             _, seq_len, *_ = x.shape
 
             reset = True
@@ -216,7 +234,9 @@ class TBPTTDataLoader(torch.utils.data.DataLoader):
                 # TODO: check this
                 # Ensure divisible by overlap_len
                 if self.overlap_len > 0:
-                    to_index = min(to_index, seq_len - ((seq_len - self.overlap_len + 1) % self.overlap_len))
+                    to_index = min(
+                        to_index, seq_len - ((seq_len - self.overlap_len + 1) % self.overlap_len)
+                    )
 
                 x_chunk = x[:, from_index:to_index]
                 if len(y.shape) == 3:
@@ -234,16 +254,18 @@ class TBPTTDataLoader(torch.utils.data.DataLoader):
 
 
 # class SequenceDataset(LightningDataModule):
-# [21-09-10 AG] Subclassing LightningDataModule fails due to trying to access _has_setup_fit. No idea why. So we just
-# provide our own class with the same core methods as LightningDataModule (e.g. setup)
+# [21-09-10 AG] Subclassing LightningDataModule fails due to trying to access _has_setup_fit.
+# No idea why. So we just provide our own class with the same core methods as LightningDataModule
+# (e.g. setup)
 class SequenceDataset(DefaultCollateMixin):
     registry = {}
     _name_ = NotImplementedError("Dataset must have shorthand name")
 
     # Since subclasses do not specify __init__ which is instead handled by this class
-    # Subclasses can provide a list of default arguments which are automatically registered as attributes
-    # TODO it might be possible to write this as a @dataclass, but it seems tricky to separate from the other features of this class
-    #  such as the _name_ and d_input/d_output
+    # Subclasses can provide a list of default arguments which are automatically registered as
+    # attributes
+    # TODO it might be possible to write this as a @dataclass, but it seems tricky to separate from
+    # the other features of this class such as the _name_ and d_input/d_output
     @property
     def init_defaults(self):
         return {}
@@ -284,17 +306,18 @@ class SequenceDataset(DefaultCollateMixin):
         self.dataset_train, self.dataset_val = torch.utils.data.random_split(
             self.dataset_train,
             (train_len, len(self.dataset_train) - train_len),
-            generator=torch.Generator().manual_seed(
-                getattr(self, "seed", 42)
-            ),  # PL is supposed to have a way to handle seeds properly, but doesn't seem to work for us
+            generator=torch.Generator().manual_seed(getattr(self, "seed", 42)),
         )
 
     def train_dataloader(self, **kwargs):
         return self._train_dataloader(self.dataset_train, **kwargs)
 
     def _train_dataloader(self, dataset, **kwargs):
-        if dataset is None: return
-        kwargs['shuffle'] = 'sampler' not in kwargs # shuffle cant be True if we have custom sampler
+        if dataset is None:
+            return
+        kwargs["shuffle"] = (
+            "sampler" not in kwargs
+        )  # shuffle cant be True if we have custom sampler
         return self._dataloader(dataset, **kwargs)
 
     def val_dataloader(self, **kwargs):
@@ -304,7 +327,8 @@ class SequenceDataset(DefaultCollateMixin):
         return self._eval_dataloader(self.dataset_test, **kwargs)
 
     def _eval_dataloader(self, dataset, **kwargs):
-        if dataset is None: return
+        if dataset is None:
+            return
         # Note that shuffle=False by default
         return self._dataloader(dataset, **kwargs)
 
@@ -313,28 +337,30 @@ class SequenceDataset(DefaultCollateMixin):
 
 
 class ResolutionSequenceDataset(SequenceDataset, SequenceResolutionCollateMixin):
-
     def _train_dataloader(self, dataset, train_resolution=None, eval_resolutions=None, **kwargs):
-        if train_resolution is None: train_resolution = [1]
-        if not is_list(train_resolution): train_resolution = [train_resolution]
+        if train_resolution is None:
+            train_resolution = [1]
+        if not is_list(train_resolution):
+            train_resolution = [train_resolution]
         assert len(train_resolution) == 1, "Only one train resolution supported for now."
         return super()._train_dataloader(dataset, resolution=train_resolution[0], **kwargs)
 
     def _eval_dataloader(self, dataset, train_resolution=None, eval_resolutions=None, **kwargs):
-        if dataset is None: return
-        if eval_resolutions is None: eval_resolutions = [1]
-        if not is_list(eval_resolutions): eval_resolutions = [eval_resolutions]
+        if dataset is None:
+            return
+        if eval_resolutions is None:
+            eval_resolutions = [1]
+        if not is_list(eval_resolutions):
+            eval_resolutions = [eval_resolutions]
 
         dataloaders = []
         for resolution in eval_resolutions:
             dataloaders.append(super()._eval_dataloader(dataset, resolution=resolution, **kwargs))
 
         return (
-            {
-                None if res == 1 else str(res): dl
-                for res, dl in zip(eval_resolutions, dataloaders)
-            }
-            if dataloaders is not None else None
+            {None if res == 1 else str(res): dl for res, dl in zip(eval_resolutions, dataloaders)}
+            if dataloaders is not None
+            else None
         )
 
 
@@ -347,4 +373,3 @@ loader_registry = {
     "tbptt": TBPTTDataLoader,
     None: torch.utils.data.DataLoader,  # default case
 }
-

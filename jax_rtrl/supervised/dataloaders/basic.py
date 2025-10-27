@@ -1,11 +1,21 @@
-"""Implementation of basic benchmark datasets used in S4 experiments: MNIST, CIFAR10 and Speech Commands."""
+"""Implementation of basic benchmark datasets used in S4 experiments: MNIST, CIFAR10."""
 import numpy as np
 import torch
 import torchvision
 from einops.layers.torch import Rearrange
 
-from .base import default_data_path, ImageResolutionSequenceDataset, ResolutionSequenceDataset, SequenceDataset
-from ..utils import permutations
+from .base import (
+    ResolutionSequenceDataset,
+    default_data_path,
+    ImageResolutionSequenceDataset,
+    SequenceDataset,
+)
+from .permutations import (
+    bitreversal_permutation,
+    snake_permutation,
+    hilbert_permutation,
+    transpose_permutation,
+)
 
 
 class MNIST(SequenceDataset):
@@ -34,10 +44,8 @@ class MNIST(SequenceDataset):
             # below is another permutation that other works have used
             # permute = np.random.RandomState(92916)
             # permutation = torch.LongTensor(permute.permutation(784))
-            permutation = permutations.bitreversal_permutation(self.L)
-            transform_list.append(
-                torchvision.transforms.Lambda(lambda x: x[permutation])
-            )
+            permutation = bitreversal_permutation(self.L)
+            transform_list.append(torchvision.transforms.Lambda(lambda x: x[permutation]))
         # TODO does MNIST need normalization?
         # torchvision.transforms.Normalize((0.1307,), (0.3081,)) # normalize inputs
         transform = torchvision.transforms.Compose(transform_list)
@@ -73,7 +81,7 @@ class CIFAR10(ImageResolutionSequenceDataset):
             "cutout": False,
             "rescale": None,
             "random_erasing": False,
-            "val_split": 0.1,
+            "val_split": 0.01,
             "seed": 42,  # For validation split
         }
 
@@ -105,22 +113,16 @@ class CIFAR10(ImageResolutionSequenceDataset):
             ]
 
             if self.tokenize:
-                preprocessors.append(
-                    torchvision.transforms.Lambda(lambda x: (x * 255).long())
-                )
+                preprocessors.append(torchvision.transforms.Lambda(lambda x: (x * 255).long()))
                 permutations_list.append(Rearrange("l 1 -> l"))
             else:
                 preprocessors.append(
-                    torchvision.transforms.Normalize(
-                        mean=122.6 / 255.0, std=61.0 / 255.0
-                    )
+                    torchvision.transforms.Normalize(mean=122.6 / 255.0, std=61.0 / 255.0)
                 )
         else:
             preprocessors = [
                 torchvision.transforms.ToTensor(),
-                torchvision.transforms.Normalize(
-                    (0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)
-                ),
+                torchvision.transforms.Normalize((0.4914, 0.4822, 0.4465), (0.247, 0.243, 0.261)),
             ]
             permutations_list = [
                 torchvision.transforms.Lambda(
@@ -130,40 +132,38 @@ class CIFAR10(ImageResolutionSequenceDataset):
 
         # Permutations and reshaping
         if self.permute == "br":
-            permutation = permutations.bitreversal_permutation(img_size * img_size)
+            permutation = bitreversal_permutation(img_size * img_size)
             print("bit reversal", permutation)
             permutations_list.append(torchvision.transforms.Lambda(lambda x: x[permutation]))
         elif self.permute == "snake":
-            permutation = permutations.snake_permutation(img_size, img_size)
+            permutation = snake_permutation(img_size, img_size)
             print("snake", permutation)
             permutations_list.append(torchvision.transforms.Lambda(lambda x: x[permutation]))
         elif self.permute == "hilbert":
-            permutation = permutations.hilbert_permutation(img_size)
+            permutation = hilbert_permutation(img_size)
             print("hilbert", permutation)
             permutations_list.append(torchvision.transforms.Lambda(lambda x: x[permutation]))
         elif self.permute == "transpose":
-            permutation = permutations.transpose_permutation(img_size, img_size)
+            permutation = transpose_permutation(img_size, img_size)
             transform = torchvision.transforms.Lambda(
                 lambda x: torch.cat([x, x[permutation]], dim=-1)
             )
             permutations_list.append(transform)
         elif self.permute == "2d":  # h, w, c
             permutation = torchvision.transforms.Lambda(
-                    Rearrange("(h w) c -> h w c", h=img_size, w=img_size)
-                )
+                Rearrange("(h w) c -> h w c", h=img_size, w=img_size)
+            )
             permutations_list.append(permutation)
         elif self.permute == "2d_transpose":  # c, h, w
             permutation = torchvision.transforms.Lambda(
-                    Rearrange("(h w) c -> c h w", h=img_size, w=img_size)
-                )
+                Rearrange("(h w) c -> c h w", h=img_size, w=img_size)
+            )
             permutations_list.append(permutation)
 
         # Augmentation
         if self.augment:
             augmentations = [
-                torchvision.transforms.RandomCrop(
-                    img_size, padding=4, padding_mode="symmetric"
-                ),
+                torchvision.transforms.RandomCrop(img_size, padding=4, padding_mode="symmetric"),
                 torchvision.transforms.RandomHorizontalFlip(),
             ]
 
@@ -177,9 +177,7 @@ class CIFAR10(ImageResolutionSequenceDataset):
                 pass
         else:
             augmentations, post_augmentations = [], []
-        transforms_train = (
-            augmentations + preprocessors + post_augmentations + permutations_list
-        )
+        transforms_train = augmentations + preprocessors + post_augmentations + permutations_list
         transforms_eval = preprocessors + permutations_list
 
         transform_train = torchvision.transforms.Compose(transforms_train)
@@ -196,8 +194,36 @@ class CIFAR10(ImageResolutionSequenceDataset):
 
         if self.rescale:
             print(f"Resizing all images to {img_size} x {img_size}.")
-            self.dataset_train.data = self.dataset_train.data.reshape((self.dataset_train.data.shape[0], 32 // self.rescale, self.rescale, 32 // self.rescale, self.rescale, 3)).max(4).max(2).astype(np.uint8)
-            self.dataset_test.data = self.dataset_test.data.reshape((self.dataset_test.data.shape[0], 32 // self.rescale, self.rescale, 32 // self.rescale, self.rescale, 3)).max(4).max(2).astype(np.uint8)
+            self.dataset_train.data = (
+                self.dataset_train.data.reshape(
+                    (
+                        self.dataset_train.data.shape[0],
+                        32 // self.rescale,
+                        self.rescale,
+                        32 // self.rescale,
+                        self.rescale,
+                        3,
+                    )
+                )
+                .max(4)
+                .max(2)
+                .astype(np.uint8)
+            )
+            self.dataset_test.data = (
+                self.dataset_test.data.reshape(
+                    (
+                        self.dataset_test.data.shape[0],
+                        32 // self.rescale,
+                        self.rescale,
+                        32 // self.rescale,
+                        self.rescale,
+                        3,
+                    )
+                )
+                .max(4)
+                .max(2)
+                .astype(np.uint8)
+            )
 
         self.split_train_val(self.val_split)
 
@@ -238,7 +264,7 @@ class SpeechCommands(ResolutionSequenceDataset):
     def setup(self):
         self.data_dir = self.data_dir or default_data_path # TODO make same logic as other classes
 
-        from s5.dataloaders.sc import _SpeechCommands
+        from sc import _SpeechCommands
 
         # TODO refactor with data_dir argument
         self.dataset_train = _SpeechCommands(
