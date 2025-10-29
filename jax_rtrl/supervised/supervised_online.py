@@ -116,7 +116,7 @@ y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()
-test_loss = jnp.mean((y_test - y_hat) ** 2)
+test_loss = mse_loss(y_hat, y_test)
 print(f"Final loss: {test_loss:.3f}")
 
 if cfg.dataset == "spirals":

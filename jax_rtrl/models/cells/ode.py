@@ -4,9 +4,9 @@ from chex import PRNGKey
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from jax_rl_util.util.logging_util import tree_stack
 
 from jax_rtrl.models.wirings import make_mask_initializer
+from jax_rtrl.models.jax_util import tree_stack
 
 
 class ODECell(nn.RNNCellBase):

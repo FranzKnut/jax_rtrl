@@ -155,7 +155,6 @@ def train_rnn_offline(
         step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=jnp.int32)
     )
     pbar.close()
-    print(f"Final loss: {_losses[-1]:.3f}")
     return _params, _losses
 
 

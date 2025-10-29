@@ -81,8 +81,7 @@ def restore_params(path, tree=None):
     try:
         params = checkpointer.restore(
             orbax_path,
-            jax.tree_util.tree_map(
-            orbax.checkpoint.utils.to_shape_dtype_struct, tree)
+            jax.tree_util.tree_map(orbax.checkpoint.utils.to_shape_dtype_struct, tree),
         )
     except FileNotFoundError:
         print(f"Checkpoint not found at {orbax_path}. Returning None.")
@@ -109,7 +108,7 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
     hparams : dict, optional
         Hyper-parameters to be saved alongside model params.
     tree : PyTree, optional
-        A PyTree structure that matches the parameters to be restored. 
+        A PyTree structure that matches the parameters to be restored.
         See `orbax.checkpoint.PyTreeCheckpointer.restore` for details.
 
     Returns
@@ -288,3 +287,22 @@ def majority_vote(outputs):
     return jnp.min(
         jnp.where(jnp.bincount(outputs) == jnp.max(jnp.bincount(outputs)))[0]
     )
+
+
+def tree_stack(trees, axis=0):
+    """Take a list of trees and stack every corresponding leaf.
+
+    For example, given two trees ((a, b), c) and ((a', b'), c'), returns
+    ((stack(a, a'), stack(b, b')), stack(c, c')).
+    Useful for turning a list of objects into something you can feed to a
+    vmapped function. Taken from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
+    """
+    leaves, treedef = jax.tree.flatten(trees[0])
+    leaves_list = [leaves]
+    for tree in trees[1:]:
+        leaves, _ = jax.tree.flatten(tree)
+        leaves_list.append(leaves)
+
+    grouped_leaves = zip(*leaves_list)
+    result_leaves = [jnp.stack(leaf, axis=axis) for leaf in grouped_leaves]
+    return treedef.unflatten(result_leaves)
