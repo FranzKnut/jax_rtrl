@@ -16,11 +16,6 @@ from jax_rtrl.models.seq_models import (
 from jax_rtrl.supervised import example_datasets
 
 
-def print_progress(i, loss):
-    if i % 1000 == 0:
-        print(f"Iteration {i} | Loss: {loss:.3f}")
-
-
 def get_data(dataset):
     x, y = getattr(example_datasets, dataset)()
 
@@ -138,6 +133,14 @@ def train_rnn_offline(
     # optimizer = optax.adamw(lr, mask=mask) # Mask tau from weight decay
 
     opt_state = optimizer.init(_params)
+    pbar = trange(int(num_steps), maxinterval=2)
+
+    def print_progress(i, loss):
+        if i % 10 == 0:
+            pbar.set_description(
+                f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False
+            )
+            pbar.update(10)
 
     def step(carry, n):
         __params, _opt_state, _key = carry
@@ -151,6 +154,7 @@ def train_rnn_offline(
     (_params, *_), _losses = jax.lax.scan(
         step, (_params, opt_state, _key), jnp.arange(num_steps, dtype=jnp.int32)
     )
+    pbar.close()
     print(f"Final loss: {_losses[-1]:.3f}")
     return _params, _losses
 

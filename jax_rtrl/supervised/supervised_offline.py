@@ -33,8 +33,8 @@ class TrainingConfig:
     dataset: str = "legacy_rollouts"
     # dataset: str = "sine"
     # dataset: str = "spirals"
-    num_steps: int = 10_000
-    learning_rate: float = 3e-4
+    num_steps: int = 1000
+    learning_rate: float = 1e-4
     gradient_clip: float | None = None
 
     rnn_config: RNNEnsembleConfig = field(
@@ -47,9 +47,9 @@ class TrainingConfig:
             num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
-                norm="layer",
-                glu=True,
-                # skip_connection=True,
+                norm=None,
+                glu=False,
+                skip_connection=False,
             ),
             out_dist="Deterministic",
             rnn_kwargs={
