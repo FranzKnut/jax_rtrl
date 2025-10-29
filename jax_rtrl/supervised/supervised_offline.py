@@ -44,7 +44,7 @@ class TrainingConfig:
             # model_name="ltc_rtrl",
             # model_name="lrc_rtrl",
             layers=(32,),
-            num_modules=1,
+            num_modules=3,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
                 norm=None,
@@ -58,6 +58,7 @@ class TrainingConfig:
             },
             output_layers=None,
             fa_type="bp",
+            method="linear",
         )
     )
 
@@ -79,6 +80,8 @@ params = model.init(key, None, x_train[0])
 def loss(p, __x, __y):
     # MSE loss
     _, y_hat = scan_rnn(model, p, None, __x)
+    if cfg.rnn_config.method is not None:
+        y_hat = y_hat[0]
     return mse_loss(y_hat.mode().squeeze(), __y)
 
 

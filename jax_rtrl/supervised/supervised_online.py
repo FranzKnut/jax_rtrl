@@ -39,7 +39,7 @@ class TrainingConfig:
             # model_name="ltc_rtrl",
             # model_name="lrc_rtrl",
             layers=(32,),
-            num_modules=1,
+            num_modules=3,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
                 norm=None,
@@ -53,6 +53,7 @@ class TrainingConfig:
             },
             output_layers=None,
             fa_type="bp",
+            method="linear",
         )
     )
 
