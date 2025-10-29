@@ -6,7 +6,7 @@ import zipfile
 from collections.abc import Iterable
 import jax
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 import numpy as np
 from numpy.lib._version import NumpyVersion
 
@@ -17,8 +17,6 @@ else:
 from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
-import flashbax as fbx
-from flashbax.vault import Vault
 
 
 def split_train_test(dataset, percent_eval: float = 0.2, shuffle: bool = False):
@@ -125,7 +123,7 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=Fa
         num_steps = len(output)
 
     print(f"Files contained {num_steps:d} steps total")
-    
+
     if stack:
         return output
     else:
@@ -137,7 +135,6 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=Fa
         file_starts[start_indices] = 1
 
         return output, file_starts
-    
 
 
 def npy_headers(f):
@@ -167,7 +164,7 @@ def npz_headers(npz):
 
 def load_into_vault(
     path, vault_name, is_npz=True, num_files: int = None, vault_uid=None
-) -> tuple[Vault, jax.Array]:
+) -> tuple[Any, jax.Array]:
     """Load a set of npz or npz files from a folder and store them in a flashbax Vault.
 
     :param name: Path of rollout files
@@ -176,6 +173,9 @@ def load_into_vault(
     :param write_freq: How often to write to the vault
     :return: (Vault, file_starts)
     """
+    import flashbax as fbx
+    from flashbax.vault import Vault
+
     files = [
         os.path.join(path, d)
         for d in os.listdir(path)

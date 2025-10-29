@@ -37,6 +37,7 @@ datasets    = "*"
 # wandb = "*"
 # jax = { extras = ["cuda12"], version = "0.6.2" }
 # jaxlib = "0.6.2"
+ml_collections = "*"
 
 
 [build-system]
