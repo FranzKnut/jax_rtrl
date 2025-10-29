@@ -31,7 +31,9 @@ def split_train_test(dataset, percent_eval: float = 0.2, shuffle: bool = False):
     """
     if shuffle:
         key = jrandom.PRNGKey(0)
-        perm = jrandom.permutation(key, jnp.arange(jax.tree_util.tree_leaves(dataset)[0].shape[0]))
+        perm = jrandom.permutation(
+            key, jnp.arange(jax.tree_util.tree_leaves(dataset)[0].shape[0])
+        )
         dataset = jax.tree.map(lambda x: x[perm], dataset)
     dataset_size = jax.tree.flatten(dataset)[0][0].shape[0]
     train_size = int(dataset_size * (1 - percent_eval))
@@ -90,7 +92,7 @@ def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=
     return [jnp.stack(s, axis=0) for s in sliced]
 
 
-def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
+def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=False):
     """Load a set of npz or npz files from a folder.
 
     :param name: Environment name
@@ -113,24 +115,29 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
             d = dict(d)
         data.append(d)
 
+    _op = np.stack if stack else np.concatenate
+    output = jax.tree.map(lambda *x: _op(x, axis=0), *data)
     if is_npz:
-        output = jax.tree.map(lambda *x: np.concatenate(x, axis=0), *data)
         num_steps = len(output[list(output.keys())[0]])
         num_steps_per_file = [len(d[list(d.keys())[0]]) for d in data]
     else:
-        output = np.concatenate(data, axis=0)
         num_steps_per_file = [len(d) for d in data]
-        file_starts = np.zeros(num_steps)
         num_steps = len(output)
 
-    # An Array that is zero everywhere except at the start of each file
-    start_indices = np.concatenate(
-        [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int
-    )
-    file_starts = np.zeros(num_steps).at[start_indices].set(1)
-
     print(f"Files contained {num_steps:d} steps total")
-    return output, file_starts
+    
+    if stack:
+        return output
+    else:
+        file_starts = np.zeros(num_steps)
+        # An Array that is zero everywhere except at the start of each file
+        start_indices = np.concatenate(
+            [np.zeros(1, dtype=int), np.cumsum(np.array(num_steps_per_file[:-1]))]
+        )
+        file_starts[start_indices] = 1
+
+        return output, file_starts
+    
 
 
 def npy_headers(f):
@@ -259,7 +266,7 @@ def load_into_vault(
 def spirals(dataset_size=100, key=jrandom.PRNGKey(0)):
     """Create a dataset of two spirals.
 
-    Creates x: [dataset_size, time=16, 2] and y: [dataset_size, 1] 
+    Creates x: [dataset_size, time=16, 2] and y: [dataset_size, 1]
     where the two classes in y are spirals that wind in opposite directions.
     """
     t = jnp.linspace(0, 2 * jnp.pi, 16)
@@ -285,7 +292,13 @@ def sine(length=100, offset=2, num_periods=3):
 # Gym Simulations ---------------------------------------------------------------
 
 
-def rollouts(data_folder, with_time=False):
+def legacy_rollouts(data_folder="data/cheetah", with_time=False):
+    """Load a dataset from the BulletEnv simulator."""
+    outputs = load_np_files_from_folder(data_folder, is_npz=False, stack=True)
+    return outputs[:-1], outputs[1:]
+
+
+def rollouts(data_folder="data/cheetah", with_time=False):
     """Load a dataset from the BulletEnv simulator.
 
     TODO: redundant with load_np_files_from_folder, refactor to use it.

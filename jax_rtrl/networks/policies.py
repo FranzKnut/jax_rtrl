@@ -19,10 +19,7 @@ class PolicyConfig(RNNEnsembleConfig):
     TODO: this repeats many parameters found in the RNNEnsemble config.
     """
 
-    model_name: str = "rflo"
-    hidden_size: int = 256
-    num_modules: int = 5
-    ensemble_method: Literal["linear", "dist", None] = "linear"
+    model_name: str = "bptt"
     num_blocks: int = 1
     num_layers: int = 1
     stochastic: bool = False
@@ -115,7 +112,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
                 dropout=self.config.dropout,
                 norm=self.config.norm,
                 ensemble_in_visible_prob=self.config.ensemble_visible_obs_prob,
-                method=self.config.ensemble_method,
+                method=self.config.method,
             ),
             num_submodule_extra_args=self.num_submodule_extra_args,
             name="rnn",

@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import jax.random as jrand
 import pandas as pd
 import seaborn as sns
-from supervised_online import make_model
+from jax_rtrl.supervised.training_utils import make_model
 from training_utils import train_rnn_online
 
 parser = argparse.ArgumentParser()

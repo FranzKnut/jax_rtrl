@@ -1,4 +1,4 @@
-"""LTC implementation. TODO!"""
+"""LTC implementation."""
 
 from typing import Literal
 import flax.linen as nn
@@ -8,16 +8,15 @@ import jax.random as jrand
 from chex import PRNGKey
 from flax.linen import nowrap
 
-from jax_rtrl.models.cells.ctrnn import rtrl_ctrnn
+from jax_rtrl.models.cells.ctrnn import rtrl_ctrnn, snap0
 from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
 
 
 def ltc_hasani(params, h, x):
-    """."""
     # Concatenate input and hidden state
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    gating = jax.nn.sigmoid(params["a"] * y[..., None,:] + params["b"])
+    gating = jax.nn.sigmoid(params["a"] * y[..., None, :] + params["b"])
     potential = params["e"] - y[..., None, :]  # shape (..., 1, input+hidden+1)
     w = params["W"]
     # Optional: enforce positivity on weights
@@ -28,7 +27,9 @@ def ltc_hasani(params, h, x):
 
 
 def ltc_farsang(params, h, x):
-    """h' = -fi hi + ui eli.
+    """LTC as defined in (Farsang 2024).
+    
+    h' = -fi hi + ui eli.
 
     fi = Pm+n  \sum gji sigmoid(aji yj + bji) + gli
     ui = Pm+n  \sum kji sigmoid(aji yj + bji) + gli
@@ -160,40 +161,11 @@ def rflo_ltc(cell: LTCCell, carry, params, x):
     return df_dw, dh_dx  # , hebb
 
 
-# def rflo_tg(cell: CTRNNCell, carry, params, x):
-#     """Compute jacobian trace for RFLO."""
-#     h, jp, jx = carry
-#     W, tau = params
-
-#     jw = jp['params']['W']
-#     jtau = jp['params']['W_tau']
-
-#     # immediate jacobian (this step)
-#     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
-#     u = W @ v
-#     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
-#     # df_dh = jax.jacrev(jax.nn.tanh)(u)
-#     df_dh = jnp.eye(u.shape[-1]) * (1-jnp.tanh(u)**2)
-
-#     # Outer product the get Immediate Jacobian
-#     # M_immediate = jnp.einsum('ij,k', df_dh, v)
-#     M_immediate = df_dh[..., None] * v[None, None]
-
-#     # Update eligibility traces
-#     jw += (1 / tau)[:, None, None] * (M_immediate - jw)
-#     dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
-#     jtau += (1 / tau)[:, None] * dh_dtau
-
-#     df_dw = {"params": {"W": jw, "tau": jtau}}
-#     dh_dx = jx
-#     return df_dw, dh_dx
-
-
 class OnlineLTCCell(OnlineODECell, LTCCell):
     """Online LTC module."""
 
     def _trace_update(self, carry, _p, x):
-        if self.plasticity == "rtrl":
+        if self.plasticity in ["rtrl", "snap0"]:
             if self.ode_type in ["farsang", "fltc"]:
                 _ode_fn = ltc_farsang
             elif self.ode_type in ["hasani", "ltc"]:
@@ -202,7 +174,11 @@ class OnlineLTCCell(OnlineODECell, LTCCell):
                 _ode_fn = lrc_ode
             else:
                 raise ValueError(f"ODE type {self.ode_type} not recognized.")
-            traces = rtrl_ctrnn(self, carry, _p, x, ode=_ode_fn)
+            if self.plasticity == "rtrl":
+                traces = rtrl_ctrnn(self, carry, _p, x, ode=_ode_fn)
+            else:
+                traces = snap0(self, carry, _p, x, ode=_ode_fn)
+
         elif self.plasticity == "rflo":
             traces = rflo_ltc(self, carry, _p, x)
         else:
@@ -257,7 +233,7 @@ if __name__ == "__main__":
         if i % 1000 == 0:
             print(f"Iteration {i} | Loss: {loss:.3f}")
 
-    def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-4, batch_size=64):
+    def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-3):
         """Train network. We use Stochastic Gradient Descent with a constant learning rate."""
         _x, _y = data
         optimizer = optax.lion(lr)

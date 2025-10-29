@@ -66,7 +66,7 @@ class CTRNNCell(ODECell):
     """Simple CTRNN cell."""
 
     # num_units: int
-    ode_type: str = "tau_softplus"
+    ode_type: str = "murray"
     # wiring: str | None = None
     # wiring_kwargs: dict = field(default_factory=dict)
     tau_min: float = 1.0  # minimum value for tau used in ctrnn_ode_tau_softplus
@@ -149,6 +149,40 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     # Update dh_dx approximation
     dh_dx = df_dx * cell.dt + jnp.tensordot(dh_dh, jx, axes=1) * cell.dt
     return dh_dw, dh_dx
+
+
+def snap0(cell, carry, params, x, ode=ctrnn_ode):
+    """Compute jacobian trace update for RTRL."""
+    h, jp, jx = carry
+    # immediate jacobian (this step)
+    df_dw, df_dx = jax.jacrev(ode, argnums=[0, 2])(params, h, x)
+    return df_dw, df_dx
+
+
+def _rflo_murray(cell: CTRNNCell, carry, params, x, ode=ctrnn_ode):
+    """Compute jacobian trace for RFLO."""
+    h, jp, jx = carry
+
+    # immediate jacobian (this step)
+    df_dw, df_dx = jax.jacrev(ode, argnums=[0, 2])(params, h, x)
+    jp = {
+        "W": jax.tree.map(
+            lambda p, d: p * (1 - 1 / params["tau"])[:, None] + d.sum(axis=0) * cell.dt,
+            jp["W"],
+            df_dw["W"],
+        ),
+        "tau": jax.tree.map(
+            lambda p, d: p * (1 - 1 / params["tau"]) + d.sum(axis=0) * cell.dt,
+            jp["tau"],
+            df_dw["tau"],
+        ),
+    }
+    jx = jax.tree.map(
+        lambda p, d: p * (1 - 1 / params["tau"])[:, None] + d.sum(axis=0) * cell.dt,
+        jx,
+        df_dx,
+    )
+    return jp, jx  # , hebb
 
 
 def rflo_murray(cell: CTRNNCell, carry, params, x):
@@ -277,6 +311,8 @@ class OnlineCTRNNCell(OnlineODECell, CTRNNCell):
     def _trace_update(self, carry, _p, x):
         if self.plasticity == "rtrl":
             traces = rtrl_ctrnn(self, carry, _p, x)
+        elif self.plasticity == "snap0":
+            traces = snap0(self, carry, _p, x)
         elif self.plasticity == "rflo":
             if self.ode_type == "murray":
                 traces = rflo_murray(self, carry, _p, x)

@@ -89,15 +89,21 @@ class RNNEnsembleConfig(Serializable):
         """Post-initialization logic for RNNEnsembleConfig."""
         # Handle special cases for rnn_kwargs
         if not isinstance(self.rnn_kwargs, FrozenConfigDict):
-            # TODO: add LTC variants
-            match = self.model_name and re.search(r"(lrc|ltc|fltc)", self.model_name)
-            if match: 
-                self.rnn_kwargs["ode_type"] = match.group(1)
-            match = self.model_name and re.search(r"(rflo|rtrl)", self.model_name)
-            if match:
-                self.rnn_kwargs["plasticity"] = match.group(1)
+            # Set plasticity for given model names
+            match_plasticity = self.model_name and re.search(
+                r"(rflo|rtrl|snap0)", self.model_name
+            )
+            if match_plasticity:
+                self.rnn_kwargs["plasticity"] = match_plasticity.group(1)
             elif self.model_name in ["s5", "s5_rtrl"]:
                 self.rnn_kwargs = {"config": S5Config(**self.rnn_kwargs)}
+
+            # Set ODE type for given model_name
+            match = self.model_name and re.search(r"(lrc|ltc|fltc)", self.model_name)
+            if match:
+                self.rnn_kwargs["ode_type"] = match.group(1)
+
+            # Remove wiring if not compatible
             if self.model_name not in ["bptt", "rtrl", "rflo"]:
                 if "wiring" in self.rnn_kwargs or "wiring_kwargs" in self.rnn_kwargs:
                     print(
@@ -461,6 +467,7 @@ class RNNEnsemble(nn.RNNCellBase):
             # [h, x, training, (*call_args, **call_kwargs)]
             in_axes=(0, 0, None) + (None,) * self.num_submodule_extra_args,
             axis_size=self.config.num_modules,
+            # methods=["initialize_carry"],
         )(
             self.config.layers,
             rnn_cls=CELL_TYPES[self.config.model_name],
@@ -553,7 +560,8 @@ class RNNEnsemble(nn.RNNCellBase):
         h : List
             of rnn submodule states
         x : Array
-            input
+            input with shape (input_size) or (time, input_size)
+            Can't handle batch dimension, make sure to vmap externally if needed.
         training : bool
             whether the model is in training mode (affects dropout behavior)
         call_args : tuple
@@ -579,7 +587,8 @@ class RNNEnsemble(nn.RNNCellBase):
         elif self.config.ensemble_in_visible_prob < 1.0:
             print("WARNING: num_modules is 1 so ensemble_in_visible_prob is ignored.")
 
-        h = h or self.initialize_carry(jax.random.key(0), x_tiled.shape)
+        init_shape = x.shape[-1:]  # shape without time axis
+        h = self.initialize_carry(jax.random.key(0), init_shape)
 
         # call rnn submodules
         carry_out, outs = self.ensembles(
@@ -675,3 +684,33 @@ def make_batched_model(
         methods=["__call__"],
         split_rngs={"params": False, "dropout": True},
     )
+
+
+def scan_rnn(
+    model: RNNEnsemble,
+    params,
+    init_carry: jnp.ndarray = None,
+    *xs,
+):
+    """Scan RNN over time dimension. Make sure to use parallel scan if possible."""
+    obs_batch_major = jax.tree.map(
+        lambda a: a.transpose(1, 0, *range(2, len(a.shape))), xs
+    )
+    if model.config.model_name in ["s5", "lru"]:
+        outputs, y_hats = model.apply(params, init_carry, *obs_batch_major)
+
+    else:
+        h0 = init_carry or model.apply(
+            params,
+            jax.random.PRNGKey(0),
+            (xs[0].shape[0], xs[0].shape[-1]),
+            method=model.initialize_carry,
+        )
+
+        def _step(h, *_b):
+            h, y_hat = model.apply(params, h, *_b)
+            return h, y_hat
+
+        outputs, y_hats = jax.lax.scan(_step, h0, *obs_batch_major)
+    y_hats = jax.tree.map(lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats)
+    return outputs, y_hats
