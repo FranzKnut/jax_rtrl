@@ -103,7 +103,6 @@ params, losses = train(
 )
 
 
-
 plt.figure(figsize=(10, 5))
 
 # Plot the training loss
@@ -114,6 +113,8 @@ plt.plot(losses)
 plt.subplot(1, 2, 2)
 
 y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
+if cfg.rnn_config.method is not None:
+    y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()
 test_loss = jnp.mean((y_test - y_hat) ** 2)
 print(f"Final loss: {test_loss:.3f}")
