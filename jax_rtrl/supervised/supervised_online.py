@@ -2,7 +2,6 @@ from dataclasses import dataclass, field, replace
 import os
 import sys
 
-import jax
 import jax.numpy as jnp
 import jax.random as jrand
 import matplotlib.pyplot as plt
@@ -20,7 +19,7 @@ from supervised.training_utils import train_rnn_online as train
 
 
 # jax.config.update("jax_disable_jit", True)
-jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_debug_nans", True)
 
 
 @dataclass
@@ -67,6 +66,14 @@ x_train, y_train, x_test, y_test = get_data(cfg.dataset)
 
 rnn_config = replace(cfg.rnn_config, out_size=y_train.shape[-1])
 model, params, h0 = make_model(x_train[0], key, rnn_config)
+
+# Compute initial loss
+y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
+if cfg.rnn_config.method is not None:
+    y_hat = y_hat[0]
+y_hat = y_hat.mode().squeeze()
+test_loss = mse_loss(y_hat, y_test)
+print(f"Initial loss: {test_loss:.3f}")
 
 
 # @jax.vmap

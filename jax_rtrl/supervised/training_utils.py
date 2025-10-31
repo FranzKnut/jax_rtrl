@@ -93,7 +93,7 @@ def train_rnn_online(
 
         # Reset only hidden state, keep traces
         # step_carry = (*ep_carry[:-1], (h0[0], *ep_carry[-1][1:]))
-        step_carry = (*ep_carry[:-1], h0)
+        step_carry = (*ep_carry, h0)
 
         step_carry, __losses = jax.lax.scan(step, step_carry, (_x, _y))
         current_loss = __losses.mean()
@@ -106,11 +106,11 @@ def train_rnn_online(
                 pbar.update(10)
 
         jax.debug.callback(print_progress, n, current_loss)
-        return step_carry, current_loss
+        return step_carry[:-1], current_loss
 
     (params, *_), _losses = jax.lax.scan(
         run_episode,
-        (params, opt_state, key, h0),
+        (params, opt_state, key),
         jnp.arange(num_steps, dtype=jnp.int32),
     )
     pbar.close()

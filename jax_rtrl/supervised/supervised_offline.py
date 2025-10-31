@@ -76,6 +76,14 @@ model, params, h0 = make_model(x_train[0], key, rnn_config)
 model = make_batched_model(RNNEnsemble)(rnn_config)
 params = model.init(key, None, x_train[0])
 
+# Compute initial loss
+y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
+if cfg.rnn_config.method is not None:
+    y_hat = y_hat[0]
+y_hat = y_hat.mode().squeeze()
+test_loss = mse_loss(y_hat, y_test)
+print(f"Initial loss: {test_loss:.3f}")
+
 
 def loss(p, __x, __y):
     # MSE loss
