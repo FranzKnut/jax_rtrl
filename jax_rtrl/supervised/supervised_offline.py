@@ -30,25 +30,23 @@ from jax_rtrl.supervised.training_utils import (
 
 @dataclass
 class TrainingConfig:
-    dataset: str = "legacy_rollouts"
-    # dataset: str = "sine"
+    # dataset: str = "legacy_rollouts"
+    dataset: str = "sine"
     # dataset: str = "spirals"
-    num_steps: int = 1000
+    num_steps: int = 10000
     learning_rate: float = 1e-4
     gradient_clip: float | None = None
 
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
             model_name="bptt",
-            # model_name="lrc_snap0",
-            # model_name="ltc_rtrl",
-            # model_name="lrc_rtrl",
+            # model_name="lrc",
             layers=(32,),
-            num_modules=3,
+            num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
                 norm=None,
-                glu=False,
+                glu=True,
                 skip_connection=False,
             ),
             out_dist="Deterministic",
@@ -69,15 +67,18 @@ key = jrand.PRNGKey(0)
 key, key_data, key_train = jrand.split(key, 3)
 
 x_train, y_train, x_test, y_test = get_data(cfg.dataset)
+# Transpose to time dim first
+# x_train = x_train.transpose(1, 0, 2)
+# y_train = y_train.transpose(1, 0, 2)
 
 rnn_config = replace(cfg.rnn_config, out_size=y_train.shape[-1])
-model, params, h0 = make_model(x_train[0], key, rnn_config)
+model, params, h0 = make_model(x_train[:, 0], key, rnn_config)
 
-model = make_batched_model(RNNEnsemble)(rnn_config)
-params = model.init(key, None, x_train[0])
+# model = make_batched_model(RNNEnsemble)(rnn_config)
+# params = model.init(key, None, x_train[0])
 
 # Compute initial loss
-y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
+y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()
@@ -94,7 +95,7 @@ def loss(p, __x, __y):
 
 
 key, key_train = jrand.split(key_data)
-optimizer = optax.adam(1e-3)
+optimizer = optax.adam(cfg.learning_rate)
 params, losses = train(
     loss,
     optimizer,
@@ -113,7 +114,7 @@ plt.plot(losses)
 # Plot the trained model output
 plt.subplot(1, 2, 2)
 
-y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
+y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()

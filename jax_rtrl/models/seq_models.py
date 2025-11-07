@@ -693,11 +693,12 @@ def scan_rnn(
     *xs,
 ):
     """Scan RNN over time dimension. Make sure to use parallel scan if possible."""
-    obs_batch_major = jax.tree.map(
+    obs_time_major = jax.tree.map(
         lambda a: a.transpose(1, 0, *range(2, len(a.shape))), xs
     )
+
     if model.config.model_name in ["s5", "lru"]:
-        outputs, y_hats = model.apply(params, init_carry, *obs_batch_major)
+        outputs, y_hats = model.apply(params, init_carry, *xs)
 
     else:
         h0 = init_carry or model.apply(
@@ -711,6 +712,6 @@ def scan_rnn(
             h, y_hat = model.apply(params, h, *_b)
             return h, y_hat
 
-        outputs, y_hats = jax.lax.scan(_step, h0, *obs_batch_major)
+        outputs, y_hats = jax.lax.scan(_step, h0, *obs_time_major)
     y_hats = jax.tree.map(lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats)
     return outputs, y_hats

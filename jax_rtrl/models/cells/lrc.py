@@ -1,4 +1,4 @@
-"""Liquid Time Constant (LTC) model flax implementation."""
+"""Liquid Resistance Liquid Capacitance (LRC) model flax implementation."""
 
 from typing import Literal
 import flax.linen as nn
@@ -13,83 +13,85 @@ from jax_rtrl.models.cells.ctrnn import rtrl_ctrnn, snap0
 from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
 
 
-def ltc_hasani(params, h, x):
-    # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    # This way we only need one FC layer for recurrent and input connections
-    gating = sigmoid(params["a"] * y[..., None, :] + params["b"])
-    potential = params["e"] - y[..., None, :]  # shape (..., 1, input+hidden+1)
-    w = params["W"]
-    # Optional: enforce positivity on weights
-    # w = jnp.exp(w)
-    # w = jax.nn.softplus(w)
-    y_dot = jnp.mean(w * gating * potential, axis=-1)
-    return y_dot
+def lrc_ode(params, h, x, use_symmetric=False):
+    # Calculate A
+    sensory_syn = sigmoid(params["sigma_in"] * (x - params["mu_in"]))
+    sensory_syn_w = (params["w_in"] @ sensory_syn.T).T  # neural activation
+
+    syn = sigmoid(params["sigma"] * (h - params["mu"]))
+    syn_w = params["w"] * syn
+
+    f = params["g_l"] + sensory_syn_w + syn_w
+    A = -jax.nn.sigmoid(f)
+
+    # Calculate B
+    # sensory_syn = sigmoid(params["sigma_in"] * (x - params["mu_in"]))
+    sensory_syn_h = (params["h_in"] @ sensory_syn.T).T  # neural activation
+
+    # syn = sigmoid(params["sigma"] * (h - params["mu"]))
+    syn_h = params["h"] * syn
+
+    g = params["g_l"] + sensory_syn_h + syn_h
+    B = params["v_l"] * jnp.tanh(g)
+
+    # This could be also input dependent, not only state dep.
+    elastance_term = params["w_e"] * h + params["b_e"]
+
+    if use_symmetric:  # type of elastance
+        elastance = sigmoid(elastance_term + params["s_e"]) - sigmoid(
+            elastance_term - params["s_e"]
+        )
+    else:
+        elastance = sigmoid(elastance_term)
+
+    v_prime = h * A + B
+    return elastance * v_prime
 
 
-def ltc_farsang(params, h, x):
-    """LTC as defined in (Farsang 2024).
+def default_init(lim, dtype=jnp.float_):
+    def init(key, shape, dtype=dtype, out_sharding=None):
+        # dtype = dtypes.canonicalize_dtype(dtype)
+        return jrand.uniform(
+            key, shape, dtype, out_sharding=out_sharding, minval=-lim, maxval=lim
+        )
 
-    h' = -fi hi + ui eli.
-
-    fi = Pm+n  \sum gji sigmoid(aji yj + bji) + gli
-    ui = Pm+n  \sum kji sigmoid(aji yj + bji) + gli
-    kji = gji eji/eli
-    """
-    # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    # This way we only need one FC layer for recurrent and input connections
-    k = params["W"] * params["e"] / params["e_l"][:, None]
-    g = jnp.stack([params["W"], k], axis=0)
-    g_l = jnp.stack([params["g_l"], params["g_l"]], axis=0)
-    gating = sigmoid(params["a"] * y[None] + params["b"])
-    gating = jnp.stack([gating, gating], axis=0)
-    f_u = jnp.mean(g * gating + g_l[..., None], axis=-1)
-    f, u = f_u
-    y_dot = -f * h + u * params["e_l"]
-    return y_dot
+    return init
 
 
-def lrc_ode(params, h, x):
-    """Compute euler integration step or CTRNN ODE."""
-    # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    # This way we only need one FC layer for recurrent and input connections
-    k = params["W"] * params["e"] / params["e_l"][:, None]
-    g = jnp.stack([params["W"], k], axis=0)
-    g_l = jnp.stack([params["g_l"], params["g_l"]], axis=0)
-    gating = sigmoid(params["a"] * y[..., None, :] + params["b"])
-    batched = y.ndim > 1
-    gating = jnp.stack([gating, gating], axis=0)
-    if batched:
-        gating = gating.swapaxes(0, 1)
-    f_u = jnp.sum(g * gating + g_l[..., None], axis=-1)
-    if batched:
-        f_u = f_u.swapaxes(0, 1)
-    f, u = f_u
-    y_dot = -sigmoid(f) * h + jax.nn.tanh(u) * params["e_l"]
-    capacitance = sigmoid(params["o"] @ y.T).T
-    y_dot = y_dot * capacitance
-    return y_dot
+class LRCCell(ODECell):
+    """LRC cell."""
 
-
-class LTCCell(ODECell):
-    """Generic LTC cell."""
-
-    ode_type: Literal["hasani", "farsang"] = "hasani"
+    ode_type: Literal["lrc"] = "lrc"
+    use_symmetric: bool = False
 
     def _make_params(self, x):
         # Define params
-        w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        self.param("a", nn.initializers.ones, w_shape)
-        self.param("b", nn.initializers.zeros, w_shape)
-        self.param("e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
-        self.param("W", nn.initializers.uniform(1), w_shape)
-        self.param("e_l", nn.initializers.uniform(-1), self.num_units)
-        self.param("g_l", nn.initializers.uniform(1), self.num_units)
-        if self.ode_type == "lrc":
-            self.param("o", nn.initializers.uniform(-1), w_shape)
-            # self.param("p", nn.initializers.uniform(-1), self.num_units)
+        input_size = x.shape[-1]
+        sensory_shape = (self.num_units, input_size)
+        lim = jnp.sqrt(1 / self.num_units)
+
+        # Sensory parameters
+        self.param("mu_in", default_init(lim), input_size)
+        self.param("sigma_in", default_init(lim), input_size)
+        self.param("w_in", default_init(lim), sensory_shape)
+        self.param("h_in", default_init(lim), sensory_shape)
+
+        # Recurrent parameters
+        self.param("mu", default_init(lim), self.num_units)
+        self.param("sigma", default_init(lim), self.num_units)
+        self.param("w", default_init(lim), self.num_units)
+        self.param("h", default_init(lim), self.num_units)
+
+        # Leak parameters
+        self.param("v_l", default_init(lim), self.num_units)
+        self.param("g_l", default_init(lim), self.num_units)
+
+        # Eslastance parameters
+        self.param("w_e", default_init(lim), self.num_units)
+        self.param("b_e", default_init(lim), self.num_units)
+        if self.use_symmetric:
+            self.param("s_e", default_init(lim), self.num_units)
+
         super()._make_params(x)
 
     def _f(self, h, x):  # noqa
@@ -99,12 +101,8 @@ class LTCCell(ODECell):
         if "mask" in self.variables:
             mask = jax.lax.stop_gradient(self.variables["mask"])
             params = jax.tree.map(lambda W: W * mask, params)
-        if self.ode_type in ["hasani", "ltc"]:
-            df_dt = ltc_hasani(params, h, x)
-        elif self.ode_type in ["farsang", "fltc"]:
-            df_dt = ltc_farsang(params, h, x)
-        elif self.ode_type == "lrc":
-            df_dt = lrc_ode(params, h, x)
+        if self.ode_type == "lrc":
+            df_dt = lrc_ode(params, h, x, self.use_symmetric)
         else:
             raise ValueError(f"Unknown ode_type: {self.ode_type}")
         return df_dt
@@ -120,7 +118,7 @@ class LTCCell(ODECell):
         return 1
 
 
-def rflo_ltc(cell: LTCCell, carry, params, x):
+def rflo_lrc(cell: LRCCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
     W, tau = params.values()
@@ -162,16 +160,12 @@ def rflo_ltc(cell: LTCCell, carry, params, x):
     return df_dw, dh_dx  # , hebb
 
 
-class OnlineLTCCell(OnlineODECell, LTCCell):
+class OnlineLRCCell(OnlineODECell, LRCCell):
     """Online LTC module."""
 
     def _trace_update(self, carry, _p, x):
         if self.plasticity in ["rtrl", "snap0"]:
-            if self.ode_type in ["farsang", "fltc"]:
-                _ode_fn = ltc_farsang
-            elif self.ode_type in ["hasani", "ltc"]:
-                _ode_fn = ltc_hasani
-            elif self.ode_type == "lrc":
+            if self.ode_type == "lrc":
                 _ode_fn = lrc_ode
             else:
                 raise ValueError(f"ODE type {self.ode_type} not recognized.")
@@ -181,7 +175,7 @@ class OnlineLTCCell(OnlineODECell, LTCCell):
                 traces = snap0(self, carry, _p, x, ode=_ode_fn)
 
         elif self.plasticity == "rflo":
-            traces = rflo_ltc(self, carry, _p, x)
+            traces = rflo_lrc(self, carry, _p, x)
         else:
             raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
         return traces
@@ -198,7 +192,7 @@ if __name__ == "__main__":
     x = jnp.linspace(0, 5 * np.pi, 100)[:, None]
     y = jnp.sin(x) + 2
 
-    cell = LTCCell(32)
+    cell = LRCCell(32)
     carry = cell.initialize_carry(jrand.PRNGKey(0), (1,))
     params = cell.init(jrand.PRNGKey(0), carry, x[0])
 

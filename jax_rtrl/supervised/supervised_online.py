@@ -24,12 +24,12 @@ from supervised.training_utils import train_rnn_online as train
 
 @dataclass
 class TrainingConfig:
-    dataset: str = "legacy_rollouts"
-    # dataset: str = "sine"
+    # dataset: str = "legacy_rollouts"
+    dataset: str = "sine"
     # dataset: str = "spirals"
-    learning_rate: float = 1e-4
+    learning_rate: float = 1e-3
     gradient_clip: float | None = None
-    num_steps: int = 1000
+    num_steps: int = 10000
 
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
@@ -37,8 +37,8 @@ class TrainingConfig:
             # model_name="lrc_snap0",
             # model_name="ltc_rtrl",
             # model_name="lrc_rtrl",
-            layers=(32,),
-            num_modules=3,
+            layers=(8,),
+            num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
                 norm=None,
@@ -47,7 +47,7 @@ class TrainingConfig:
             ),
             out_dist="Deterministic",
             rnn_kwargs={
-                "dt": 1.0,
+                # "dt": 1.0,
                 # "ode_type": "murray",
             },
             output_layers=None,
@@ -64,11 +64,15 @@ key, key_data, key_train = jrand.split(key, 3)
 
 x_train, y_train, x_test, y_test = get_data(cfg.dataset)
 
+# Transpose to time dim first
+x_train = x_train.transpose(1, 0, 2)
+y_train = y_train.transpose(1, 0, 2)
+
 rnn_config = replace(cfg.rnn_config, out_size=y_train.shape[-1])
 model, params, h0 = make_model(x_train[0], key, rnn_config)
 
 # Compute initial loss
-y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
+y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()
@@ -119,7 +123,7 @@ plt.plot(losses)
 # Plot the trained model output
 plt.subplot(1, 2, 2)
 
-y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
+y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()

@@ -46,10 +46,6 @@ def get_data(dataset):
     else:
         x_train, y_train = x, y
         x_test, y_test = x[0], y[0]
-
-    # Transpose to time dim first
-    x_train = x_train.transpose(1, 0, 2)
-    y_train = y_train.transpose(1, 0, 2)
     return x_train, y_train, x_test, y_test
 
 
@@ -165,10 +161,8 @@ def predict(model: nn.RNNCellBase, params, *inputs):
 
 
 def make_model(initial_input, key, kwargs: RNNEnsembleConfig):
-    key_model = jrand.split(key, initial_input.shape[0])
+    # key_model = jrand.split(key, initial_input.shape[0])
     model = make_batched_model(RNNEnsemble)(kwargs)
-    params = model.init(key_model[0], None, initial_input)
-    h0 = model.apply(
-        params, key_model[0], initial_input.shape, method=model.initialize_carry
-    )
+    params = model.init(key, None, initial_input)
+    h0 = model.apply(params, key, initial_input.shape, method=model.initialize_carry)
     return model, params, h0

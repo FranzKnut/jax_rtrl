@@ -66,7 +66,7 @@ class CTRNNCell(ODECell):
     """Simple CTRNN cell."""
 
     # num_units: int
-    ode_type: str = "murray"
+    ode_type: str = "tau_softplus"
     # wiring: str | None = None
     # wiring_kwargs: dict = field(default_factory=dict)
     tau_min: float = 1.0  # minimum value for tau used in ctrnn_ode_tau_softplus
@@ -160,7 +160,7 @@ def snap0(cell, carry, params, x, ode=ctrnn_ode):
 
 
 def _rflo_murray(cell: CTRNNCell, carry, params, x, ode=ctrnn_ode):
-    """Compute jacobian trace for RFLO."""
+    """Inefficient version using jacrev."""
     h, jp, jx = carry
 
     # immediate jacobian (this step)
