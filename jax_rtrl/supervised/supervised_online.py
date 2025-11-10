@@ -27,17 +27,19 @@ class TrainingConfig:
     # dataset: str = "legacy_rollouts"
     dataset: str = "sine"
     # dataset: str = "spirals"
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e-4
     gradient_clip: float | None = None
     num_steps: int = 10000
 
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
-            model_name="rflo",
+            # model_name="rflo",
+            # model_name="snap0",
+            model_name="rtrl",
             # model_name="lrc_snap0",
             # model_name="ltc_rtrl",
             # model_name="lrc_rtrl",
-            layers=(8,),
+            layers=(8, 4),
             num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
@@ -52,7 +54,7 @@ class TrainingConfig:
             },
             output_layers=None,
             fa_type="bp",
-            method="linear",
+            # method="linear",
         )
     )
 

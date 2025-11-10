@@ -18,9 +18,8 @@ from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.s5 import S5Config
-
-from .jax_util import zeros_like_tree, get_normalization_fn
-from .feedforward import MLP, DistributionLayer, FADense
+from jax_rtrl.models.jax_util import zeros_like_tree, get_normalization_fn
+from jax_rtrl.models.feedforward import MLP, DistributionLayer, FADense
 
 
 @dataclass(frozen=True)
@@ -176,10 +175,10 @@ class SequenceLayer(nn.Module):
             scale = self.param("rnn_out_scale", nn.initializers.zeros, (self.rnn_size))
             x *= scale
 
-        x = FADense(self.d_output or hidden.shape[-1])(x)
         if self.config.glu:
             # Gated Linear Unit
-            x *= jax.nn.sigmoid(FADense(self.d_output or hidden.shape[-1])(x))
+            _x = FADense(self.d_output or hidden.shape[-1])(x)
+            x = _x * jax.nn.sigmoid(FADense(self.d_output or hidden.shape[-1])(x))
 
         x = get_normalization_fn(self.config.norm, training=training)(x)
         x = nn.Dropout(
@@ -228,15 +227,15 @@ class MultiLayerRNN(nn.RNNCellBase):
     def setup(self):
         """Initialize submodules."""
         self.layers = self._make_layers()
-        self.input = FADense(self.sizes[0], name="input")
+        # self.input = FADense(self.sizes[0], name="input")
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the carry (hidden state) for the RNN layers."""
-        batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
-        shapes = [self.sizes[:1], *[(s,) for s in self.sizes[:-1]]]
+        batch_shape = input_shape[:-1]
+        shapes = [input_shape[-1:], *[(s,) for s in self.sizes[:-1]]]
         # Create a list of tuples of initial states for each layer
         states = [
-            _l.initialize_carry(rng, batch_size + in_size)
+            _l.initialize_carry(rng, batch_shape + in_size)
             for _l, in_size in zip(self.layers, shapes)
         ]
         return self._make_tuple_of_list_from_carries(states)
@@ -256,7 +255,7 @@ class MultiLayerRNN(nn.RNNCellBase):
     @nn.compact
     def __call__(self, carries, x, training=True, *args, **kwargs):
         """Call MLP."""
-        x = self.input(x)
+        # x = self.input(x)
         new_carries = []
         for i, rnn in enumerate(self.layers):
             _carry = (
@@ -283,9 +282,9 @@ class FAMultiLayerRNN(MultiLayerRNN):
     def setup(self):
         """Initialize submodules."""
         self.layers = self._make_layers()
-        self.input = FADense(
-            self.sizes[0], f_align=self.fa_type in ["fa", "dfa"], name="input"
-        )
+        # self.input = FADense(
+        #     self.sizes[0], f_align=self.fa_type in ["fa", "dfa"], name="input"
+        # )
 
     @nn.compact
     def __call__(self, carries, x, training=True, *args, **kwargs):
@@ -312,7 +311,7 @@ class FAMultiLayerRNN(MultiLayerRNN):
         def fwd(mdl: FAMultiLayerRNN, _carries, x, _Bs):
             """Forward pass with tmp for backward pass."""
             vjps = []
-            x, vjp_in = nn.vjp(FADense.__call__, mdl.input, x)
+            # x, vjp_in = nn.vjp(FADense.__call__, mdl.input, x)
             _new_carries = []
             for i, rnn in enumerate(mdl.layers):
                 _carry = (
@@ -325,14 +324,15 @@ class FAMultiLayerRNN(MultiLayerRNN):
                 vjps.append(vjp_func)
 
             return (mdl._make_tuple_of_list_from_carries(_new_carries), x), (
-                vjp_in,
+                # vjp_in,
                 vjps,
                 _Bs,
             )
 
         def bwd(tmp, y_bar):
             """Backward pass that may use feedback alignment."""
-            vjp_in, vjps, _Bs = tmp
+            vjps, _Bs = tmp
+            # vjp_in, vjps, _Bs = tmp
             y_t = y_bar[1]  # Initial output for the first layer
             grads = {}
             grads_inputs = []
@@ -347,8 +347,9 @@ class FAMultiLayerRNN(MultiLayerRNN):
                     # Feedback alignment
                     y_t = _Bs[i] @ y_t
 
-            in_grad, x_grad = vjp_in(y_t)
-            grads["input"] = in_grad["params"]
+            # in_grad, x_grad = vjp_in(y_t)
+            x_grad = y_t
+            # grads["input"] = in_grad["params"]
 
             return ({"params": grads}, grads_inputs, x_grad, zeros_like_tree(_Bs))
 
@@ -587,8 +588,9 @@ class RNNEnsemble(nn.RNNCellBase):
         elif self.config.ensemble_in_visible_prob < 1.0:
             print("WARNING: num_modules is 1 so ensemble_in_visible_prob is ignored.")
 
-        init_shape = x.shape[-1:]  # shape without time axis
-        h = self.initialize_carry(jax.random.key(0), init_shape)
+        if h is None:
+            init_shape = x.shape[-1:]  # shape without time axis
+            h = self.initialize_carry(jax.random.key(0), init_shape)
 
         # call rnn submodules
         carry_out, outs = self.ensembles(
@@ -693,9 +695,14 @@ def scan_rnn(
     *xs,
 ):
     """Scan RNN over time dimension. Make sure to use parallel scan if possible."""
-    obs_time_major = jax.tree.map(
-        lambda a: a.transpose(1, 0, *range(2, len(a.shape))), xs
-    )
+    if len(xs[0].shape) > 2:
+        batched=True
+        obs_time_major = jax.tree.map(
+            lambda a: a.transpose(1, 0, *range(2, len(a.shape))), xs
+        )
+    else:
+        batched=False
+        obs_time_major = xs
 
     if model.config.model_name in ["s5", "lru"]:
         outputs, y_hats = model.apply(params, init_carry, *xs)
@@ -713,5 +720,6 @@ def scan_rnn(
             return h, y_hat
 
         outputs, y_hats = jax.lax.scan(_step, h0, *obs_time_major)
-    y_hats = jax.tree.map(lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats)
+    if batched:
+        y_hats = jax.tree.map(lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats)
     return outputs, y_hats

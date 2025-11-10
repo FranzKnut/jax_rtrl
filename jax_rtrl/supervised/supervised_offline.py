@@ -34,7 +34,7 @@ class TrainingConfig:
     dataset: str = "sine"
     # dataset: str = "spirals"
     num_steps: int = 10000
-    learning_rate: float = 1e-4
+    learning_rate: float = 1e-3
     gradient_clip: float | None = None
 
     rnn_config: RNNEnsembleConfig = field(
@@ -46,7 +46,7 @@ class TrainingConfig:
             num_blocks=1,
             layer_config=SequenceLayerConfig(
                 norm=None,
-                glu=True,
+                glu=False,
                 skip_connection=False,
             ),
             out_dist="Deterministic",
@@ -56,7 +56,7 @@ class TrainingConfig:
             },
             output_layers=None,
             fa_type="bp",
-            method="linear",
+            # method="linear",
         )
     )
 
@@ -73,9 +73,6 @@ x_train, y_train, x_test, y_test = get_data(cfg.dataset)
 
 rnn_config = replace(cfg.rnn_config, out_size=y_train.shape[-1])
 model, params, h0 = make_model(x_train[:, 0], key, rnn_config)
-
-# model = make_batched_model(RNNEnsemble)(rnn_config)
-# params = model.init(key, None, x_train[0])
 
 # Compute initial loss
 y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)

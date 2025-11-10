@@ -6,6 +6,7 @@ from jax_rtrl.models.s5 import StackedEncoderModel
 
 ONLINE_CELL_TYPES = {
     "rflo": OnlineCTRNNCell,
+    "snap0": OnlineCTRNNCell,
     "rtrl": OnlineCTRNNCell,
     "lru_rtrl": OnlineLRULayer,
     "s5_rtrl": StackedEncoderModel,

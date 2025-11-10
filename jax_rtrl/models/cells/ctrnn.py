@@ -9,8 +9,7 @@ import jax.random as jrand
 from chex import PRNGKey
 
 from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
-
-from ..jax_util import set_matching_leaves, get_matching_leaves
+from jax_rtrl.models.jax_util import set_matching_leaves, get_matching_leaves
 
 ## CTRNN ODE functions
 
@@ -73,6 +72,7 @@ class CTRNNCell(ODECell):
 
     def _make_params(self, x):
         # Define params
+        ODECell._make_params(self, x)
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
 
         def _initializer(key, *_):
@@ -138,7 +138,7 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     dh_dh = df_dh * cell.dt + jnp.identity(cell.num_units)
 
     # jacobian trace (previous step * dh_h)
-    comm = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), jp)
+    comm, comm_x = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), (jp, jx))
 
     def rtrl_step(rec, dh):
         return rec + dh * cell.dt
@@ -147,16 +147,16 @@ def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
     dh_dw = jax.tree.map(rtrl_step, comm, df_dw)
 
     # Update dh_dx approximation
-    dh_dx = df_dx * cell.dt + jnp.tensordot(dh_dh, jx, axes=1) * cell.dt
+    dh_dx = jax.tree.map(rtrl_step, comm_x, df_dx)
     return dh_dw, dh_dx
 
 
 def snap0(cell, carry, params, x, ode=ctrnn_ode):
     """Compute jacobian trace update for RTRL."""
     h, jp, jx = carry
-    # immediate jacobian (this step)
+    # immediate jacobian (only this step)
     df_dw, df_dx = jax.jacrev(ode, argnums=[0, 2])(params, h, x)
-    return df_dw, df_dx
+    return jax.tree.map(lambda p: p * cell.dt, (df_dw, df_dx))
 
 
 def _rflo_murray(cell: CTRNNCell, carry, params, x, ode=ctrnn_ode):
@@ -196,10 +196,7 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     u = v @ W.T
-    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
-    # df_dh = jax.jacrev(jax.nn.tanh)(u)
     df_dh = 1 - jnp.tanh(u) ** 2
-    # post = jnp.tanh(u)
 
     # hebb = hebbian(v, post)
 
@@ -213,18 +210,8 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     jtau += dh_dtau / tau
 
     df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jnp.outer(
-        df_dh,
-        (
-            jnp.concatenate(
-                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
-                axis=-1,
-            )
-            @ W.T
-        )[..., : x.shape[-1]],
-    )
-    # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
-    return df_dw, dh_dx  # , hebb
+    jx += (1 / tau)[:, None] * (jnp.diag(df_dh) @ W[..., : x.shape[-1]] - jx)
+    return df_dw, jx  # , hebb
 
 
 def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
@@ -251,23 +238,14 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
     M_immediate = df_dh[..., None] * v[None]
 
     # Update eligibility traces
-    jw += (1 / tau)[:, None] * (M_immediate - jw)
+    jw += (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
+
     dh_dtau = ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau) - jtau
-    jtau += dh_dtau / tau
+    jtau += dh_dtau / tau * cell.dt
 
     df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jnp.outer(
-        df_dh,
-        (
-            jnp.concatenate(
-                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
-                axis=-1,
-            )
-            @ W.T
-        )[..., : x.shape[-1]],
-    )
-    # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
-    return df_dw, dh_dx  # , hebb
+    jx += (1 / tau)[:, None] * (jnp.diag(df_dh) @ W[..., : x.shape[-1]] - jx) * cell.dt
+    return df_dw, jx  # , hebb
 
 
 # def hebbian(pre, post):
@@ -309,10 +287,18 @@ class OnlineCTRNNCell(OnlineODECell, CTRNNCell):
     plasticity: str = "rflo"
 
     def _trace_update(self, carry, _p, x):
+        if self.ode_type == "murray":
+            _ode = ctrnn_ode
+        elif self.ode_type == "tau_softplus":
+            _ode = ctrnn_ode_tau_softplus
+        elif self.ode_type == "tg":
+            _ode = ctrnn_tg
+        else:
+            raise ValueError(f"ODE type {self.ode_type} not recognized.")
         if self.plasticity == "rtrl":
-            traces = rtrl_ctrnn(self, carry, _p, x)
+            traces = rtrl_ctrnn(self, carry, _p, x, ode=_ode)
         elif self.plasticity == "snap0":
-            traces = snap0(self, carry, _p, x)
+            traces = snap0(self, carry, _p, x, ode=_ode)
         elif self.plasticity == "rflo":
             if self.ode_type == "murray":
                 traces = rflo_murray(self, carry, _p, x)

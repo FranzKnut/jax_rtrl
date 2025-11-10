@@ -1,7 +1,6 @@
 """Supervised training loops."""
 
 import jax
-import jax.random as jrand
 import optax
 from jax import numpy as jnp
 from flax import linen as nn

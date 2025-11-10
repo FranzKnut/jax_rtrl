@@ -28,10 +28,10 @@ def ltc_hasani(params, h, x):
 
 
 def ltc_farsang(params, h, x):
-    """LTC as defined in (Farsang 2024).
-
+    """LTC as in Farsang et al. 2024.
+    
     h' = -fi hi + ui eli.
-
+    
     fi = Pm+n  \sum gji sigmoid(aji yj + bji) + gli
     ui = Pm+n  \sum kji sigmoid(aji yj + bji) + gli
     kji = gji eji/eli
