@@ -39,9 +39,10 @@ class TrainingConfig:
 
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
-            model_name="bptt",
+            # model_name="bptt",
+            model_name="ltc",
             # model_name="lrc",
-            layers=(32,),
+            layers=(8, 4),
             num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
@@ -51,7 +52,7 @@ class TrainingConfig:
             ),
             out_dist="Deterministic",
             rnn_kwargs={
-                # "dt": 1.0,
+                "dt": 1.0,
                 # "ode_type": "murray",
             },
             output_layers=None,
@@ -88,7 +89,7 @@ def loss(p, __x, __y):
     _, y_hat = scan_rnn(model, p, None, __x)
     if cfg.rnn_config.method is not None:
         y_hat = y_hat[0]
-    return mse_loss(y_hat.mode().squeeze(), __y)
+    return mse_loss(y_hat.mode().mean(axis=-1), __y)
 
 
 key, key_train = jrand.split(key_data)
@@ -114,8 +115,8 @@ plt.subplot(1, 2, 2)
 y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.method is not None:
     y_hat = y_hat[0]
-y_hat = y_hat.mode().squeeze()
-test_loss = mse_loss(y_hat, y_test)
+y_hat = y_hat.mode()
+test_loss = mse_loss(y_hat.squeeze(), y_test)
 print(f"Final loss: {test_loss:.3f}")
 
 if cfg.dataset == "spirals":
@@ -140,8 +141,8 @@ elif cfg.dataset == "sine":
     plt.savefig("plots/sinewave.png")
     plt.show()
 else:
-    plt.plot(y_test[0, ..., 0], label="target")
-    plt.plot(y_hat[0, ..., 0], label="trained")
+    plt.plot(y_test[:, 0, ..., 0], label="target")
+    plt.plot(y_hat[:, 0, ..., 0], label="trained")
     plt.legend()
     os.makedirs("plots/supervised", exist_ok=True)
     plt.savefig(f"plots/supervised/{cfg.dataset}_{cfg.rnn_config.model_name}.png")

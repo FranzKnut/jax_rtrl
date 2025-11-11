@@ -15,29 +15,31 @@ from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
 
 def ltc_hasani(params, h, x):
     # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    y = jnp.concatenate([x, h], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     gating = sigmoid(params["a"] * y[..., None, :] + params["b"])
-    potential = params["e"] - y[..., None, :]  # shape (..., 1, input+hidden+1)
-    w = params["W"]
-    # Optional: enforce positivity on weights
-    # w = jnp.exp(w)
-    # w = jax.nn.softplus(w)
-    y_dot = jnp.mean(w * gating * potential, axis=-1)
+    potential = params["e"] - y[..., None, :]  # shape (..., 1, input+hidden)
+    # enforce positivity on weights
+    w = jax.nn.softplus(params["W"])
+    gl = jax.nn.softplus(params["g_l"])
+    syn = jnp.sum(w * gating * potential, axis=-1)
+    leak = gl * (params["e_l"] - h)
+    # Ensure G_L is negative (last column of W)
+    y_dot = syn + leak
     return y_dot
 
 
 def ltc_farsang(params, h, x):
     """LTC as in Farsang et al. 2024.
-    
+
     h' = -fi hi + ui eli.
-    
+
     fi = Pm+n  \sum gji sigmoid(aji yj + bji) + gli
     ui = Pm+n  \sum kji sigmoid(aji yj + bji) + gli
     kji = gji eji/eli
     """
     # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1])], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
     k = params["W"] * params["e"] / params["e_l"][:, None]
     g = jnp.stack([params["W"], k], axis=0)
@@ -50,29 +52,6 @@ def ltc_farsang(params, h, x):
     return y_dot
 
 
-def lrc_ode(params, h, x):
-    """Compute euler integration step or CTRNN ODE."""
-    # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    # This way we only need one FC layer for recurrent and input connections
-    k = params["W"] * params["e"] / params["e_l"][:, None]
-    g = jnp.stack([params["W"], k], axis=0)
-    g_l = jnp.stack([params["g_l"], params["g_l"]], axis=0)
-    gating = sigmoid(params["a"] * y[..., None, :] + params["b"])
-    batched = y.ndim > 1
-    gating = jnp.stack([gating, gating], axis=0)
-    if batched:
-        gating = gating.swapaxes(0, 1)
-    f_u = jnp.sum(g * gating + g_l[..., None], axis=-1)
-    if batched:
-        f_u = f_u.swapaxes(0, 1)
-    f, u = f_u
-    y_dot = -sigmoid(f) * h + jax.nn.tanh(u) * params["e_l"]
-    capacitance = sigmoid(params["o"] @ y.T).T
-    y_dot = y_dot * capacitance
-    return y_dot
-
-
 class LTCCell(ODECell):
     """Generic LTC cell."""
 
@@ -80,13 +59,14 @@ class LTCCell(ODECell):
 
     def _make_params(self, x):
         # Define params
-        w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
+        w_shape = (self.num_units, x.shape[-1] + self.num_units)
         self.param("a", nn.initializers.ones, w_shape)
         self.param("b", nn.initializers.zeros, w_shape)
         self.param("e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
-        self.param("W", nn.initializers.uniform(1), w_shape)
+        self.param("W", nn.initializers.uniform(0.01), w_shape)
         self.param("e_l", nn.initializers.uniform(-1), self.num_units)
         self.param("g_l", nn.initializers.uniform(1), self.num_units)
+
         if self.ode_type == "lrc":
             self.param("o", nn.initializers.uniform(-1), w_shape)
             # self.param("p", nn.initializers.uniform(-1), self.num_units)
@@ -103,8 +83,8 @@ class LTCCell(ODECell):
             df_dt = ltc_hasani(params, h, x)
         elif self.ode_type in ["farsang", "fltc"]:
             df_dt = ltc_farsang(params, h, x)
-        elif self.ode_type == "lrc":
-            df_dt = lrc_ode(params, h, x)
+        # elif self.ode_type == "lrc":
+        #     df_dt = lrc_ode(params, h, x)
         else:
             raise ValueError(f"Unknown ode_type: {self.ode_type}")
         return df_dt
@@ -171,8 +151,8 @@ class OnlineLTCCell(OnlineODECell, LTCCell):
                 _ode_fn = ltc_farsang
             elif self.ode_type in ["hasani", "ltc"]:
                 _ode_fn = ltc_hasani
-            elif self.ode_type == "lrc":
-                _ode_fn = lrc_ode
+            # elif self.ode_type == "lrc":
+            #     _ode_fn = lrc_ode
             else:
                 raise ValueError(f"ODE type {self.ode_type} not recognized.")
             if self.plasticity == "rtrl":

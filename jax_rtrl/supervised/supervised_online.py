@@ -2,6 +2,7 @@ from dataclasses import dataclass, field, replace
 import os
 import sys
 
+import jax
 import jax.numpy as jnp
 import jax.random as jrand
 import matplotlib.pyplot as plt
@@ -18,6 +19,7 @@ from supervised.training_utils import get_data, predict
 from supervised.training_utils import train_rnn_online as train
 
 
+jax.config.update("jax_platforms", "cpu")
 # jax.config.update("jax_disable_jit", True)
 # jax.config.update("jax_debug_nans", True)
 
@@ -35,10 +37,11 @@ class TrainingConfig:
         default_factory=lambda: RNNEnsembleConfig(
             # model_name="rflo",
             # model_name="snap0",
-            model_name="rtrl",
+            # model_name="rtrl",
             # model_name="lrc_snap0",
+            # model_name="ltc_snap0",
             # model_name="ltc_rtrl",
-            # model_name="lrc_rtrl",
+            model_name="lrc_rtrl",
             layers=(8, 4),
             num_modules=1,
             num_blocks=1,
@@ -61,7 +64,7 @@ class TrainingConfig:
 
 cfg = simple_parsing.parse(TrainingConfig)
 
-key = jrand.PRNGKey(1)
+key = jrand.PRNGKey(0)
 key, key_data, key_train = jrand.split(key, 3)
 
 x_train, y_train, x_test, y_test = get_data(cfg.dataset)
@@ -89,7 +92,7 @@ def loss(p, __x, __y, rnn_state=None):
     if cfg.rnn_config.method is not None:
         y_hat = y_hat[0]
     if cfg.rnn_config.out_dist == "Deterministic":
-        loss = mse_loss(y_hat.mode().squeeze(), __y)
+        loss = mse_loss(y_hat.mode().reshape(__y.shape), __y)
     else:
         loss = jnp.mean(-y_hat.log_prob(__y))
     return loss, rnn_state
@@ -128,8 +131,8 @@ plt.subplot(1, 2, 2)
 y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.method is not None:
     y_hat = y_hat[0]
-y_hat = y_hat.mode().squeeze()
-test_loss = mse_loss(y_hat, y_test)
+y_hat = y_hat.mode()
+test_loss = mse_loss(y_hat.squeeze(), y_test)
 print(f"Final loss: {test_loss:.3f}")
 
 if cfg.dataset == "spirals":
@@ -154,8 +157,8 @@ elif cfg.dataset == "sine":
     plt.savefig("plots/sinewave.png")
     plt.show()
 else:
-    plt.plot(y_test[0, ..., 0], label="target")
-    plt.plot(y_hat[0, ..., 0], label="trained")
+    plt.plot(y_test[:, 0, ..., 0], label="target")
+    plt.plot(y_hat[:, 0, ..., 0], label="trained")
     plt.legend()
     os.makedirs("plots/supervised", exist_ok=True)
     plt.savefig(f"plots/supervised/{cfg.dataset}_{cfg.rnn_config.model_name}.png")

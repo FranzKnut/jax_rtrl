@@ -69,22 +69,22 @@ def train_rnn_online(
         print("Tracing run_episode.")
 
         def step(carry, _data):
-            __params, _opt_state, _key, h = carry
+            _params, _opt_state, _key, h = carry
             __x, __y = _data
             # _key, key_batch = jrand.split(_key)
             (current_loss, h), grads = jax.value_and_grad(loss_fn, has_aux=True)(
-                __params, __x, __y, h
+                _params, __x, __y, h
             )
-            updates, _opt_state = optimizer.update(grads, _opt_state, __params)
-            __params = optax.apply_updates(__params, updates)
+            updates, _opt_state = optimizer.update(grads, _opt_state, _params)
+            _params = optax.apply_updates(_params, updates)
 
             if param_post_update_fn is not None:
-                __params["params"] = param_post_update_fn(__params["params"])
+                _params["params"] = param_post_update_fn(_params["params"])
 
             # Grad clipping for the Jacobian traces
             # h = (h[0], *jax.tree.map(lambda x: optax.clip_by_global_norm(.1).update(x, None)[0], h[1:]))
 
-            return (__params, _opt_state, _key, h), current_loss
+            return (_params, _opt_state, _key, h), current_loss
 
         # Reset only hidden state, keep traces
         # step_carry = (*ep_carry[:-1], (h0[0], *ep_carry[-1][1:]))
