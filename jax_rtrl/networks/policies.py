@@ -1,12 +1,10 @@
 from dataclasses import dataclass, field
-from typing import Literal
 from chex import PRNGKey
 from jax import numpy as jnp
 
 from flax import linen as nn
 import jax
 
-from jax_rtrl.models import make_rnn_ensemble_config
 from jax_rtrl.models.autoencoders import ConvEncoder
 from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
@@ -20,17 +18,10 @@ class PolicyConfig(RNNEnsembleConfig):
     """
 
     model_name: str = "bptt"
-    num_blocks: int = 1
     num_layers: int = 1
     stochastic: bool = False
-    output_layers: tuple[int] | None = (128,)
     skip_connection: bool = False
     norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
-    ensemble_visible_obs_prob: float = 1.0
-
-    # RNN specific
-    glu: bool = False
-    dropout: float = 0.0
 
     # CNN specific
     use_cnn: bool = False
@@ -97,23 +88,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
     def setup(self):
         """Initialize and set up the RNN configuration."""
         self.rnn = RNNEnsemble(
-            make_rnn_ensemble_config(
-                model_name=self.config.model_name,
-                hidden_size=self.config.hidden_size,
-                out_size=self.a_dim,
-                num_modules=self.config.num_modules,
-                num_blocks=self.config.num_blocks,
-                num_layers=self.config.num_layers,
-                output_layers=self.config.output_layers,
-                stochastic=self.config.stochastic,
-                model_kwargs=self.config.rnn_kwargs,
-                skip_connection=self.config.skip_connection,
-                glu=self.config.glu,
-                dropout=self.config.dropout,
-                norm=self.config.norm,
-                ensemble_in_visible_prob=self.config.ensemble_visible_obs_prob,
-                method=self.config.method,
-            ),
+            self.config,
             num_submodule_extra_args=self.num_submodule_extra_args,
             name="rnn",
         )

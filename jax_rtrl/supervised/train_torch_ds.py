@@ -52,7 +52,7 @@ class TrainingConfig:
             },
             output_layers=None,
             fa_type="bp",
-            method="linear",
+            ensemble_method="linear",
         )
     )
 
@@ -133,7 +133,7 @@ if __name__ == "__main__":
     def loss(p, __x, __y, rnn_state=None):
         # MSE loss
         rnn_state, y_hat = model.apply(p, __x, rnn_state)
-        if cfg.rnn_config.method is not None:
+        if cfg.rnn_config.ensemble_method is not None:
             y_hat = y_hat[0]
         if cfg.rnn_config.out_dist == "Deterministic":
             loss = jnp.mean((__y - y_hat.mode()) ** 2)
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     plt.subplot(1, 2, 2)
 
     y_hat = predict(model, params, x_test[:, None] if x_test.ndim == 2 else x_test)
-    if cfg.rnn_config.method is not None:
+    if cfg.rnn_config.ensemble_method is not None:
         y_hat = y_hat[0]
     y_hat = y_hat.mode()
     test_loss = jnp.mean((y_test - y_hat) ** 2)

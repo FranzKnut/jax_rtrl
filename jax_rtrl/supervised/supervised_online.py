@@ -79,7 +79,7 @@ model, params, h0 = make_model(x_train[0], key, rnn_config)
 
 # Compute initial loss
 y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
-if cfg.rnn_config.method is not None:
+if cfg.rnn_config.ensemble_method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()
 test_loss = mse_loss(y_hat, y_test)
@@ -90,7 +90,7 @@ print(f"Initial loss: {test_loss:.3f}")
 def loss(p, __x, __y, rnn_state=None):
     # MSE loss
     rnn_state, y_hat = model.apply(p, rnn_state, __x)
-    if cfg.rnn_config.method is not None:
+    if cfg.rnn_config.ensemble_method is not None:
         y_hat = y_hat[0]
     if cfg.rnn_config.out_dist == "Deterministic":
         loss = mse_loss(y_hat.mode().reshape(__y.shape), __y)
@@ -130,7 +130,7 @@ plt.plot(losses)
 plt.subplot(1, 2, 2)
 
 y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
-if cfg.rnn_config.method is not None:
+if cfg.rnn_config.ensemble_method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode()
 test_loss = mse_loss(y_hat.squeeze(), y_test)

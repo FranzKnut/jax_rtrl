@@ -70,7 +70,7 @@ class RNNEnsembleConfig(Serializable):
     layers: tuple[int, ...] | None = None
     num_layers: tuple[int, ...] | None = 1
     hidden_size: int | None = None
-    method: Literal["linear", "dist", None] = None
+    ensemble_method: Literal["linear", "dist", None] = None
     num_modules: int = 1
     num_blocks: int = 1
     out_size: int | None = None
@@ -78,8 +78,8 @@ class RNNEnsembleConfig(Serializable):
     input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
-    ensemble_in_visible_prob: float = 1.0
-    ensemble_in_first_full: bool = True
+    ensemble_visible_obs_prob: float = 1.0
+    ensemble_first_full_obs: bool = True
     static_rng_seed: int = 0  # Used for ensemble input mask
     layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
     rnn_kwargs: dict = field(default_factory=dict, hash=False)
@@ -118,8 +118,12 @@ class RNNEnsembleConfig(Serializable):
                     self.rnn_kwargs["interneurons"] = self.hidden_size - (
                         self.out_size + 1
                     )
-
-            # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
+        assert self.hidden_size is not None or self.layers is not None, (
+            "Either hidden_size or layers must be specified."
+        )
+        if self.layers is None:
+            self.layers = (self.hidden_size,) * self.num_layers
+        # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
 
 class SequenceLayer(nn.Module):
@@ -133,12 +137,13 @@ class SequenceLayer(nn.Module):
 
     rnn_cls: type[nn.RNNCellBase]  # RNN class
     rnn_size: int  # Size of the RNN layer
-    d_output: int = None  # output layer size, defaults to hidden_size
+    # d_output: int = None  # output layer size, defaults to hidden_size
     config: SequenceLayerConfig = field(
         default_factory=SequenceLayerConfig
     )  # configuration for the layer
     num_blocks: int = 1  # Number of input chunks for parallel processing
     rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN
+    f_align: bool = False  # Whether to use feedback alignment
 
     def setup(self):
         """Initialize the RNN module."""
@@ -148,10 +153,15 @@ class SequenceLayer(nn.Module):
             num_blocks=self.num_blocks,
             **self.rnn_kwargs,
         )
+        if self.config.skip_connection:
+            self._input = FADense(self.rnn_size, f_align=self.f_align, name="input")
 
     @nn.compact
     def __call__(self, hidden, inputs, training=True, *args, **kwargs):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
+
+        if self.config.skip_connection:
+            inputs = self._input(inputs)
 
         x = get_normalization_fn(self.config.norm, training=training)(
             inputs
@@ -177,8 +187,8 @@ class SequenceLayer(nn.Module):
 
         if self.config.glu:
             # Gated Linear Unit
-            _x = FADense(self.d_output or hidden.shape[-1])(x)
-            x = _x * jax.nn.sigmoid(FADense(self.d_output or hidden.shape[-1])(x))
+            _x = FADense(x.shape[-1], f_align=self.f_align)(x)
+            x = _x * jax.nn.sigmoid(FADense(x.shape[-1], f_align=self.f_align)(x))
 
         x = get_normalization_fn(self.config.norm, training=training)(x)
         x = nn.Dropout(
@@ -217,7 +227,7 @@ class MultiLayerRNN(nn.RNNCellBase):
                 rnn_size=size,
                 num_blocks=self.num_blocks,
                 rnn_kwargs=self.rnn_kwargs,
-                d_output=size,
+                # d_output=size,
                 config=self.layer_config,
                 name=f"layer_{i}",
             )
@@ -494,7 +504,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 name="mlps_out",
             )
 
-        if self.config.method == "linear":
+        if self.config.ensemble_method == "linear":
             self.combine_layer = FADense(
                 self.config.num_modules,
                 f_align=self.config.rnn_kwargs.get("f_align", False),
@@ -527,7 +537,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
         else:
             _dists = self.dists(outs)
-            if self.config.method == "linear":
+            if self.config.ensemble_method == "linear":
                 # Compute linear combination of outputs
                 out_gates = self.combine_layer(
                     jnp.concatenate([outs.flatten(), x], axis=-1)
@@ -536,7 +546,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 combined_dist = jax.tree.map(
                     lambda d: jnp.sum(d * out_gates[None], axis=-1), _dists
                 )
-            elif self.config.method == "dist":
+            elif self.config.ensemble_method == "dist":
                 combined_dist = distrax.MixtureSameFamily(
                     distrax.Categorical(logits=jnp.zeros(_dists.loc.shape)), _dists
                 )
@@ -579,13 +589,13 @@ class RNNEnsemble(nn.RNNCellBase):
         if self.config.num_modules > 1:
             ensemble_input_mask = jax.random.bernoulli(
                 self.ensemble_input_mask_rng,
-                self.config.ensemble_in_visible_prob,
+                self.config.ensemble_visible_obs_prob,
                 (self.config.num_modules,) + x.shape,
             )
-            if self.config.ensemble_in_first_full:
+            if self.config.ensemble_first_full_obs:
                 ensemble_input_mask.at[0].set(1.0)
             x_tiled = x_tiled * ensemble_input_mask
-        elif self.config.ensemble_in_visible_prob < 1.0:
+        elif self.config.ensemble_visible_obs_prob < 1.0:
             print("WARNING: num_modules is 1 so ensemble_in_visible_prob is ignored.")
 
         if h is None:
@@ -696,12 +706,12 @@ def scan_rnn(
 ):
     """Scan RNN over time dimension. Make sure to use parallel scan if possible."""
     if len(xs[0].shape) > 2:
-        batched=True
+        batched = True
         obs_time_major = jax.tree.map(
             lambda a: a.transpose(1, 0, *range(2, len(a.shape))), xs
         )
     else:
-        batched=False
+        batched = False
         obs_time_major = xs
 
     if model.config.model_name in ["s5", "lru"]:
@@ -721,5 +731,7 @@ def scan_rnn(
 
         outputs, y_hats = jax.lax.scan(_step, h0, *obs_time_major)
     if batched:
-        y_hats = jax.tree.map(lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats)
+        y_hats = jax.tree.map(
+            lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats
+        )
     return outputs, y_hats
