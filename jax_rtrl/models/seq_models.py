@@ -721,15 +721,15 @@ def scan_rnn(
         h0 = init_carry or model.apply(
             params,
             jax.random.PRNGKey(0),
-            (xs[0].shape[0], xs[0].shape[-1]),
+            xs[0].shape[:-2] + xs[0].shape[-1:],
             method=model.initialize_carry,
         )
 
-        def _step(h, *_b):
+        def _step(h, _b):
             h, y_hat = model.apply(params, h, *_b)
             return h, y_hat
 
-        outputs, y_hats = jax.lax.scan(_step, h0, *obs_time_major)
+        outputs, y_hats = jax.lax.scan(_step, h0, obs_time_major)
     if batched:
         y_hats = jax.tree.map(
             lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats
