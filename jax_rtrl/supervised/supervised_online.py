@@ -41,8 +41,9 @@ class TrainingConfig:
             # model_name="lrc_snap0",
             # model_name="ltc_snap0",
             # model_name="ltc_rtrl",
-            model_name="lrc_rtrl",
-            layers=(8, 4),
+            # model_name="lrc_rtrl",
+            model_name="ltc_rflo",
+            layers=(32,),
             num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
@@ -52,7 +53,7 @@ class TrainingConfig:
             ),
             out_dist="Deterministic",
             rnn_kwargs={
-                # "dt": 1.0,
+                "dt": 1.0,
                 # "ode_type": "murray",
             },
             output_layers=None,

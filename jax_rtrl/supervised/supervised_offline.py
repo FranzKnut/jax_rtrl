@@ -2,18 +2,13 @@ from dataclasses import dataclass, field, replace
 import os
 import sys
 
+import jax
 import jax.random as jrand
 import matplotlib.pyplot as plt
 import optax
 import simple_parsing
 
-from jax_rtrl.models.seq_models import (
-    RNNEnsemble,
-    RNNEnsembleConfig,
-    SequenceLayerConfig,
-    make_batched_model,
-    scan_rnn,
-)
+from jax_rtrl.models.seq_models import RNNEnsembleConfig, SequenceLayerConfig, scan_rnn
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
@@ -25,7 +20,7 @@ from jax_rtrl.supervised.training_utils import (
     train_rnn_offline as train,
 )
 
-# jax.config.update("jax_disable_jit", True)
+jax.config.update("jax_disable_jit", True)
 
 
 @dataclass
@@ -52,7 +47,7 @@ class TrainingConfig:
             ),
             out_dist="Deterministic",
             rnn_kwargs={
-                "dt": 1.0,
+                "dt": 0.2,
                 # "ode_type": "murray",
             },
             output_layers=None,

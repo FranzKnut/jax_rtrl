@@ -11,6 +11,7 @@ ONLINE_CELL_TYPES = {
     "lru_rtrl": OnlineLRULayer,
     "s5_rtrl": StackedEncoderModel,
     "ltc_rtrl": OnlineLTCCell,
+    "ltc_rflo": OnlineLTCCell,
     "lrc_rtrl": OnlineLRCCell,
     "ltc_snap0": OnlineLTCCell,
     "lrc_snap0": OnlineLRCCell,

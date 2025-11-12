@@ -9,8 +9,7 @@ from jax.nn import sigmoid
 from chex import PRNGKey
 from flax.linen import nowrap
 
-from jax_rtrl.models.cells.ctrnn import rtrl_ctrnn, snap0
-from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
+from jax_rtrl.models.cells.ode import ODECell, OnlineODECell, rtrl, snap0
 
 
 def lrc_ode(params, h, x, use_symmetric=False):
@@ -170,7 +169,7 @@ class OnlineLRCCell(OnlineODECell, LRCCell):
             else:
                 raise ValueError(f"ODE type {self.ode_type} not recognized.")
             if self.plasticity == "rtrl":
-                traces = rtrl_ctrnn(self, carry, _p, x, ode=_ode_fn)
+                traces = rtrl(self, carry, _p, x, ode=_ode_fn)
             else:
                 traces = snap0(self, carry, _p, x, ode=_ode_fn)
 

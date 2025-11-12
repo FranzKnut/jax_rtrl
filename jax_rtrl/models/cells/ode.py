@@ -189,3 +189,35 @@ class OnlineODECell(ODECell):
             lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
         )
         return h, jp, jx
+
+
+def snap0(cell, carry, params, x, ode):
+    """Compute jacobian trace update for RTRL."""
+    h, jp, jx = carry
+    # immediate jacobian (only this step)
+    df_dw, df_dx = jax.jacrev(ode, argnums=[0, 2])(params, h, x)
+    return jax.tree.map(lambda p: p * cell.dt, (df_dw, df_dx))
+
+
+def rtrl(cell, carry, params, x, ode):
+    """Compute jacobian trace update for RTRL."""
+    h, jp, jx = carry
+
+    # immediate jacobian (this step)
+    df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
+
+    # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
+    dh_dh = df_dh * cell.dt + jnp.identity(cell.num_units)
+
+    # jacobian trace (previous step * dh_h)
+    comm, comm_x = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), (jp, jx))
+
+    def rtrl_step(rec, dh):
+        return rec + dh * cell.dt
+
+    # Update dh_dw approximation
+    dh_dw = jax.tree.map(rtrl_step, comm, df_dw)
+
+    # Update dh_dx approximation
+    dh_dx = jax.tree.map(rtrl_step, comm_x, df_dx)
+    return dh_dw, dh_dx
