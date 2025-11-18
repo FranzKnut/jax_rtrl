@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from chex import PRNGKey
 from jax import numpy as jnp
 
@@ -32,7 +32,7 @@ class PolicyConfig(RNNEnsembleConfig):
 class Policy(nn.Module):
     """Generic Policy Base Class."""
 
-    a_dim: int
+    # a_dim: int
     config: PolicyConfig = field(default_factory=PolicyConfig)
     use_rnn: bool = False
 
@@ -67,9 +67,9 @@ class PolicyMLP(Policy):
         layers = [self.config.hidden_size] * self.config.num_layers
         if self.config.output_layers:
             layers += list(self.config.output_layers)
-        layers += [self.a_dim]
+        # layers += [self.a_dim]
         x = MLPEnsemble(
-            out_size=self.a_dim,
+            out_size=self.config.out_size,
             num_modules=self.config.num_modules,
             out_dist="Normal" if self.config.stochastic else None,
             kwargs={"layers": layers, "norm": self.config.norm},

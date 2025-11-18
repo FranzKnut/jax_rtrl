@@ -74,7 +74,7 @@ class RNNEnsembleConfig(Serializable):
     num_modules: int = 1
     num_blocks: int = 1
     out_size: int | None = None
-    out_dist: str | None = None
+    out_dist: str | None = "Deterministic"
     input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
