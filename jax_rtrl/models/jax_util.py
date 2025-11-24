@@ -74,7 +74,7 @@ def restore_config(path):
 
 
 def restore_params(path, tree=None):
-    """Restore params and config from checkpoint."""
+    """Restore parameters from orbax checkpoint."""
     path = os.path.abspath(path)
     orbax_path = os.path.join(path, "ckpt")
 

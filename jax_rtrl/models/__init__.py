@@ -39,7 +39,7 @@ def make_rnn_ensemble_config(
     stochastic=False,
     model_kwargs=None,
     skip_connection=True,
-    glu=True,
+    glu=False,
     f_align=False,
     norm=None,
     dropout=0.0,

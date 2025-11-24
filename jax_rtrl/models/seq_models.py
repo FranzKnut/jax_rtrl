@@ -681,7 +681,12 @@ def make_batched_model(
                 "wiring": 0,
                 "falign": 0,
             },  # Separate parameters per chunk
-            split_rngs={"params": True, "dropout": True, "wiring": True},
+            split_rngs={
+                "params": True,
+                "dropout": True,
+                "wiring": True,
+                "default": True,
+            },
             in_axes=in_axes,
             out_axes=out_axes,
             axis_size=axis_size,
@@ -698,7 +703,7 @@ def make_batched_model(
             "wiring": None,
         },
         methods=["__call__"],
-        split_rngs={"params": False, "dropout": True},
+        split_rngs={"params": False, "dropout": True, "default": True},
     )
 
 
