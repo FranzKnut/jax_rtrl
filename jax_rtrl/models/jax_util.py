@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import flax.linen as nn
+import jax.random as jrand
 import optax
 import orbax.checkpoint
 
@@ -308,3 +309,13 @@ def tree_stack(trees, axis=0):
     grouped_leaves = zip(*leaves_list)
     result_leaves = [jnp.stack(leaf, axis=axis) for leaf in grouped_leaves]
     return treedef.unflatten(result_leaves)
+
+
+def symmetric_uniform_init(lim, dtype=jnp.float_):
+    def init(key, shape, dtype=dtype, out_sharding=None):
+        # dtype = dtypes.canonicalize_dtype(dtype)
+        return jrand.uniform(
+            key, shape, dtype, out_sharding=out_sharding, minval=-lim, maxval=lim
+        )
+
+    return init

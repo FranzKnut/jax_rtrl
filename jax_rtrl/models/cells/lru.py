@@ -308,7 +308,7 @@ class OnlineLRULayer(nn.RNNCellBase):
     def initialize_carry(self, rng, input_shape):
         """Initialize the carry state for the LRU cell including gradient traces."""
         d_hidden = self.d_hidden or self.d_output
-        batch_size = input_shape[0:1] if len(input_shape) > 1 else ()
+        batch_size = input_shape[:-1] if len(input_shape) > 1 else ()
         hidden_init = jnp.zeros((*batch_size, d_hidden), dtype=jnp.complex64)
         if self.plasticity == "bptt":
             return hidden_init

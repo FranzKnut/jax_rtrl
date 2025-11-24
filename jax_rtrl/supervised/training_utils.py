@@ -66,7 +66,7 @@ def train_rnn_online(
     pbar = trange(int(num_steps), maxinterval=2)
 
     def run_episode(ep_carry, n):
-        print("Tracing run_episode.")
+        pbar.write("Tracing run_episode.")
 
         def step(carry, _data):
             _params, _opt_state, _key, h = carry

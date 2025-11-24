@@ -108,7 +108,12 @@ class OnlineODECell(ODECell):
                 """Forward pass with tmp for backward pass."""
                 h = _carry[0]
                 out = jax.tree.map(lambda a, b: a + b * mdl.dt, h, mdl._f(h, _x))
-                traces = mdl._trace_update(_carry, mdl.variables["params"], _x)
+                # during init, traces are None -> avoid computing them
+                if all([(_c is None) for _c in _carry[1:]]):
+                    print("Skipping trace computation during init")
+                    traces = _carry[1:]
+                else:
+                    traces = mdl._trace_update(_carry, mdl.variables["params"], _x)
                 return (
                     (out, *traces),
                     (out, *traces) if force_trace_compute else out,
@@ -166,25 +171,17 @@ class OnlineODECell(ODECell):
             return h
 
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
-        jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
-
-        # HACK: if we are inside a batched setting, we need to replicate for self.init
-        _h = h
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            _outer_batch_size = rng._trace.axis_data.size
-            _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
-            _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
-            input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
+        jx = jnp.zeros(input_shape[:-1] + (h.shape[-1], input_shape[-1]))
 
         # initialize to get the parameter shapes
-        params = self.init(rng, (_h, None, None), jnp.zeros(input_shape))
-
-        # HACK: Now we also have to "unbatch" the params
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            params = jax.tree.map(lambda x: x[0], params)
+        _h = h
+        leading_shape = input_shape[:-1] if self.plasticity == "rflo" else h.shape
+        for _ in leading_shape:
+            # Reduce to single example for init
+            _h = _h[0]
+        params = self.lazy_init(rng, (_h, None, None), jnp.zeros(input_shape[-1:]))
 
         # Initialize the jacobian traces
-        leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
         jp = jax.tree.map(
             lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
         )

@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from chex import PRNGKey
 from jax import numpy as jnp
 

@@ -559,6 +559,7 @@ class RNNEnsemble(nn.RNNCellBase):
         self,
         h: jax.Array | None = None,
         x: jax.Array = None,
+        reset: bool = False,
         training: bool = True,
         *call_args,
         **call_kwargs,
@@ -573,6 +574,8 @@ class RNNEnsemble(nn.RNNCellBase):
         x : Array
             input with shape (input_size) or (time, input_size)
             Can't handle batch dimension, make sure to vmap externally if needed.
+        reset: bool
+            whether to reset the hidden state
         training : bool
             whether the model is in training mode (affects dropout behavior)
         call_args : tuple
@@ -638,13 +641,14 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
-        # return self.ensembles.initialize_carry(rng, input_shape)
-        return jax.vmap(
-            self.ensembles.initialize_carry,
-            in_axes=(None, None),
-            out_axes=len(input_shape) - 1,
-            axis_size=self.config.num_modules,
-        )(rng, input_shape)
+        input_shape = input_shape[:-1] + (self.config.num_modules, input_shape[-1])
+        return self.ensembles.initialize_carry(rng, input_shape)
+        # return jax.vmap(
+        #     self.ensembles.initialize_carry,
+        #     in_axes=(None, None),
+        #     out_axes=len(input_shape) - 1,
+        #     axis_size=self.config.num_modules,
+        # )(rng, input_shape)
 
     @property
     def num_feature_axes(self) -> int:
