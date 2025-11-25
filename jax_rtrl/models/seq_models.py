@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from functools import partial
 import re
 from typing import Literal
-from simple_parsing import Serializable
+from simple_parsing import Serializable, mutable_field
 from ml_collections import FrozenConfigDict
 
 
@@ -81,8 +81,8 @@ class RNNEnsembleConfig(Serializable):
     ensemble_visible_obs_prob: float = 1.0
     ensemble_first_full_obs: bool = True
     static_rng_seed: int = 0  # Used for ensemble input mask
-    layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
-    rnn_kwargs: dict = field(default_factory=dict, hash=False)
+    layer_config: SequenceLayerConfig = mutable_field(SequenceLayerConfig)
+    rnn_kwargs: dict = mutable_field(dict, hash=False)
 
     def __post_init__(self):
         """Post-initialization logic for RNNEnsembleConfig."""
@@ -142,7 +142,7 @@ class SequenceLayer(nn.Module):
         default_factory=SequenceLayerConfig
     )  # configuration for the layer
     num_blocks: int = 1  # Number of input chunks for parallel processing
-    rnn_kwargs: dict = field(default_factory=dict)  # Additional arguments for the RNN
+    rnn_kwargs: dict = mutable_field(dict)  # Additional arguments for the RNN
     f_align: bool = False  # Whether to use feedback alignment
 
     def setup(self):
@@ -214,9 +214,9 @@ class MultiLayerRNN(nn.RNNCellBase):
 
     sizes: list[int]
     rnn_cls: type[nn.RNNCellBase]
-    rnn_kwargs: dict = field(default_factory=dict)
+    rnn_kwargs: dict = mutable_field(dict)
     num_blocks: int = 1
-    layer_config: SequenceLayerConfig = field(default_factory=SequenceLayerConfig)
+    layer_config: SequenceLayerConfig = mutable_field(SequenceLayerConfig)
 
     @nn.nowrap
     def _make_layers(self):

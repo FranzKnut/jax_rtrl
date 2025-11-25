@@ -9,7 +9,6 @@ import numpy as np
 from flax import linen as nn
 from jax.nn import softmax
 from jax_rtrl.models.cells.ctrnn import CTRNNCell
-from simple_parsing import mutable_field
 
 conv_presets = {"small": [(16, (3, 3)), (16, (3, 3)), (16, (3, 3))]}
 
@@ -48,7 +47,7 @@ class ConvEncoder(nn.Module):
 
     https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
 
-    config: ConvConfig = mutable_field(ConvConfig)
+    config: ConvConfig = field(default_factory=ConvConfig)
 
     @nn.compact
     def __call__(self, x):

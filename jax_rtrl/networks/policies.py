@@ -18,6 +18,7 @@ class PolicyConfig(RNNEnsembleConfig):
     """
 
     model_name: str = "bptt"
+    hidden_size: int = 128
     num_layers: int = 1
     stochastic: bool = False
     skip_connection: bool = False

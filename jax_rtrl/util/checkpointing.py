@@ -25,7 +25,7 @@ def restore_params(path, tree=None):
     path = os.path.abspath(path)
     orbax_path = os.path.join(path, "ckpt")
 
-    checkpointer = checkpoint.StandardCheckpointer()
+    checkpointer = checkpoint.PyTreeCheckpointer()
     try:
         params = checkpointer.restore(
             orbax_path,
@@ -73,7 +73,7 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
 
-    checkpointer = checkpoint.StandardCheckpointer()
+    checkpointer = checkpoint.PyTreeCheckpointer()
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
@@ -81,7 +81,7 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
             lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
         )
         out = checkpointer.save(orbax_path, _params, force=True)
-        checkpointer.wait_until_finished()
+        # checkpointer.wait_until_finished()
         return out
 
     restored_params = None
@@ -100,6 +100,7 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
     if (not exists or fresh) and hparams is not None:
         os.makedirs(path, exist_ok=True)
         if not isinstance(hparams, dict):
+            # Try to convert to dict
             hparams = asdict(hparams)
         with open(hparams_file_path, "w") as f:
             json.dump(hparams, f)
