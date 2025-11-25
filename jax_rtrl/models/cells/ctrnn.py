@@ -9,7 +9,10 @@ import jax.random as jrand
 from chex import PRNGKey
 
 from jax_rtrl.models.cells.ode import ODECell, OnlineODECell, rtrl, snap0
-from jax_rtrl.models.jax_util import set_matching_leaves, get_matching_leaves
+from jax_rtrl.util.jax_util import (
+    set_matching_leaves,
+    get_matching_leaves,
+)
 
 ## CTRNN ODE functions
 
@@ -33,7 +36,7 @@ def ctrnn_ode_tau_softplus(params, h, x, min_tau=1.0):
     u = y @ params["W"].T
     act = jnp.tanh(u)
     # Subtract decay and divide by tau
-    return (act - h) / (jax.nn.softplus(params["tau"]) + min_tau)
+    return (act + params["h0"] - h) / (jax.nn.softplus(params["tau"]) + min_tau)
 
 
 def ctrnn_tg(params, h, x):
@@ -73,11 +76,14 @@ class CTRNNCell(ODECell):
     def _make_params(self, x):
         # Define params
         ODECell._make_params(self, x)
+        h0 = self.param("h0", nn.initializers.zeros, x.shape[:-1] + (self.num_units,))
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
 
         def _initializer(key, *_):
-            _w_in = nn.initializers.glorot_normal()(key, (self.num_units, x.shape[-1]))
-            _w_rec = nn.initializers.glorot_normal()(
+            _w_in = nn.initializers.lecun_uniform(in_axis=-1, out_axis=-2)(
+                key, (self.num_units, x.shape[-1])
+            )
+            _w_rec = nn.initializers.lecun_uniform(in_axis=-1, out_axis=-2)(
                 key, (self.num_units, self.num_units)
             )
             _bias = jnp.zeros((self.num_units, 1))
@@ -91,14 +97,14 @@ class CTRNNCell(ODECell):
             tau = self.param(
                 "tau", partial(jrand.uniform, minval=1, maxval=8), (self.num_units,)
             )
-            params = (W, tau)
+            params = (h0, W, tau)
         elif self.ode_type == "tg":
             W_tau = self.param(
                 "W_tau",
-                nn.initializers.he_normal(in_axis=-1, out_axis=-2),
+                nn.initializers.lecun_uniform(in_axis=-1, out_axis=-2),
                 (self.num_units, x.shape[-1] + self.num_units + 1),
             )
-            params = (W, W_tau)
+            params = (h0, W, W_tau)
         else:
             raise ValueError(f"ODE type {self.ode_type} not supported.")
         return params
@@ -116,7 +122,11 @@ class CTRNNCell(ODECell):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
-        return jnp.zeros(tuple(input_shape)[:-1] + (self.num_units,))
+        if self.variables:
+            h0 = self.variables["params"]["h0"]
+            return jnp.broadcast_to(h0, input_shape[:-1] + (self.num_units,))
+        else:
+            return jnp.zeros(tuple(input_shape)[:-1] + (self.num_units,))
 
     @property
     def num_feature_axes(self) -> int:
@@ -125,6 +135,7 @@ class CTRNNCell(ODECell):
 
 
 ## CTRNN Jacobian functions
+
 
 def _rflo_murray(cell: CTRNNCell, carry, params, x, ode=ctrnn_ode):
     """Inefficient version using jacrev."""
@@ -184,34 +195,44 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
 def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
-    W, b_tau = params.values()
+    W, h0, b_tau = params.values()
     tau = jax.nn.softplus(b_tau) + cell.tau_min
 
     jw = jp["W"]
     jtau = jp["tau"]
+    jh0 = jp["h0"]
 
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     u = v @ W.T
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
-    df_dh = 1 - jnp.tanh(u) ** 2
+    phi_prime = 1 - jnp.tanh(u) ** 2
+    df_dh = jnp.diag(phi_prime) @ W
     # post = jnp.tanh(u)
 
     # hebb = hebbian(v, post)
 
     # Outer product the get Immediate Jacobian
     # M_immediate = jnp.einsum('ij,k', df_dh, v)
-    M_immediate = df_dh[..., None] * v[None]
+    M_immediate = phi_prime[..., None] * v[None]
 
     # Update eligibility traces
     jw += (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
 
-    dh_dtau = ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau) - jtau
+    dh_dtau = (
+        ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau)
+        - jtau
+        + jtau @ df_dh[:, x.shape[-1] : -1]
+    )
+
     jtau += dh_dtau / tau * cell.dt
 
-    df_dw = {"W": jw, "tau": jtau}
-    jx += (1 / tau)[:, None] * (jnp.diag(df_dh) @ W[..., : x.shape[-1]] - jx) * cell.dt
+    dh_dh0 = 1 - jh0  # + jh0 @ df_dh[:, x.shape[-1] : -1]
+    jh0 += cell.dt * dh_dh0 / tau
+
+    df_dw = {"W": jw, "tau": jtau, "h0": jh0}
+    jx += (1 / tau)[:, None] * (df_dh[..., : x.shape[-1]] - jx) * cell.dt
     return df_dw, jx  # , hebb
 
 

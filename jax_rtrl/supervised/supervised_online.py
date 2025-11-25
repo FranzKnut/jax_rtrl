@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import optax
 import simple_parsing
 from jax_rtrl.models.cells.ctrnn import clip_tau
-from jax_rtrl.models.jax_util import mse_loss
+from jax_rtrl.util.jax_util import mse_loss
 from jax_rtrl.models.seq_models import RNNEnsembleConfig
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))

@@ -10,6 +10,7 @@ from chex import PRNGKey
 from flax.linen import nowrap
 
 from jax_rtrl.models.cells.ode import ODECell, OnlineODECell, rtrl, snap0
+from jax_rtrl.util.jax_util import symmetric_uniform_init
 
 
 def lrc_ode(params, h, x, use_symmetric=False):
@@ -47,16 +48,6 @@ def lrc_ode(params, h, x, use_symmetric=False):
     return elastance * v_prime
 
 
-def default_init(lim, dtype=jnp.float_):
-    def init(key, shape, dtype=dtype, out_sharding=None):
-        # dtype = dtypes.canonicalize_dtype(dtype)
-        return jrand.uniform(
-            key, shape, dtype, out_sharding=out_sharding, minval=-lim, maxval=lim
-        )
-
-    return init
-
-
 class LRCCell(ODECell):
     """LRC cell."""
 
@@ -70,26 +61,26 @@ class LRCCell(ODECell):
         lim = jnp.sqrt(1 / self.num_units)
 
         # Sensory parameters
-        self.param("mu_in", default_init(lim), input_size)
-        self.param("sigma_in", default_init(lim), input_size)
-        self.param("w_in", default_init(lim), sensory_shape)
-        self.param("h_in", default_init(lim), sensory_shape)
+        self.param("mu_in", symmetric_uniform_init(lim), input_size)
+        self.param("sigma_in", symmetric_uniform_init(lim), input_size)
+        self.param("w_in", symmetric_uniform_init(lim), sensory_shape)
+        self.param("h_in", symmetric_uniform_init(lim), sensory_shape)
 
         # Recurrent parameters
-        self.param("mu", default_init(lim), self.num_units)
-        self.param("sigma", default_init(lim), self.num_units)
-        self.param("w", default_init(lim), self.num_units)
-        self.param("h", default_init(lim), self.num_units)
+        self.param("mu", symmetric_uniform_init(lim), self.num_units)
+        self.param("sigma", symmetric_uniform_init(lim), self.num_units)
+        self.param("w", symmetric_uniform_init(lim), self.num_units)
+        self.param("h", symmetric_uniform_init(lim), self.num_units)
 
         # Leak parameters
-        self.param("v_l", default_init(lim), self.num_units)
-        self.param("g_l", default_init(lim), self.num_units)
+        self.param("v_l", symmetric_uniform_init(lim), self.num_units)
+        self.param("g_l", symmetric_uniform_init(lim), self.num_units)
 
         # Eslastance parameters
-        self.param("w_e", default_init(lim), self.num_units)
-        self.param("b_e", default_init(lim), self.num_units)
+        self.param("w_e", symmetric_uniform_init(lim), self.num_units)
+        self.param("b_e", symmetric_uniform_init(lim), self.num_units)
         if self.use_symmetric:
-            self.param("s_e", default_init(lim), self.num_units)
+            self.param("s_e", symmetric_uniform_init(lim), self.num_units)
 
         super()._make_params(x)
 

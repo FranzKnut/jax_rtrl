@@ -12,7 +12,7 @@ from jax_rtrl.models.seq_models import RNNEnsembleConfig, SequenceLayerConfig, s
 
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from jax_rtrl.models.jax_util import mse_loss
+from jax_rtrl.util.jax_util import mse_loss
 from jax_rtrl.supervised.training_utils import (
     get_data,
     make_model,

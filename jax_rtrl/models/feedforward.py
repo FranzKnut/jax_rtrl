@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jax_rtrl.models.jax_util import get_normalization_fn
+from jax_rtrl.util.jax_util import get_normalization_fn
 
 
 class FADense(nn.Dense):

@@ -18,7 +18,7 @@ from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.s5 import S5Config
-from jax_rtrl.models.jax_util import zeros_like_tree, get_normalization_fn
+from jax_rtrl.util.jax_util import zeros_like_tree, get_normalization_fn
 from jax_rtrl.models.feedforward import MLP, DistributionLayer, FADense
 
 

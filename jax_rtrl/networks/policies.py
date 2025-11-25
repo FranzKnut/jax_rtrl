@@ -5,7 +5,7 @@ from jax import numpy as jnp
 from flax import linen as nn
 import jax
 
-from jax_rtrl.models.autoencoders import ConvEncoder
+from jax_rtrl.networks.autoencoders import ConvEncoder
 from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
 
