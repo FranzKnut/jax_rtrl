@@ -5,9 +5,13 @@ from jax import numpy as jnp
 from flax import linen as nn
 import jax
 
+import jax_rtrl
 from jax_rtrl.networks.autoencoders import ConvEncoder
 from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
+
+import jax_rtrl.util
+import jax_rtrl.util.checkpointing
 
 
 @dataclass(unsafe_hash=True)
@@ -179,3 +183,35 @@ class PolicyRTRL(PolicyRNN):
                 if k != "params"
             },
         }
+
+
+def restore_policy_from_ckpt(
+    ckpt_path: str, config: PolicyConfig = None, **inputs
+) -> Policy:
+    """Restore a policy from a checkpoint.
+
+    Parameters
+    ----------
+    ckpt_path : str
+        Path to the checkpoint file.
+    restored_config : PolicyConfig
+        Configuration for the restored policy. If None, the configuration will be loaded from the checkpoint.
+    **inputs : dict
+        Inputs required to initialize the policy module.
+
+    Returns
+    -------
+    Policy
+        The restored policy module.
+    """
+    if config is None:
+        config = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
+        # Try to unpack nested config and make config object
+        config = PolicyConfig.from_dict(config.get("policy_config", config))
+    if config.model_name == "mlp":
+        policy = PolicyMLP(config=config)
+    else:
+        policy = PolicyRNN(config=config)
+    target = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
+    variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
+    return policy.bind(variables)

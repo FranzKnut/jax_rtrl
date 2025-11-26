@@ -1,7 +1,7 @@
 """Convolutional neural network autoencoders built with flax."""
 
 from dataclasses import dataclass, field
-
+from simple_parsing import Serializable
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -9,6 +9,7 @@ import numpy as np
 from flax import linen as nn
 from jax.nn import softmax
 from jax_rtrl.models.cells.ctrnn import CTRNNCell
+from jax_rtrl.util.checkpointing import restore_config, restore_params
 
 conv_presets = {"small": [(16, (3, 3)), (16, (3, 3)), (16, (3, 3))]}
 
@@ -20,7 +21,7 @@ class ConvLayerConfig:
 
 
 @dataclass
-class ConvConfig:
+class ConvConfig(Serializable):
     preset: str | None = "small"
     layers: list[tuple[int, tuple[int, int]]] | None = None
     latent_size: int = 16
@@ -141,8 +142,8 @@ class Autoencoder_RNN(nn.Module):
         return carry, pred, latent
 
 
-@dataclass(frozen=True)
-class AutoencoderParams:
+@dataclass
+class AutoencoderConfig(Serializable):
     encoder_params: ConvConfig = field(default_factory=ConvConfig)
 
 
@@ -150,7 +151,7 @@ class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
 
     img_shape: tuple[int]
-    config: AutoencoderParams = field(default_factory=AutoencoderParams)
+    config: AutoencoderConfig = field(default_factory=AutoencoderConfig)
 
     def setup(self) -> None:
         """Initialize submodules."""
@@ -390,6 +391,44 @@ class DeepSpatialAutoencoder(nn.Module):
         else:
             features = enc_out.flatten()
         return self.decoder(features), features
+
+
+def restore_cnn_from_ckpt(
+    ckpt_path: str, restored_config: ConvConfig | AutoencoderConfig = None, **inputs
+) -> ConvEncoder | Autoencoder:
+    """Restore a CNN from a checkpoint.
+
+    Parameters
+    ----------
+    ckpt_path : str
+        Path to the checkpoint file.
+    restored_config : ConvConfig
+        Configuration for the restored CNN. If None, the configuration will be loaded from the checkpoint.
+    **inputs : dict
+        Inputs required to initialize the policy module.
+
+    Returns
+    -------
+    ConvEncoder | Autoencoder
+        The restored CNN module.
+    """
+    if restored_config is None:
+        restored_config = restore_config(ckpt_path)
+        # Try to infer config class
+        if "encoder_params" in restored_config:
+            restored_config = AutoencoderConfig.from_dict(restored_config)
+        else:
+            restored_config = ConvConfig.from_dict(restored_config)
+    if restored_config.__class__ == AutoencoderConfig:
+        cnn = Autoencoder(
+            img_shape=inputs.get("x").shape[1:],
+            config=restored_config,
+        )
+    else:
+        cnn = ConvEncoder(config=restored_config)
+    target = cnn.lazy_init(jax.random.PRNGKey(0), **inputs)
+    variables = restore_params(ckpt_path, tree=target)
+    return cnn.bind(variables)
 
 
 if __name__ == "__main__":

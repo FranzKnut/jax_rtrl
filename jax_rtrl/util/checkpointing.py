@@ -25,7 +25,7 @@ def restore_params(path, tree=None):
     path = os.path.abspath(path)
     orbax_path = os.path.join(path, "ckpt")
 
-    checkpointer = checkpoint.PyTreeCheckpointer()
+    checkpointer = checkpoint.StandardCheckpointer()
     try:
         params = checkpointer.restore(
             orbax_path,
@@ -73,7 +73,7 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
 
-    checkpointer = checkpoint.PyTreeCheckpointer()
+    checkpointer = checkpoint.StandardCheckpointer()
     orbax_path = os.path.join(path, "ckpt")
 
     def save_model(_params):
