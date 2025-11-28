@@ -17,7 +17,8 @@ from chex import PRNGKey
 from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
-from jax_rtrl.models.s5 import S5Config
+from jax_rtrl.models.cells.lru import LRUCell, OnlineLRUCell
+from jax_rtrl.models.s5 import S5SSM, S5Config
 from jax_rtrl.util.jax_util import zeros_like_tree, get_normalization_fn
 from jax_rtrl.models.feedforward import MLP, DistributionLayer, FADense
 
@@ -723,22 +724,25 @@ def scan_rnn(
         batched = False
         obs_time_major = xs
 
-    if model.config.model_name in ["s5", "lru"]:
+    if (
+        isinstance(model, RNNEnsemble) and model.config.model_name in ["s5", "lru"]
+    ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell)):
         outputs, y_hats = model.apply(params, init_carry, *xs)
 
     else:
-        h0 = init_carry or model.apply(
-            params,
-            jax.random.PRNGKey(0),
-            xs[0].shape[:-2] + xs[0].shape[-1:],
-            method=model.initialize_carry,
-        )
+        if init_carry is None:
+            init_carry = model.apply(
+                params,
+                jax.random.PRNGKey(0),
+                xs[0].shape[:-2] + xs[0].shape[-1:],
+                method=model.initialize_carry,
+            )
 
         def _step(h, _b):
             h, y_hat = model.apply(params, h, *_b)
             return h, y_hat
 
-        outputs, y_hats = jax.lax.scan(_step, h0, obs_time_major)
+        outputs, y_hats = jax.lax.scan(_step, init_carry, obs_time_major)
     if batched:
         y_hats = jax.tree.map(
             lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats

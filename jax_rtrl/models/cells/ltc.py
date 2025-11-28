@@ -78,8 +78,8 @@ class LTCCell(ODECell):
         """Compute euler integration step or CTRNN ODE."""
         params = self.variables["params"]
 
-        if "mask" in self.variables:
-            mask = jax.lax.stop_gradient(self.variables["mask"])
+        if self.wiring is not None:
+            mask = jax.lax.stop_gradient(self.variables["wiring"]["mask"])
             params = jax.tree.map(lambda W: W * mask, params)
         if self.ode_type in ["hasani", "ltc"]:
             df_dt = ltc_hasani(params, h, x)

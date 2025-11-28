@@ -28,7 +28,6 @@ class ODECell(nn.RNNCellBase):
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
         if self.wiring is not None:
-            print("Using wiring:", self.wiring)
             self.variable(
                 "wiring",
                 "mask",
@@ -91,6 +90,9 @@ class OnlineODECell(ODECell):
 
     def solve(self, carry, x, return_sequences=False, force_trace_compute=False):
         """Solve ODE over time T with step dt."""
+        if self.plasticity == "bptt":
+            out = super().solve(carry, x, return_sequences)
+            return out, out
         outs = []
         if self.solver == "euler":
 
@@ -154,10 +156,10 @@ class OnlineODECell(ODECell):
     def online_gradient(carry, df_dy, plasticity="rflo"):
         """Compute RTRL gradient."""
         h, jp, jx = carry
-        if plasticity == "rflo":
-            grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
-        else:
+        if plasticity == "rtrl":
             grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
+        else:
+            grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
         if len(df_dy.shape) > 1:
             # has batch dim
             grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
@@ -175,11 +177,15 @@ class OnlineODECell(ODECell):
 
         # initialize to get the parameter shapes
         _h = h
-        leading_shape = input_shape[:-1] if self.plasticity == "rflo" else h.shape
+        leading_shape = input_shape[:-1]
         for _ in leading_shape:
             # Reduce to single example for init
             _h = _h[0]
+
         params = self.lazy_init(rng, (_h, None, None), jnp.zeros(input_shape[-1:]))
+
+        if self.plasticity == "rtrl":
+            leading_shape = h.shape
 
         # Initialize the jacobian traces
         jp = jax.tree.map(
@@ -207,7 +213,8 @@ def rtrl(cell, carry, params, x, ode):
     dh_dh = df_dh * cell.dt + jnp.identity(cell.num_units)
 
     # jacobian trace (previous step * dh_h)
-    comm, comm_x = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), (jp, jx))
+    comm = jax.tree.map(lambda p: jnp.matmul(dh_dh, p), jp)
+    comm_x = jnp.matmul(dh_dh, jx)
 
     def rtrl_step(rec, dh):
         return rec + dh * cell.dt

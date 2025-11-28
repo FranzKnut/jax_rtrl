@@ -5,6 +5,7 @@ from jax_rtrl.models.cells.ltc import LTCCell, OnlineLTCCell
 from jax_rtrl.models.s5 import StackedEncoderModel
 
 ONLINE_CELL_TYPES = {
+    "eprop": OnlineCTRNNCell,
     "rflo": OnlineCTRNNCell,
     "snap0": OnlineCTRNNCell,
     "rtrl": OnlineCTRNNCell,
