@@ -142,8 +142,8 @@ def npy_headers(f):
     Takes a .npy file handle.
     Generates a tuple of (shape, np.dtype).
     """
-    # version = np.lib.format.read_magic(f)
-    shape, fortran, dtype = _read_array_header(f)
+    version = np.lib.format.read_magic(f)
+    shape, fortran, dtype = _read_array_header(f, version)
     return shape, dtype
 
 
