@@ -1,6 +1,6 @@
 [tool.poetry]
 name        = "jax_rtrl"
-version     = "0.1.1"
+version     = "0.1.2"
 description = ""
 authors     = ["Julian Lemmel <julian.lemmel@tuwien.ac.at>"]
 readme      = "README.md"
