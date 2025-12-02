@@ -9,11 +9,6 @@ import jax
 from typing import Any, NamedTuple
 import numpy as np
 from numpy.lib._version import NumpyVersion
-
-if NumpyVersion(np.__version__) >= "2.0.0":
-    from numpy.lib.format import read_array_header_1_0 as _read_array_header
-else:
-    from numpy.lib.format import _read_array_header
 from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
@@ -137,14 +132,11 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=Fa
         return output, file_starts
 
 
-def npy_headers(f):
-    """
-    Takes a .npy file handle.
-    Generates a tuple of (shape, np.dtype).
-    """
-    version = np.lib.format.read_magic(f)
-    shape, fortran, dtype = _read_array_header(f, version)
-    return shape, dtype
+def read_array_header(fobj):
+    version = np.lib.format.read_magic(fobj)
+    func_name = "read_array_header_" + "_".join(str(v) for v in version)
+    func = getattr(np.lib.format, func_name)
+    return func(fobj)
 
 
 def npz_headers(npz):
@@ -158,7 +150,7 @@ def npz_headers(npz):
                 continue
 
             npy = archive.open(name)
-            shape, dtype = npy_headers(npy)
+            shape, fortan, dtype = read_array_header(npy)
             yield name[:-4], shape, dtype
 
 
@@ -195,7 +187,7 @@ def load_into_vault(
         else:
             # TODO: Test this
             with open(f, "rb") as _file:
-                num_steps_per_file.append(npy_headers(_file)[0][0])
+                num_steps_per_file.append(read_array_header(_file)[0][0])
 
     total_num_steps = sum(num_steps_per_file)
     # add_batch_size = np.gcd.reduce(num_steps_per_file)
@@ -252,9 +244,9 @@ def load_into_vault(
 
         # An Array that is zero everywhere except at the start of each file
         start_indices = np.concatenate(
-            [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int
-        )
-        file_starts = np.zeros(total_num_steps).at[start_indices].set(1)
+            [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))]
+        ).astype(int)
+        file_starts = np.zeros(total_num_steps)[start_indices] = 1
 
     print(f"Files contained {total_num_steps:d} steps total")
     return vault, file_starts

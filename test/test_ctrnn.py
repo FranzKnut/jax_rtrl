@@ -7,7 +7,7 @@ from jax_rtrl.util.jax_util import mse_loss
 
 A_TOL = 1e-5
 
-jax.config.update("jax_disable_jit", True)
+# jax.config.update("jax_disable_jit", True)
 
 
 class TestCTRNNGradients(unittest.TestCase):

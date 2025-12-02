@@ -26,7 +26,7 @@ jax.config.update("jax_debug_nans", True)
 
 @dataclass
 class TrainingConfig:
-    dataset: str = "sine"
+    dataset: str = "imdb-classification"
     # dataset: str = "spirals"
     learning_rate: float = 1e-3
     gradient_clip: float | None = None
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     key, key_data, key_train = jrand.split(key, 3)
 
     # x, y = getattr(datasets, cfg.dataset)()
-    train_loader, val_loader, test_loader, *_ = Datasets["imdb-classification"]()
+    train_loader, val_loader, test_loader, *_ = Datasets[cfg.dataset]()
 
     # add missing time and feature dims
     t = x.shape[-2]

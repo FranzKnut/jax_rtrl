@@ -20,7 +20,7 @@ from jax_rtrl.supervised.training_utils import (
     train_rnn_offline as train,
 )
 
-jax.config.update("jax_disable_jit", True)
+# jax.config.update("jax_disable_jit", True)
 
 
 @dataclass
@@ -35,9 +35,9 @@ class TrainingConfig:
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
             # model_name="bptt",
-            model_name="ltc",
-            # model_name="lrc",
-            layers=(8, 4),
+            # model_name="ltc",
+            model_name="lrc",
+            layers=(32, 4),
             num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
@@ -47,7 +47,7 @@ class TrainingConfig:
             ),
             out_dist="Deterministic",
             rnn_kwargs={
-                "dt": 0.2,
+                "dt": 1.0,
                 # "ode_type": "murray",
             },
             output_layers=None,
