@@ -7,6 +7,27 @@ import jax
 from orbax import checkpoint
 
 
+def restore_remote(restore_path: str):
+    """Try to download wandb artifact if needed. Returns local path.
+
+    Also checks if the path exists locally."""
+    import wandb
+
+    if restore_path is not None:
+        if restore_path.startswith("wandb:"):
+            # Get from wandb
+            path = restore_path.replace("wandb:", "")
+            if wandb.run:
+                ancestor = wandb.run.use_artifact(path)
+            else:
+                api = wandb.Api()
+                ancestor = api.artifact(path)
+            restore_path = ancestor.download(root="artifacts/restored")
+        elif not os.path.exists(restore_path):
+            raise FileNotFoundError(f"Checkpoint not found: {restore_path}")
+    return restore_path
+
+
 def restore_config(path):
     """Restore config from checkpoint."""
     path = os.path.abspath(path)
