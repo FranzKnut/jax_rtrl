@@ -6,7 +6,7 @@ from flax import linen as nn
 import jax
 
 import jax_rtrl
-from jax_rtrl.networks.autoencoders import ConvEncoder
+from jax_rtrl.networks.autoencoders import ConvEncoder, ConvConfig
 from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
 
@@ -30,8 +30,7 @@ class PolicyConfig(RNNEnsembleConfig):
 
     # CNN specific
     use_cnn: bool = False
-    latent_size: int = 16
-    c_hid: int = 4
+    cnn_config: ConvConfig = field(default_factory=ConvConfig)
 
 
 class Policy(nn.Module):
@@ -66,9 +65,7 @@ class PolicyMLP(Policy):
     def __call__(self, x, training: bool = False):
         """Compute Action from observation."""
         if self.config.use_cnn:
-            x = ConvEncoder(
-                latent_size=self.config.latent_size, c_hid=self.config.c_hid
-            )(x)
+            x = ConvEncoder(self.config.cnn_config, name="cnn")(x)
         layers = [self.config.hidden_size] * self.config.num_layers
         if self.config.output_layers:
             layers += list(self.config.output_layers)
@@ -112,11 +109,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         if self.config.use_cnn:
             if img is None:
                 img = x
-            img_enc = ConvEncoder(
-                latent_size=self.config.latent_size,
-                c_hid=self.config.c_hid,
-                name="cnn",
-            )(img)
+            img_enc = ConvEncoder(self.config.cnn_config, name="cnn")(img)
             if x is None:
                 input_shape = img_enc.shape[:-1] + (0,)
                 x = img_enc
@@ -140,7 +133,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         """Initialize the RNN cell carry."""
         if self.config.use_cnn:
             input_shape = input_shape[:-1] + (
-                self.config.latent_size + input_shape[-1],
+                self.config.cnn_config.latent_size + input_shape[-1],
             )
         return self.rnn.initialize_carry(rng, input_shape)
 
