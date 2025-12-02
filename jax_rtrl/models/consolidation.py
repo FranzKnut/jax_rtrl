@@ -37,7 +37,7 @@ from typing import Literal
 import jax
 import jax.numpy as jnp
 from flax.struct import dataclass
-from jax_rtrl.models.jax_util import zeros_like_tree
+from jax_rtrl.util.jax_util import zeros_like_tree
 from jaxtyping import PyTree
 
 

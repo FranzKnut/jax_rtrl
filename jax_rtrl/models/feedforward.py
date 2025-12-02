@@ -1,6 +1,7 @@
 """Neural networks built with flax."""
 
 from dataclasses import field
+from numbers import Number
 from typing import Callable
 
 import distrax
@@ -9,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jax_rtrl.models.jax_util import get_normalization_fn
+from jax_rtrl.util.jax_util import get_normalization_fn, sigmoid_between
 
 
 class FADense(nn.Dense):
@@ -284,6 +285,7 @@ class DistributionLayer(nn.Module):
     layers: tuple[int, ...] = ()
     distribution: str = "Normal"
     eps: float = 0.01  # Unimix epsilon TODO: rename and write doc for Normal
+    scale_bounds: float | tuple[float, float] | None = -2
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
@@ -303,7 +305,12 @@ class DistributionLayer(nn.Module):
         out_size = self.out_size
         # x = get_normalization_fn(self.norm, training=training)(x)
 
-        if self.distribution in ["Normal", "ScaledNormal"]:
+        if self.distribution in [
+            "Normal",
+            "ScaledNormal",
+            "LogStddevNormal",
+            "LogStddevNormalScaled",
+        ]:
             out_size = 2 * out_size
         elif self.distribution in ["Categorical", "Bernoulli"] and isinstance(
             out_size, tuple
@@ -315,9 +322,24 @@ class DistributionLayer(nn.Module):
         dist_name = self.distribution.replace("Scaled", "")
         _dist = getattr(distrax, dist_name)
 
-        if self.distribution in ["Normal", "ScaledNormal"]:
+        if self.distribution in [
+            "Normal",
+            "ScaledNormal",
+            "LogStddevNormal",
+            "LogStddevNormalScaled",
+        ]:
             loc, scale = jnp.split(x, 2, axis=-1)
-            dist = _dist(loc, jax.nn.softplus(scale) + self.eps)
+            if isinstance(self.scale_bounds, tuple):
+                scale = sigmoid_between(scale, *self.scale_bounds)
+            elif isinstance(self.scale_bounds, Number):
+                assert (
+                    "LogStddevNormal" in self.distribution
+                ) or self.scale_bounds >= 0, (
+                    "scale_bounds must be non-negative for Normal distributions"
+                )
+                scale = jax.nn.softplus(scale) + self.scale_bounds
+
+            dist = _dist(loc, scale)
             if self.distribution.startswith("Scaled"):
                 # Define limits and scale for bounded distributions
                 min_val = self.param(

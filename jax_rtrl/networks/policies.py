@@ -1,15 +1,17 @@
 from dataclasses import dataclass, field
-from typing import Literal
 from chex import PRNGKey
 from jax import numpy as jnp
 
 from flax import linen as nn
 import jax
 
-from jax_rtrl.models import make_rnn_ensemble_config
-from jax_rtrl.models.autoencoders import ConvEncoder
+import jax_rtrl
+from jax_rtrl.networks.autoencoders import ConvEncoder, ConvConfig
 from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
+
+import jax_rtrl.util
+import jax_rtrl.util.checkpointing
 
 
 @dataclass(unsafe_hash=True)
@@ -19,32 +21,22 @@ class PolicyConfig(RNNEnsembleConfig):
     TODO: this repeats many parameters found in the RNNEnsemble config.
     """
 
-    model_name: str = "rflo"
-    hidden_size: int = 256
-    num_modules: int = 5
-    ensemble_method: Literal["linear", "dist", None] = "linear"
-    num_blocks: int = 1
+    model_name: str = "bptt"
+    hidden_size: int = 128
     num_layers: int = 1
     stochastic: bool = False
-    output_layers: tuple[int] | None = (128,)
     skip_connection: bool = False
     norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
-    ensemble_visible_obs_prob: float = 1.0
-
-    # RNN specific
-    glu: bool = False
-    dropout: float = 0.0
 
     # CNN specific
     use_cnn: bool = False
-    latent_size: int = 16
-    c_hid: int = 4
+    cnn_config: ConvConfig = field(default_factory=ConvConfig)
 
 
 class Policy(nn.Module):
     """Generic Policy Base Class."""
 
-    a_dim: int
+    # a_dim: int
     config: PolicyConfig = field(default_factory=PolicyConfig)
     use_rnn: bool = False
 
@@ -73,15 +65,13 @@ class PolicyMLP(Policy):
     def __call__(self, x, training: bool = False):
         """Compute Action from observation."""
         if self.config.use_cnn:
-            x = ConvEncoder(
-                latent_size=self.config.latent_size, c_hid=self.config.c_hid
-            )(x)
+            x = ConvEncoder(self.config.cnn_config, name="cnn")(x)
         layers = [self.config.hidden_size] * self.config.num_layers
         if self.config.output_layers:
             layers += list(self.config.output_layers)
-        layers += [self.a_dim]
+        # layers += [self.a_dim]
         x = MLPEnsemble(
-            out_size=self.a_dim,
+            out_size=self.config.out_size,
             num_modules=self.config.num_modules,
             out_dist="Normal" if self.config.stochastic else None,
             kwargs={"layers": layers, "norm": self.config.norm},
@@ -100,23 +90,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
     def setup(self):
         """Initialize and set up the RNN configuration."""
         self.rnn = RNNEnsemble(
-            make_rnn_ensemble_config(
-                model_name=self.config.model_name,
-                hidden_size=self.config.hidden_size,
-                out_size=self.a_dim,
-                num_modules=self.config.num_modules,
-                num_blocks=self.config.num_blocks,
-                num_layers=self.config.num_layers,
-                output_layers=self.config.output_layers,
-                stochastic=self.config.stochastic,
-                model_kwargs=self.config.rnn_kwargs,
-                skip_connection=self.config.skip_connection,
-                glu=self.config.glu,
-                dropout=self.config.dropout,
-                norm=self.config.norm,
-                ensemble_in_visible_prob=self.config.ensemble_visible_obs_prob,
-                method=self.config.ensemble_method,
-            ),
+            self.config,
             num_submodule_extra_args=self.num_submodule_extra_args,
             name="rnn",
         )
@@ -135,11 +109,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         if self.config.use_cnn:
             if img is None:
                 img = x
-            img_enc = ConvEncoder(
-                latent_size=self.config.latent_size,
-                c_hid=self.config.c_hid,
-                name="cnn",
-            )(img)
+            img_enc = ConvEncoder(self.config.cnn_config, name="cnn")(img)
             if x is None:
                 input_shape = img_enc.shape[:-1] + (0,)
                 x = img_enc
@@ -163,7 +133,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         """Initialize the RNN cell carry."""
         if self.config.use_cnn:
             input_shape = input_shape[:-1] + (
-                self.config.latent_size + input_shape[-1],
+                self.config.cnn_config.latent_size + input_shape[-1],
             )
         return self.rnn.initialize_carry(rng, input_shape)
 
@@ -206,3 +176,35 @@ class PolicyRTRL(PolicyRNN):
                 if k != "params"
             },
         }
+
+
+def restore_policy_from_ckpt(
+    ckpt_path: str, config: PolicyConfig = None, **inputs
+) -> Policy:
+    """Restore a policy from a checkpoint.
+
+    Parameters
+    ----------
+    ckpt_path : str
+        Path to the checkpoint file.
+    restored_config : PolicyConfig
+        Configuration for the restored policy. If None, the configuration will be loaded from the checkpoint.
+    **inputs : dict
+        Inputs required to initialize the policy module.
+
+    Returns
+    -------
+    Policy
+        The restored policy module.
+    """
+    if config is None:
+        config = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
+        # Try to unpack nested config and make config object
+        config = PolicyConfig.from_dict(config.get("policy_config", config))
+    if config.model_name == "mlp":
+        policy = PolicyMLP(config=config)
+    else:
+        policy = PolicyRNN(config=config)
+    target = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
+    variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
+    return policy.bind(variables)

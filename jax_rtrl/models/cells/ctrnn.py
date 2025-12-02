@@ -2,16 +2,17 @@
 
 from functools import partial
 
-import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import jax.random as jrand
 from chex import PRNGKey
 
-from jax_rtrl.models.cells.ode import ODECell
-
-from ..jax_util import set_matching_leaves, get_matching_leaves
+from jax_rtrl.models.cells.ode import ODECell, OnlineODECell, rtrl, snap0
+from jax_rtrl.util.jax_util import (
+    set_matching_leaves,
+    get_matching_leaves,
+)
 
 ## CTRNN ODE functions
 
@@ -35,7 +36,7 @@ def ctrnn_ode_tau_softplus(params, h, x, min_tau=1.0):
     u = y @ params["W"].T
     act = jnp.tanh(u)
     # Subtract decay and divide by tau
-    return (act - h) / (jax.nn.softplus(params["tau"]) + min_tau)
+    return (act + params["h0"] - h) / (jax.nn.softplus(params["tau"]) + min_tau)
 
 
 def ctrnn_tg(params, h, x):
@@ -74,37 +75,50 @@ class CTRNNCell(ODECell):
 
     def _make_params(self, x):
         # Define params
+        ODECell._make_params(self, x)
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
 
         def _initializer(key, *_):
-            _w_in = nn.initializers.glorot_normal()(key, (self.num_units, x.shape[-1]))
-            _w_rec = nn.initializers.glorot_normal()(
+            _w_in = nn.initializers.lecun_uniform(in_axis=-1, out_axis=-2)(
+                key, (self.num_units, x.shape[-1])
+            )
+            _w_rec = nn.initializers.lecun_uniform(in_axis=-1, out_axis=-2)(
                 key, (self.num_units, self.num_units)
             )
             _bias = jnp.zeros((self.num_units, 1))
             return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
 
         W = self.param("W", _initializer, w_shape)
-        if "mask" in self.variables:
-            W = jax.lax.stop_gradient(self.variables()["mask"]) * W
+        if self.wiring is not None:
+            W = jax.lax.stop_gradient(self.variables["wiring"]["mask"]) * W
 
         if self.ode_type in ["murray", "tau_softplus"]:
             tau = self.param(
-                "tau", partial(jrand.uniform, minval=3, maxval=8), (self.num_units,)
+                "tau", partial(jrand.uniform, minval=1, maxval=8), (self.num_units,)
             )
-            params = (W, tau)
         elif self.ode_type == "tg":
-            W_tau = self.param(
+            tau = self.param(
                 "W_tau",
-                nn.initializers.he_normal(in_axis=-1, out_axis=-2),
+                nn.initializers.lecun_uniform(in_axis=-1, out_axis=-2),
                 (self.num_units, x.shape[-1] + self.num_units + 1),
             )
-            params = (W, W_tau)
+
+        if self.ode_type in ["tau_softplus"]:
+            h0 = self.param(
+                "h0", nn.initializers.zeros, x.shape[:-1] + (self.num_units,)
+            )
+            params = (h0, W, tau)
+        else:
+            params = (W, tau)
         return params
 
     def _f(self, h, x):
         """Compute the derivative of the state."""
         params = self.variables["params"]
+        if self.wiring is not None:
+            params["W"] = (
+                jax.lax.stop_gradient(self.variables["wiring"]["mask"]) * params["W"]
+            )
         if self.ode_type == "murray":
             df_dt = ctrnn_ode(params, h, x)
         elif self.ode_type == "tau_softplus":
@@ -115,7 +129,11 @@ class CTRNNCell(ODECell):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
-        return jnp.zeros(tuple(input_shape)[:-1] + (self.num_units,))
+        if self.variables and "h0" in self.variables["params"]:
+            h0 = self.variables["params"]["h0"]
+            return jnp.broadcast_to(h0, input_shape[:-1] + (self.num_units,))
+        else:
+            return jnp.zeros(tuple(input_shape)[:-1] + (self.num_units,))
 
     @property
     def num_feature_axes(self) -> int:
@@ -126,29 +144,32 @@ class CTRNNCell(ODECell):
 ## CTRNN Jacobian functions
 
 
-def rtrl_ctrnn(cell, carry, params, x, ode=ctrnn_ode):
-    """Compute jacobian trace update for RTRL."""
+def _rflo_murray(cell: CTRNNCell, carry, params, x, ode=ctrnn_ode):
+    """Inefficient version using jacrev."""
     h, jp, jx = carry
 
     # immediate jacobian (this step)
     df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
-
-    # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
-    dh_dh = df_dh * cell.dt + jnp.identity(cell.num_units)
-
-    # jacobian trace (previous step * dh_h)
-    comm = jax.tree.map(lambda p: jnp.tensordot(dh_dh, p, axes=1), jp)
-
-    def rtrl_step(rec, dh):
-        return rec + dh * cell.dt
-
-    # Update dh_dw approximation
-    dh_dw = jax.tree.map(rtrl_step, comm, df_dw)
-
-    # Update dh_dx approximation
-    dh_dx = df_dx + jnp.tensordot(dh_dh, jx, axes=1) * cell.dt
-
-    return dh_dw, dh_dx
+    jp = {
+        "W": jax.tree.map(
+            lambda p, d: p * (1 - cell.dt / params["tau"])[:, None]
+            + d.sum(axis=0) * cell.dt,
+            jp["W"],
+            df_dw["W"],
+        ),
+        "tau": jax.tree.map(
+            lambda p, d: p * (1 - cell.dt / params["tau"]) + d.sum(axis=0) * cell.dt,
+            jp["tau"],
+            df_dw["tau"],
+        ),
+    }
+    jx = jax.tree.map(
+        lambda p, d: p * (1 - cell.dt / params["tau"])[:, None]
+        + d.sum(axis=0) * cell.dt,
+        jx,
+        df_dx,
+    )
+    return jp, jx  # , hebb
 
 
 def rflo_murray(cell: CTRNNCell, carry, params, x):
@@ -160,80 +181,141 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     jtau = jp["tau"]
 
     # immediate jacobian (this step)
-    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    u = v @ W.T
-    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
-    # df_dh = jax.jacrev(jax.nn.tanh)(u)
-    df_dh = 1 - jnp.tanh(u) ** 2
-    # post = jnp.tanh(u)
+    xi = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    a = xi @ W.T
+    phi_prime = 1 - jnp.tanh(a) ** 2
+
+    # Update W eligibility trace
+    # Outer product the get Immediate Jacobian
+    w_immediate = phi_prime[..., None] * xi[None]
+    jw += (cell.dt / tau)[:, None] * (w_immediate - jw)
+
+    # Update W eligibility trace
+    dh_dtau = ((h - jnp.tanh(a)) / tau) - jtau
+    jtau += cell.dt * dh_dtau / tau
+
+    df_dw = {"W": jw, "tau": jtau}
+    jx += (1 / tau)[:, None] * (jnp.diag(phi_prime) @ W[..., : x.shape[-1]] - jx)
+    return df_dw, jx  # , hebb
+
+
+def eprop_ctrnn(cell: CTRNNCell, carry, params, x):
+    """Compute jacobian trace for RFLO."""
+    h, jp, jx = carry
+    W, tau = params.values()
+
+    jw = jp["W"]
+    jtau = jp["tau"]
+
+    # immediate jacobian (this step)
+    xi = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    a = xi @ W.T
+    phi_prime = 1 - jnp.tanh(a) ** 2
 
     # hebb = hebbian(v, post)
 
     # Outer product the get Immediate Jacobian
     # M_immediate = jnp.einsum('ij,k', df_dh, v)
-    M_immediate = df_dh[..., None] * v[None]
+    comm_local = phi_prime * jnp.diag(W[:, x.shape[-1] : -1])
 
-    # Update eligibility traces
-    jw += (1 / tau)[:, None] * (M_immediate - jw)
-    dh_dtau = ((h - jnp.tanh(u)) / tau) - jtau
-    jtau += dh_dtau / tau
+    # Update W eligibility trace
+    w_immediate = phi_prime[..., None] * xi[None]
+    jw += (cell.dt / tau)[:, None] * (w_immediate + (comm_local - 1)[:, None] * jw)
 
-    df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jnp.outer(
-        df_dh,
-        (
-            jnp.concatenate(
-                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
-                axis=-1,
-            )
-            @ W.T
-        )[..., : x.shape[-1]],
-    )
-    # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
-    return df_dw, dh_dx  # , hebb
+    # Update W eligibility trace
+    tau_immediate = (h - jnp.tanh(a)) / tau
+    jtau += (cell.dt / tau) * (tau_immediate + (comm_local - 1) * jtau)
+
+    jx += (1 / tau)[:, None] * (jnp.diag(phi_prime) @ W[..., : x.shape[-1]] - jx)
+    return {"W": jw, "tau": jtau}, jx
 
 
 def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
-    W, b_tau = params.values()
+    W, h0, b_tau = params.values()
     tau = jax.nn.softplus(b_tau) + cell.tau_min
 
     jw = jp["W"]
     jtau = jp["tau"]
+    jh0 = jp["h0"]
 
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     u = v @ W.T
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
-    df_dh = 1 - jnp.tanh(u) ** 2
+    phi_prime = 1 - jnp.tanh(u) ** 2
+    df_dh = jnp.diag(phi_prime) @ W
     # post = jnp.tanh(u)
 
     # hebb = hebbian(v, post)
 
     # Outer product the get Immediate Jacobian
     # M_immediate = jnp.einsum('ij,k', df_dh, v)
-    M_immediate = df_dh[..., None] * v[None]
+    M_immediate = phi_prime[..., None] * v[None]
 
     # Update eligibility traces
-    jw += (1 / tau)[:, None] * (M_immediate - jw)
-    dh_dtau = ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau) - jtau
-    jtau += dh_dtau / tau
+    jw += (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
 
-    df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jnp.outer(
-        df_dh,
-        (
-            jnp.concatenate(
-                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
-                axis=-1,
-            )
-            @ W.T
-        )[..., : x.shape[-1]],
+    dh_dtau = (
+        ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau)
+        - jtau
+        + jtau @ df_dh[:, x.shape[-1] : -1]
     )
-    # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
-    return df_dw, dh_dx  # , hebb
+
+    jtau += dh_dtau / tau * cell.dt
+
+    dh_dh0 = 1 - jh0  # + jh0 @ df_dh[:, x.shape[-1] : -1]
+    jh0 += cell.dt * dh_dh0 / tau
+
+    df_dw = {"W": jw, "tau": jtau, "h0": jh0}
+    jx += (1 / tau)[:, None] * (df_dh[..., : x.shape[-1]] - jx) * cell.dt
+    return df_dw, jx  # , hebb
+
+
+def eprop_ctrnn_tau_softplus(cell: CTRNNCell, carry, params, x):
+    """Compute jacobian trace for RFLO."""
+    h, jp, jx = carry
+    W, h0, b_tau = params.values()
+    tau = jax.nn.softplus(b_tau) + cell.tau_min
+
+    jw = jp["W"]
+    jtau = jp["tau"]
+    jh0 = jp["h0"]
+
+    # immediate jacobian (this step)
+    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    u = v @ W.T
+    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
+    # df_dh = jax.jacrev(jax.nn.tanh)(u)
+    phi_prime = 1 - jnp.tanh(u) ** 2
+    df_dh = jnp.diag(phi_prime) @ W
+    # post = jnp.tanh(u)
+
+    # hebb = hebbian(v, post)
+
+    # Outer product the get Immediate Jacobian
+    # M_immediate = jnp.einsum('ij,k', df_dh, v)
+    M_immediate = phi_prime[..., None] * v[None]
+
+    # Update eligibility traces
+    jw += (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
+
+    dh_dtau = (
+        ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau)
+        - jtau
+        + jtau @ df_dh[:, x.shape[-1] : -1]
+    )
+
+    jtau += dh_dtau / tau * cell.dt
+
+    dh_dh0 = 1 - jh0  # + jh0 @ df_dh[:, x.shape[-1] : -1]
+    jh0 += cell.dt * dh_dh0 / tau
+
+    df_dw = {"W": jw, "tau": jtau, "h0": jh0}
+    jx += (1 / tau)[:, None] * (df_dh[..., : x.shape[-1]] - jx) * cell.dt
+    return df_dw, jx  # , hebb
 
 
 # def hebbian(pre, post):
@@ -269,111 +351,49 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
 #     return df_dw, dh_dx
 
 
-class OnlineCTRNNCell(CTRNNCell):
+class OnlineCTRNNCell(OnlineODECell, CTRNNCell):
     """Online CTRNN module."""
 
     plasticity: str = "rflo"
 
-    @nn.compact
-    def __call__(self, carry, x, force_trace_compute=False, force_bptt=False):  # noqa
-        if carry is None:
-            carry = self.initialize_carry(self.make_rng(), x.shape)
-
-        if self.plasticity == "bptt" or force_bptt:
-            return CTRNNCell.__call__(self, carry, x)
-
-        def _trace_update(carry, _p, x):
-            if self.plasticity == "rtrl":
-                traces = rtrl_ctrnn(self, carry, _p, x)
-            elif self.plasticity == "rflo":
-                if self.ode_type == "murray":
-                    traces = rflo_murray(self, carry, _p, x)
-                elif self.ode_type == "tau_softplus":
-                    traces = rflo_tau_softplus(self, carry, _p, x)
-                else:
-                    raise ValueError(f"ODE type {self.ode_type} not supported.")
-            else:
-                raise ValueError(f"Plasticity mode {self.plasticity} not supported.")
-            return traces
-
-        def f(mdl, carry, x):
-            h_next, out = CTRNNCell.__call__(mdl, carry[0], x)
-            if force_trace_compute:
-                traces = _trace_update(carry, mdl.variables["params"], x)
-            else:
-                traces = carry[1:]
-            return (h_next, *traces), out
-
-        def fwd(mdl, carry, x):
-            """Forward pass with tmp for backward pass."""
-            out, _ = CTRNNCell.__call__(mdl, carry[0], x)
-            traces = _trace_update(carry, mdl.variables["params"], x)
-            return (
-                (out, *traces),
-                (out, *traces) if force_trace_compute else out,
-            ), (out, *traces)
-
-        def bwd(tmp, y_bar):
-            """Backward pass using RTRL."""
-            # carry, jp, jx, hebb = tmp
-            df_dy = y_bar[-1]
-            df_dy += y_bar[-2][0]  # Also include carry grad
-            grads_p, grads_x = self.rtrl_gradient(
-                tmp, df_dy, plasticity=self.plasticity
-            )
-            # grads_p['W'] += hebb
-            carry = jax.tree.map(jnp.zeros_like, tmp)
-            return ({"params": grads_p}, carry, grads_x)
-
-        f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        return f_grad(self, carry, x)
-
-    @staticmethod
-    def rtrl_gradient(carry, df_dy, plasticity="rflo"):
-        """Compute RTRL gradient."""
-        h, jp, jx = carry
-        if plasticity == "rflo":
-            grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
+    def _trace_update(self, carry, _p, x):
+        if self.wiring is not None:
+            _p["W"] = jax.lax.stop_gradient(self.variables["wiring"]["mask"]) * _p["W"]
+        # Select ODE function
+        if self.ode_type == "murray":
+            _ode = ctrnn_ode
+        elif self.ode_type == "tau_softplus":
+            _ode = ctrnn_ode_tau_softplus
+        elif self.ode_type == "tg":
+            _ode = ctrnn_tg
         else:
-            grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
-        if len(df_dy.shape) > 1:
-            # has batch dim
-            grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
-        grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
-        return grads_p, grads_x
-
-    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
-        """Initialize the carry with jacobian traces."""
-        h = super().initialize_carry(rng, input_shape)
-        if self.plasticity == "bptt":
-            return h
-
-        # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
-        jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
-
-        # HACK: if we are inside a batched setting, we need to replicate for self.init
-        _h = h
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            _outer_batch_size = rng._trace.axis_data.size
-            _h = jnp.tile(h, (_outer_batch_size,) + (1,) * len(h.shape))
-            _h = _h.reshape(h.shape[:-1] + (_outer_batch_size, -1))
-            input_shape = input_shape[:-1] + (_outer_batch_size,) + input_shape[-1:]
-        # initialize to get the parameter shapes
-        params = self.init(
-            rng,
-            (_h, None, None),
-            jnp.zeros(input_shape),
-        )
-        # # Now we also have to "unbatch" the params
-        if hasattr(rng, "_trace") and hasattr(rng._trace, "axis_data"):
-            params = jax.tree.map(lambda x: x[0], params)
-
-        # Initialize the jacobian traces
-        leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
-        jp = jax.tree.map(
-            lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
-        )
-        return h, jp, jx
+            raise ValueError(f"ODE type {self.ode_type} not recognized.")
+        # Compute trace update
+        if self.plasticity == "rtrl":
+            traces = rtrl(self, carry, _p, x, ode=_ode)
+        elif self.plasticity == "snap0":
+            traces = snap0(self, carry, _p, x, ode=_ode)
+        elif self.plasticity == "rflo":
+            if self.ode_type == "murray":
+                traces = rflo_murray(self, carry, _p, x)
+            elif self.ode_type == "tau_softplus":
+                traces = rflo_tau_softplus(self, carry, _p, x)
+            else:
+                raise ValueError(f"ODE type {self.ode_type} not supported for rflo.")
+        elif self.plasticity == "eprop":
+            if self.ode_type == "murray":
+                traces = eprop_ctrnn(self, carry, _p, x)
+            elif self.ode_type == "tau_softplus":
+                traces = eprop_ctrnn_tau_softplus(self, carry, _p, x)
+            else:
+                raise ValueError(f"ODE type {self.ode_type} not supported.")
+        else:
+            raise ValueError(f"Plasticity mode {self.plasticity} not supported.")
+        if self.wiring is not None:
+            traces[0]["W"] = (
+                jax.lax.stop_gradient(self.variables["wiring"]["mask"]) * traces[0]["W"]
+            )
+        return traces
 
 
 if __name__ == "__main__":

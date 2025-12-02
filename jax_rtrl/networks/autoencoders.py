@@ -1,7 +1,7 @@
 """Convolutional neural network autoencoders built with flax."""
 
 from dataclasses import dataclass, field
-
+from simple_parsing import Serializable
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -9,6 +9,56 @@ import numpy as np
 from flax import linen as nn
 from jax.nn import softmax
 from jax_rtrl.models.cells.ctrnn import CTRNNCell
+from jax_rtrl.util.checkpointing import restore_config, restore_params
+
+conv_presets = {"small": [(16, (3, 3)), (16, (3, 3)), (16, (3, 3))]}
+
+
+@dataclass
+class ConvLayerConfig:
+    features: int = 16
+    kernel_size: tuple[int, int] = (3, 3)
+
+
+@dataclass
+class ConvConfig(Serializable):
+    preset: str | None = "small"
+    layers: list[tuple[int, tuple[int, int]]] | None = None
+    latent_size: int = 16
+
+    def __post_init__(self):
+        assert self.preset is not None or self.layers is not None, (
+            "Either preset or layers must be defined."
+        )
+
+    def get_layers(self) -> list[ConvLayerConfig]:
+        """Get list of ConvLayerParams."""
+        layers = self.layers
+        if layers is None:
+            layers = conv_presets[self.preset]
+
+        return [
+            ConvLayerConfig(features=f, kernel_size=ks)
+            for f, ks in conv_presets[self.preset]
+        ]
+
+
+class ConvEncoder(nn.Module):
+    """2D-Convolutional Encoder.
+
+    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
+
+    config: ConvConfig = field(default_factory=ConvConfig)
+
+    @nn.compact
+    def __call__(self, x):
+        """Encode given Image."""
+        # Encode observation using CNN
+        for l_conf in self.config.get_layers():
+            x = nn.Conv(features=l_conf.features, kernel_size=l_conf.kernel_size)(x)
+            x = nn.gelu(x)
+        x = x.flatten()  # Image grid to single feature vector
+        return nn.Dense(features=self.config.latent_size)(x)
 
 
 class ConvDecoder(nn.Module):
@@ -46,32 +96,6 @@ class ConvDecoder(nn.Module):
         x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3))(x)
         x = nn.tanh(x) if self.tanh_output else nn.sigmoid(x)
         return x
-
-
-class ConvEncoder(nn.Module):
-    """2D-Convolutional Encoder.
-
-    https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
-
-    latent_size: int
-    c_hid: int = 16
-
-    @nn.compact
-    def __call__(self, x):
-        """Encode given Image."""
-        # Encode observation using CNN
-        x = nn.Conv(features=self.c_hid, kernel_size=(5, 5), strides=2)(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=self.c_hid, kernel_size=(5, 5))(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.gelu(x)
-        x = nn.Conv(features=4 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.gelu(x)
-        x = x.flatten()  # Image grid to single feature vector
-        return nn.Dense(features=self.latent_size)(x)
 
 
 class Autoencoder_RNN(nn.Module):
@@ -118,23 +142,22 @@ class Autoencoder_RNN(nn.Module):
         return carry, pred, latent
 
 
-@dataclass(frozen=True)
-class AutoencoderParams:
-    latent_size: int = 128
-    c_hid: int = 32
+@dataclass
+class AutoencoderConfig(Serializable):
+    encoder_params: ConvConfig = field(default_factory=ConvConfig)
 
 
 class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
 
     img_shape: tuple[int]
-    config: AutoencoderParams = field(default_factory=AutoencoderParams)
+    config: AutoencoderConfig = field(default_factory=AutoencoderConfig)
 
     def setup(self) -> None:
         """Initialize submodules."""
         super().setup()
-        self.enc = ConvEncoder(self.config.latent_size, self.config.c_hid)
-        self.dec = ConvDecoder(self.img_shape, self.config.c_hid)
+        self.enc = ConvEncoder(self.config.encoder_params)
+        self.dec = ConvDecoder(self.img_shape)
 
     def encode(self, x, *_):
         """Encode given Image."""
@@ -368,6 +391,44 @@ class DeepSpatialAutoencoder(nn.Module):
         else:
             features = enc_out.flatten()
         return self.decoder(features), features
+
+
+def restore_cnn_from_ckpt(
+    ckpt_path: str, restored_config: ConvConfig | AutoencoderConfig = None, **inputs
+) -> ConvEncoder | Autoencoder:
+    """Restore a CNN from a checkpoint.
+
+    Parameters
+    ----------
+    ckpt_path : str
+        Path to the checkpoint file.
+    restored_config : ConvConfig
+        Configuration for the restored CNN. If None, the configuration will be loaded from the checkpoint.
+    **inputs : dict
+        Inputs required to initialize the policy module.
+
+    Returns
+    -------
+    ConvEncoder | Autoencoder
+        The restored CNN module.
+    """
+    if restored_config is None:
+        restored_config = restore_config(ckpt_path)
+        # Try to infer config class
+        if "encoder_params" in restored_config:
+            restored_config = AutoencoderConfig.from_dict(restored_config)
+        else:
+            restored_config = ConvConfig.from_dict(restored_config)
+    if restored_config.__class__ == AutoencoderConfig:
+        cnn = Autoencoder(
+            img_shape=inputs.get("x").shape[1:],
+            config=restored_config,
+        )
+    else:
+        cnn = ConvEncoder(config=restored_config)
+    target = cnn.lazy_init(jax.random.PRNGKey(0), **inputs)
+    variables = restore_params(ckpt_path, tree=target)
+    return cnn.bind(variables)
 
 
 if __name__ == "__main__":

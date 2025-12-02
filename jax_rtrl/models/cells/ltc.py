@@ -1,58 +1,92 @@
-"""LTC implementation. TODO!"""
+"""Liquid Time Constant (LTC) model flax implementation."""
 
+from typing import Literal
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import jax.random as jrand
+from jax.nn import sigmoid
 from chex import PRNGKey
 from flax.linen import nowrap
 
-from jax_rtrl.models.cells.ctrnn import rtrl_ctrnn
-from jax_rtrl.models.cells.ode import ODECell
+from jax_rtrl.models.cells.ode import ODECell, OnlineODECell, rtrl, snap0
 
 
-def ltc_ode(params, h, x):
-    """Compute euler integration step or CTRNN ODE."""
+def ltc_hasani(params, h, x):
     # Concatenate input and hidden state
-    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
+    y = jnp.concatenate([x, h], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    gating = jax.nn.sigmoid(params["a"] * y[None] + params["b"])
-    potential = params["e"] - y
+    gating = sigmoid(params["a"] * y[..., None, :] + params["b"])
+    potential = params["e"] - h[..., :, None]  # shape (..., hidden, 1)
+    # enforce positivity on weights
+    # w = jax.nn.softplus(params["W"])
     w = params["W"]
-    # Optional: enforce positivity on weights
-    # w = jnp.exp(w)
-    # w = jax.nn.softplus(w)
-    y_dot = jnp.sum(w * gating * potential, axis=-1)
+    # gl =  jax.nn.sigmoid(params["g_l"])
+    # gl = jax.nn.softplus(params["g_l"])
+    gl = params["g_l"]
+    syn = jnp.sum(w * gating * potential, axis=-1)
+    leak = gl * (params["e_l"] - h)
+    # Ensure G_L is negative (last column of W)
+    y_dot = syn + leak
+    return y_dot
+
+
+def ltc_farsang(params, h, x):
+    """LTC as in Farsang et al. 2024.
+
+    h' = -fi hi + ui eli.
+
+    fi = Pm+n  \sum gji sigmoid(aji yj + bji) + gli
+    ui = Pm+n  \sum kji sigmoid(aji yj + bji) + gli
+    kji = gji eji/eli
+    """
+    # Concatenate input and hidden state
+    y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1])], axis=-1)
+    # This way we only need one FC layer for recurrent and input connections
+    k = params["W"] * params["e"] / params["e_l"][:, None]
+    g = jnp.stack([params["W"], k], axis=0)
+    g_l = jnp.stack([params["g_l"], params["g_l"]], axis=0)
+    gating = sigmoid(params["a"] * y[None] + params["b"])
+    gating = jnp.stack([gating, gating], axis=0)
+    f_u = jnp.mean(g * gating + g_l[..., None], axis=-1)
+    f, u = f_u
+    y_dot = -f * h + u * params["e_l"]
     return y_dot
 
 
 class LTCCell(ODECell):
-    """Simple CTRNN cell."""
+    """Generic LTC cell."""
 
-    # num_units: int
-    # dt: float = 1.0
-    ode_type: str = "hasani"
-    # wiring: str | None = "fully_connected"
-    # wiring_kwargs: dict = field(default_factory=dict)
+    ode_type: Literal["hasani", "farsang"] = "hasani"
 
     def _make_params(self, x):
         # Define params
-        w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
-        self.param("a", nn.initializers.ones, w_shape)
-        self.param("b", nn.initializers.zeros, w_shape)
+        w_shape = (self.num_units, x.shape[-1] + self.num_units)
+        self.param("a", nn.initializers.normal(), w_shape)
+        self.param("b", nn.initializers.normal(), w_shape)
         self.param("e", nn.initializers.lecun_normal(in_axis=-1, out_axis=-2), w_shape)
-        self.param("W", nn.initializers.uniform(1), w_shape)
+        self.param("W", nn.initializers.uniform(0.01), w_shape)
+        self.param("e_l", nn.initializers.uniform(-1), self.num_units)
+        self.param("g_l", nn.initializers.uniform(1.0), self.num_units)
+
+        if self.ode_type == "lrc":
+            self.param("o", nn.initializers.uniform(-1), w_shape)
+            # self.param("p", nn.initializers.uniform(-1), self.num_units)
         super()._make_params(x)
 
     def _f(self, h, x):  # noqa
         """Compute euler integration step or CTRNN ODE."""
         params = self.variables["params"]
 
-        if "mask" in self.variables:
-            mask = jax.lax.stop_gradient(self.variables["mask"])
+        if self.wiring is not None:
+            mask = jax.lax.stop_gradient(self.variables["wiring"]["mask"])
             params = jax.tree.map(lambda W: W * mask, params)
-        if self.ode_type == "hasani":
-            df_dt = ltc_ode(params, h, x)
+        if self.ode_type in ["hasani", "ltc"]:
+            df_dt = ltc_hasani(params, h, x)
+        elif self.ode_type in ["farsang", "fltc"]:
+            df_dt = ltc_farsang(params, h, x)
+        # elif self.ode_type == "lrc":
+        #     df_dt = lrc_ode(params, h, x)
         else:
             raise ValueError(f"Unknown ode_type: {self.ode_type}")
         return df_dt
@@ -71,156 +105,79 @@ class LTCCell(ODECell):
 def rflo_ltc(cell: LTCCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
-    W, tau = params.values()
 
-    jw = jp["W"]
-    jtau = jp["tau"]
+    y = jnp.concatenate([x, h], axis=-1)
+    syn_in = params["a"] * y[..., None, :] + params["b"]
+    syn = jax.nn.sigmoid(syn_in)
+    # pointwise derivatives
+    syn_diff = jax.vmap(jax.vmap(jax.grad(jax.nn.sigmoid)))(syn_in)
+    ltc_diff = params["e"] - h[..., None]  # shape (..., 1, input+hidden)
 
-    # immediate jacobian (this step)
-    v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    u = v @ W.T
-    # df_dh = jax.jacfwd(jax.nn.tanh)(u)
-    # df_dh = jax.jacrev(jax.nn.tanh)(u)
-    df_dh = 1 - jnp.tanh(u) ** 2
-    # post = jnp.tanh(u)
-
-    # hebb = hebbian(v, post)
-
-    # Outer product the get Immediate Jacobian
-    # M_immediate = jnp.einsum('ij,k', df_dh, v)
-    M_immediate = df_dh[..., None] * v[None]
-
-    # Update eligibility traces
-    jw += (1 / tau)[:, None] * (M_immediate - jw)
-    dh_dtau = ((h - jnp.tanh(u)) / tau) - jtau
-    jtau += dh_dtau / tau
-
-    df_dw = {"W": jw, "tau": jtau}
-    dh_dx = jnp.outer(
-        df_dh,
-        (
-            jnp.concatenate(
-                [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
-                axis=-1,
-            )
-            @ W.T
-        )[..., : x.shape[-1]],
+    dh_dh = (
+        1.0 - params["g_l"]
+        # + (params["W"] * (ltc_diff * syn_diff * params["a"] - syn))[:, -h.shape[-1] :]
     )
-    # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]
-    return df_dw, dh_dx  # , hebb
+    # dh_dh = jnp.sum(dh_dh, axis=-1)
+
+    # comm = jax.tree.map(lambda p: p * dh_dh, jp)
+    dh_dG_L = cell.dt * (params["e_l"] - h) + dh_dh * jp["g_l"]
+    dh_dE_L = cell.dt * params["g_l"] + dh_dh * jp["e_l"]
+
+    # dh_dG_s = jnp.sum(ltc_diff * syn, axis=-1)[:, None] + dh_dh[:, None] * jp["W"]
+    dh_dG_s = cell.dt * ltc_diff * syn + dh_dh[:, None] * jp["W"]
+    # dh_dE_s = jnp.sum(params["W"] * syn, axis=-1)[:, None] + dh_dh[:, None] * jp["e"]
+    dh_dE_s = cell.dt * params["W"] * syn + dh_dh[:, None] * jp["e"]
+
+    _tmp = params["W"] * ltc_diff * syn_diff
+
+    # dh_da = jnp.sum(_tmp * y, axis=-1)[:, None] + dh_dh[:, None] * jp["a"]
+    dh_da = _tmp * y + dh_dh[:, None] * jp["a"]
+    # dh_da = dh_dh[:, None] * jp["a"]
+    # dh_db = jnp.sum(_tmp, axis=-1)[:, None] + dh_dh[:, None] * jp["b"]
+    dh_db = _tmp + dh_dh[:, None] * jp["b"]
+    # dh_db = dh_dh[:, None] * jp["b"]
+
+    # Infomax
+    # dh_db = 1 - 2 * syn
+    # dh_da = 1 / params["a"] + y * dh_db
+
+    dh_dx = (_tmp * params["a"] - params["W"] * syn)[..., : x.shape[-1]] + dh_dh[
+        :, None
+    ] * jx
+    jp = {
+        "W": dh_dG_s,
+        "e": dh_dE_s,
+        "g_l": dh_dG_L,
+        "e_l": dh_dE_L,
+        "a": dh_da,
+        "b": dh_db,
+    }
+    return jp, dh_dx  # , hebb
 
 
-# def rflo_tg(cell: CTRNNCell, carry, params, x):
-#     """Compute jacobian trace for RFLO."""
-#     h, jp, jx = carry
-#     W, tau = params
-
-#     jw = jp['params']['W']
-#     jtau = jp['params']['W_tau']
-
-#     # immediate jacobian (this step)
-#     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1]+(1,))])
-#     u = W @ v
-#     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
-#     # df_dh = jax.jacrev(jax.nn.tanh)(u)
-#     df_dh = jnp.eye(u.shape[-1]) * (1-jnp.tanh(u)**2)
-
-#     # Outer product the get Immediate Jacobian
-#     # M_immediate = jnp.einsum('ij,k', df_dh, v)
-#     M_immediate = df_dh[..., None] * v[None, None]
-
-#     # Update eligibility traces
-#     jw += (1 / tau)[:, None, None] * (M_immediate - jw)
-#     dh_dtau = ((h - jnp.tanh(u)) * 1 / tau) * jnp.eye(tau.shape[-1]) - jtau
-#     jtau += (1 / tau)[:, None] * dh_dtau
-
-#     df_dw = {"params": {"W": jw, "tau": jtau}}
-#     dh_dx = jx
-#     return df_dw, dh_dx
-
-
-class OnlineLTCCell(LTCCell):
+class OnlineLTCCell(OnlineODECell, LTCCell):
     """Online LTC module."""
 
-    plasticity: str = "rflo"
-
-    @nn.compact
-    def __call__(self, carry, x, force_trace_compute=False):  # noqa
-        if carry is None:
-            carry = self.initialize_carry(self.make_rng(), x.shape)
-
-        if self.plasticity == "bptt":
-            return LTCCell.__call__(self, carry, x)
-
-        def _trace_update(carry, _p, x):
+    def _trace_update(self, carry, _p, x):
+        if self.plasticity in ["rtrl", "snap0"]:
+            if self.ode_type in ["farsang", "fltc"]:
+                _ode_fn = ltc_farsang
+            elif self.ode_type in ["hasani", "ltc"]:
+                _ode_fn = ltc_hasani
+            # elif self.ode_type == "lrc":
+            #     _ode_fn = lrc_ode
+            else:
+                raise ValueError(f"ODE type {self.ode_type} not recognized.")
             if self.plasticity == "rtrl":
-                traces = rtrl_ctrnn(self, carry, _p, x, ode=ltc_ode)
-            elif self.plasticity == "rflo":
-                traces = rflo_ltc(self, carry, _p, x)
+                traces = rtrl(self, carry, _p, x, ode=_ode_fn)
             else:
-                raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
-            return traces
+                traces = snap0(self, carry, _p, x, ode=_ode_fn)
 
-        def f(mdl, carry, x):
-            h_next, out = LTCCell.__call__(mdl, carry[0], x)
-            if force_trace_compute:
-                traces = _trace_update(carry, mdl.variables["params"], x)
-            else:
-                traces = carry[1:]
-            return (h_next, *traces), out
-
-        def fwd(mdl, carry, x):
-            """Forward pass with tmp for backward pass."""
-            out, _ = LTCCell.__call__(mdl, carry[0], x)
-            traces = _trace_update(carry, mdl.variables["params"], x)
-            return (
-                (out, *traces),
-                (out, *traces) if force_trace_compute else out,
-            ), (out, *traces)
-
-        @jax.jit
-        def bwd(tmp, y_bar):
-            """Backward pass using RTRL."""
-            # carry, jp, jx, hebb = tmp
-            df_dy = y_bar[-1]
-            grads_p, grads_x = self.rtrl_gradient(
-                tmp, df_dy, plasticity=self.plasticity
-            )
-            # grads_p['W'] += hebb
-            carry = jax.tree.map(jnp.zeros_like, tmp)  # [:-1]
-            return ({"params": grads_p}, carry, grads_x)
-
-        f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        return f_grad(self, carry, x)
-
-    @staticmethod
-    def rtrl_gradient(carry, df_dy, plasticity="rflo"):
-        """Compute RTRL gradient."""
-        h, jp, jx = carry
-        if plasticity == "rflo":
-            grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)
+        elif self.plasticity == "rflo":
+            traces = rflo_ltc(self, carry, _p, x)
         else:
-            grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
-        if len(df_dy.shape) > 1:
-            # has batch dim
-            grads_p = jax.tree.map(lambda x: jnp.mean(x, axis=0), grads_p)
-        grads_x = jnp.einsum("...h,...hi->...i", df_dy, jx)
-        return grads_p, grads_x
-
-    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
-        """Initialize the carry with jacobian traces."""
-        h = super().initialize_carry(rng, input_shape)
-        if self.plasticity == "bptt":
-            return h
-
-        # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
-        jx = jnp.zeros(h.shape[:-1] + (h.shape[-1], input_shape[-1]))
-        params = self.init(rng, (h, None, None), jnp.zeros(input_shape))
-        leading_shape = h.shape[:-1] if self.plasticity == "rflo" else h.shape
-        jp = jax.tree.map(
-            lambda x: jnp.zeros(leading_shape + x.shape), params["params"]
-        )
-        return h, jp, jx
+            raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
+        return traces
 
 
 if __name__ == "__main__":
@@ -270,7 +227,7 @@ if __name__ == "__main__":
         if i % 1000 == 0:
             print(f"Iteration {i} | Loss: {loss:.3f}")
 
-    def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-4, batch_size=64):
+    def train(_loss_fn, _params, data, _key, num_steps=10_000, lr=1e-3):
         """Train network. We use Stochastic Gradient Descent with a constant learning rate."""
         _x, _y = data
         optimizer = optax.lion(lr)

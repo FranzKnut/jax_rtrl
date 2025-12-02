@@ -6,21 +6,15 @@ import zipfile
 from collections.abc import Iterable
 import jax
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 import numpy as np
 from numpy.lib._version import NumpyVersion
-if NumpyVersion(np.__version__) >= "2.0.0":
-    from numpy.lib.format import read_array_header_1_0 as _read_array_header
-else:
-    from numpy.lib.format import _read_array_header
 from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
-import flashbax as fbx
-from flashbax.vault import Vault
 
 
-def split_train_test(dataset, percent_eval: float = 0.2):
+def split_train_test(dataset, percent_eval: float = 0.2, shuffle: bool = False):
     """Split the dataset into train and test sets along the first axis.
 
     Train episodes are taken from the beginning of the dataset, test episodes from the end.
@@ -28,6 +22,12 @@ def split_train_test(dataset, percent_eval: float = 0.2):
     :param percent_eval: float
     :return: train and eval tuples of (inputs, target)
     """
+    if shuffle:
+        key = jrandom.PRNGKey(0)
+        perm = jrandom.permutation(
+            key, jnp.arange(jax.tree_util.tree_leaves(dataset)[0].shape[0])
+        )
+        dataset = jax.tree.map(lambda x: x[perm], dataset)
     dataset_size = jax.tree.flatten(dataset)[0][0].shape[0]
     train_size = int(dataset_size * (1 - percent_eval))
     dataset_train = jax.tree.map(lambda x: x[:train_size], dataset)
@@ -85,7 +85,7 @@ def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=
     return [jnp.stack(s, axis=0) for s in sliced]
 
 
-def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
+def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=False):
     """Load a set of npz or npz files from a folder.
 
     :param name: Environment name
@@ -108,34 +108,35 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None):
             d = dict(d)
         data.append(d)
 
+    _op = np.stack if stack else np.concatenate
+    output = jax.tree.map(lambda *x: _op(x, axis=0), *data)
     if is_npz:
-        output = jax.tree.map(lambda *x: np.concatenate(x, axis=0), *data)
         num_steps = len(output[list(output.keys())[0]])
         num_steps_per_file = [len(d[list(d.keys())[0]]) for d in data]
     else:
-        output = np.concatenate(data, axis=0)
         num_steps_per_file = [len(d) for d in data]
-        file_starts = np.zeros(num_steps)
         num_steps = len(output)
 
-    # An Array that is zero everywhere except at the start of each file
-    start_indices = np.concatenate(
-        [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int
-    )
-    file_starts = np.zeros(num_steps).at[start_indices].set(1)
-
     print(f"Files contained {num_steps:d} steps total")
-    return output, file_starts
+
+    if stack:
+        return output
+    else:
+        file_starts = np.zeros(num_steps)
+        # An Array that is zero everywhere except at the start of each file
+        start_indices = np.concatenate(
+            [np.zeros(1, dtype=int), np.cumsum(np.array(num_steps_per_file[:-1]))]
+        )
+        file_starts[start_indices] = 1
+
+        return output, file_starts
 
 
-def npy_headers(f):
-    """
-    Takes a .npy file handle.
-    Generates a tuple of (shape, np.dtype).
-    """
-    version = np.lib.format.read_magic(f)
-    shape, fortran, dtype = _read_array_header(f, version)
-    return shape, dtype
+def read_array_header(fobj):
+    version = np.lib.format.read_magic(fobj)
+    func_name = "read_array_header_" + "_".join(str(v) for v in version)
+    func = getattr(np.lib.format, func_name)
+    return func(fobj)
 
 
 def npz_headers(npz):
@@ -149,13 +150,13 @@ def npz_headers(npz):
                 continue
 
             npy = archive.open(name)
-            shape, dtype = npy_headers(npy)
+            shape, fortan, dtype = read_array_header(npy)
             yield name[:-4], shape, dtype
 
 
 def load_into_vault(
     path, vault_name, is_npz=True, num_files: int = None, vault_uid=None
-) -> tuple[Vault, jax.Array]:
+) -> tuple[Any, jax.Array]:
     """Load a set of npz or npz files from a folder and store them in a flashbax Vault.
 
     :param name: Path of rollout files
@@ -164,6 +165,9 @@ def load_into_vault(
     :param write_freq: How often to write to the vault
     :return: (Vault, file_starts)
     """
+    import flashbax as fbx
+    from flashbax.vault import Vault
+
     files = [
         os.path.join(path, d)
         for d in os.listdir(path)
@@ -183,7 +187,7 @@ def load_into_vault(
         else:
             # TODO: Test this
             with open(f, "rb") as _file:
-                num_steps_per_file.append(npy_headers(_file)[0][0])
+                num_steps_per_file.append(read_array_header(_file)[0][0])
 
     total_num_steps = sum(num_steps_per_file)
     # add_batch_size = np.gcd.reduce(num_steps_per_file)
@@ -240,9 +244,9 @@ def load_into_vault(
 
         # An Array that is zero everywhere except at the start of each file
         start_indices = np.concatenate(
-            [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))], dtype=int
-        )
-        file_starts = np.zeros(total_num_steps).at[start_indices].set(1)
+            [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))]
+        ).astype(int)
+        file_starts = np.zeros(total_num_steps)[start_indices] = 1
 
     print(f"Files contained {total_num_steps:d} steps total")
     return vault, file_starts
@@ -251,8 +255,12 @@ def load_into_vault(
 # Toy datasets -----------------------------------------------------------------
 
 
-def spirals(dataset_size, key):
-    """Create a dataset of two spirals."""
+def spirals(dataset_size=100, key=jrandom.PRNGKey(0)):
+    """Create a dataset of two spirals.
+
+    Creates x: [dataset_size, time=16, 2] and y: [dataset_size, 1]
+    where the two classes in y are spirals that wind in opposite directions.
+    """
     t = jnp.linspace(0, 2 * jnp.pi, 16)
     offset = jrandom.uniform(key, (dataset_size, 1), minval=0, maxval=2 * jnp.pi)
     x1 = jnp.sin(t + offset) / (1 + t)
@@ -263,8 +271,7 @@ def spirals(dataset_size, key):
     x1 = x1.at[:half_dataset_size].multiply(-1)
     y = y.at[:half_dataset_size].set(0)
     x = jnp.stack([x1, x2], axis=-1)
-
-    return x, y
+    return x, jax.nn.one_hot(y, num_classes=2, axis=-1).squeeze()
 
 
 def sine(length=100, offset=2, num_periods=3):
@@ -277,7 +284,14 @@ def sine(length=100, offset=2, num_periods=3):
 # Gym Simulations ---------------------------------------------------------------
 
 
-def rollouts(data_folder, with_time=False):
+def legacy_rollouts(data_folder="data/spring/halfcheetah", with_time=False):
+    """Load a dataset from the BulletEnv simulator."""
+    outputs, _ = load_np_files_from_folder(data_folder, is_npz=True, stack=False)
+    obs = outputs["obs"]
+    return obs, obs
+
+
+def rollouts(data_folder="data/cheetah", with_time=False):
     """Load a dataset from the BulletEnv simulator.
 
     TODO: redundant with load_np_files_from_folder, refactor to use it.

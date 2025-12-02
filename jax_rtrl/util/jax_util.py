@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import flax.linen as nn
+import jax.random as jrand
 import optax
 import orbax.checkpoint
 
@@ -57,103 +58,6 @@ def zeros_like_tree(tree, batch_size=None):
         return jax.tree.map(lambda x: jnp.zeros((batch_size,) + x.shape), tree)
     else:
         return jax.tree.map(lambda x: jnp.zeros_like(x), tree)
-
-
-def restore_config(path):
-    """Restore config from checkpoint."""
-    path = os.path.abspath(path)
-    hparams_file_path = os.path.join(path, "hparams.json")
-
-    if os.path.exists(hparams_file_path):
-        with open(hparams_file_path) as f:
-            restored_hparams = json.load(f)
-    else:
-        restored_hparams = {}
-    return restored_hparams
-
-
-def restore_params(path, tree=None):
-    """Restore params and config from checkpoint."""
-    path = os.path.abspath(path)
-    orbax_path = os.path.join(path, "ckpt")
-
-    checkpointer = orbax.checkpoint.StandardCheckpointer()
-    try:
-        params = checkpointer.restore(
-            orbax_path,
-            jax.tree_util.tree_map(
-            orbax.checkpoint.utils.to_shape_dtype_struct, tree)
-        )
-    except FileNotFoundError:
-        print(f"Checkpoint not found at {orbax_path}. Returning None.")
-        params = None
-    return params
-
-
-def restore_params_and_config(path, tree=None):
-    """Restore params and config from checkpoint."""
-    params = restore_params(path, tree)
-    config = restore_config(path)
-    return params, config
-
-
-def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
-    """Set up checkpointing at given path.
-
-    Parameters
-    ----------
-    path : str
-        Path to the checkpoint directory.
-    fresh : bool, optional
-        If True, overwrite existing checkpoint. Default is False.
-    hparams : dict, optional
-        Hyper-parameters to be saved alongside model params.
-    tree : PyTree, optional
-        A PyTree structure that matches the parameters to be restored. 
-        See `orbax.checkpoint.PyTreeCheckpointer.restore` for details.
-
-    Returns
-    -------
-    tuple
-        A tuple containing:
-            - params : PyTree or None
-                Restored parameters, or None if no checkpoint found or fresh is True.
-            - hparams : dict
-                Restored or provided hyper-parameters.
-        save_model : Callable
-            Function (PyTree -> None) for saving given PyTree.
-    """
-    path = os.path.abspath(path)
-    hparams_file_path = os.path.join(path, "hparams.json")
-
-    checkpointer = orbax.checkpoint.StandardCheckpointer()
-    orbax_path = os.path.join(path, "ckpt")
-
-    def save_model(_params):
-        _params = jax.tree.map(
-            lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
-        )
-        return checkpointer.save(orbax_path, _params, force=True)
-
-    restored_params = None
-    restored_hparams = {}
-    print(path, end=": ")
-    exists = os.path.exists(path)
-    if not exists:
-        print("No checkpoint found")
-    else:
-        if fresh:
-            print("Overwriting existing checkpoint")
-        else:
-            restored_params, restored_hparams = restore_params_and_config(path, tree)
-            print("Restored checkpoint")
-
-    if (not exists or fresh) and hparams is not None:
-        os.makedirs(path, exist_ok=True)
-        with open(hparams_file_path, "w") as f:
-            json.dump(hparams, f)
-
-    return (restored_params, restored_hparams), save_model
 
 
 def mse_loss(y_hat, y):
@@ -288,3 +192,32 @@ def majority_vote(outputs):
     return jnp.min(
         jnp.where(jnp.bincount(outputs) == jnp.max(jnp.bincount(outputs)))[0]
     )
+
+
+def tree_stack(trees, axis=0):
+    """Take a list of trees and stack every corresponding leaf.
+
+    For example, given two trees ((a, b), c) and ((a', b'), c'), returns
+    ((stack(a, a'), stack(b, b')), stack(c, c')).
+    Useful for turning a list of objects into something you can feed to a
+    vmapped function. Taken from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
+    """
+    leaves, treedef = jax.tree.flatten(trees[0])
+    leaves_list = [leaves]
+    for tree in trees[1:]:
+        leaves, _ = jax.tree.flatten(tree)
+        leaves_list.append(leaves)
+
+    grouped_leaves = zip(*leaves_list)
+    result_leaves = [jnp.stack(leaf, axis=axis) for leaf in grouped_leaves]
+    return treedef.unflatten(result_leaves)
+
+
+def symmetric_uniform_init(lim, dtype=jnp.float_):
+    def init(key, shape, dtype=dtype, out_sharding=None):
+        # dtype = dtypes.canonicalize_dtype(dtype)
+        return jrand.uniform(
+            key, shape, dtype, out_sharding=out_sharding, minval=-lim, maxval=lim
+        )
+
+    return init
