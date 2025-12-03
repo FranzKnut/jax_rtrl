@@ -189,9 +189,7 @@ def get_normalization_fn(norm_type, training=True, **kwargs):
 
 def majority_vote(outputs):
     """Return the most popular discrete output."""
-    return jnp.min(
-        jnp.where(jnp.bincount(outputs) == jnp.max(jnp.bincount(outputs)))[0]
-    )
+    return jnp.argmax(jnp.bincount(outputs, length=outputs.shape[-1]), axis=-2)
 
 
 def tree_stack(trees, axis=0):
