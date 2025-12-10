@@ -258,10 +258,7 @@ def straight_through_one_hot_wrapper(  # pylint: disable=invalid-name
         """Return the mode of the distribution."""
         obj = Distribution(probs=self._probs, logits=self._logits)
         assert isinstance(obj, (distrax.Categorical, distrax.Bernoulli))
-        mode = obj.mode()
-        if isinstance(obj, distrax.Categorical):
-            mode = jax.nn.one_hot(mode, obj.probs.shape[-1])
-        return mode
+        return obj.mode()
 
     def _pad(probs, shape):
         """Grow probs to have the same number of dimensions as shape."""
@@ -282,8 +279,8 @@ class DistributionLayer(nn.Module):
     """Parameterized distribution output layer."""
 
     out_size: int
+    distribution: str = "LogStddevNormal"
     layers: tuple[int, ...] = ()
-    distribution: str = "Normal"
     eps: float = 0.01  # Unimix epsilon TODO: rename and write doc for Normal
     scale_bounds: float | tuple[float, float] | None = -2
     f_align: bool = False

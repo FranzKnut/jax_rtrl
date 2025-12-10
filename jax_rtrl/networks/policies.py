@@ -21,7 +21,6 @@ class PolicyConfig(RNNEnsembleConfig):
     TODO: this repeats many parameters found in the RNNEnsemble config.
     """
 
-    model_name: str = "bptt"
     hidden_size: int = 128
     num_layers: int = 1
     stochastic: bool = False
@@ -36,7 +35,7 @@ class PolicyConfig(RNNEnsembleConfig):
 class Policy(nn.Module):
     """Generic Policy Base Class."""
 
-    # a_dim: int
+    a_dim: int
     config: PolicyConfig = field(default_factory=PolicyConfig)
     use_rnn: bool = False
 
@@ -71,7 +70,7 @@ class PolicyMLP(Policy):
             layers += list(self.config.output_layers)
         # layers += [self.a_dim]
         x = MLPEnsemble(
-            out_size=self.config.out_size,
+            out_size=self.a_dim,
             num_modules=self.config.num_modules,
             out_dist="Normal" if self.config.stochastic else None,
             kwargs={"layers": layers, "norm": self.config.norm},
@@ -91,6 +90,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         """Initialize and set up the RNN configuration."""
         self.rnn = RNNEnsemble(
             self.config,
+            out_size=self.a_dim,
             num_submodule_extra_args=self.num_submodule_extra_args,
             name="rnn",
         )

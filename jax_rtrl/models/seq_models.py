@@ -48,7 +48,7 @@ class RNNEnsembleConfig(Serializable):
     """Configuration for RNNEnsemble.
 
     Attributes:
-        model_name: Name of the RNN model.
+        model_name: Name of the RNN model. If None, becomes MLP.
         num_modules: Number of RNN modules in the ensemble.
         num_layers: Number of layers in the modules. Ignored if layers is specified.
         hidden_size: Size of the hidden state in each RNN module. Ignored if layers is specified.
@@ -67,16 +67,17 @@ class RNNEnsembleConfig(Serializable):
         layer_config: Configuration for the sequence layer.
     """
 
-    model_name: str | None
+    model_name: str | None = None
     layers: tuple[int, ...] | None = None
     num_layers: tuple[int, ...] | None = 1
     hidden_size: int | None = None
     ensemble_method: Literal["linear", "dist", None] = None
     num_modules: int = 1
     num_blocks: int = 1
-    out_size: int | None = None
+    # out_size: int | None = None
     out_dist: str | None = "Deterministic"
-    input_layers: tuple[int, ...] | None = None  # TODO
+    dist_scale_bounds: float | tuple[float, float] = 0
+    # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
     ensemble_visible_obs_prob: float = 1.0
@@ -119,10 +120,10 @@ class RNNEnsembleConfig(Serializable):
                     self.rnn_kwargs["interneurons"] = self.hidden_size - (
                         self.out_size + 1
                     )
-        assert self.hidden_size is not None or self.layers is not None, (
-            "Either hidden_size or layers must be specified."
-        )
-        if self.layers is None:
+        # assert self.hidden_size is not None or self.layers is not None, (
+        #     "Either hidden_size or layers must be specified."
+        # )
+        if self.layers is None and self.hidden_size is not None:
             self.layers = (self.hidden_size,) * self.num_layers
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
@@ -469,26 +470,28 @@ class RNNEnsemble(nn.RNNCellBase):
     """
 
     config: RNNEnsembleConfig
+    out_size: int | None = None
     num_submodule_extra_args: int = 0  # set to number of additional args for submodule!
 
     def setup(self):
         """Initialize submodules."""
-        self.ensembles = make_batched_model(
-            FAMultiLayerRNN,
-            split_rngs=True,
-            # [h, x, training, (*call_args, **call_kwargs)]
-            in_axes=(0, 0, None) + (None,) * self.num_submodule_extra_args,
-            axis_size=self.config.num_modules,
-            # methods=["initialize_carry"],
-        )(
-            self.config.layers,
-            rnn_cls=CELL_TYPES[self.config.model_name],
-            rnn_kwargs=self.config.rnn_kwargs,
-            num_blocks=self.config.num_blocks,
-            fa_type=self.config.fa_type,
-            name="ensemble",
-            layer_config=self.config.layer_config,  # Use the config directly
-        )
+        if self.config.model_name is not None:
+            self.ensembles = make_batched_model(
+                FAMultiLayerRNN,
+                split_rngs=True,
+                # [h, x, training, (*call_args, **call_kwargs)]
+                in_axes=(0, 0, None) + (None,) * self.num_submodule_extra_args,
+                axis_size=self.config.num_modules,
+                # methods=["initialize_carry"],
+            )(
+                self.config.layers,
+                rnn_cls=CELL_TYPES[self.config.model_name],
+                rnn_kwargs=self.config.rnn_kwargs,
+                num_blocks=self.config.num_blocks,
+                fa_type=self.config.fa_type,
+                name="ensemble",
+                layer_config=self.config.layer_config,  # Use the config directly
+            )
 
         if self.config.num_modules > 1:
             # Since we don't know the input shape yet, we just fix the rng here for creating the mask later
@@ -515,13 +518,14 @@ class RNNEnsemble(nn.RNNCellBase):
         # Make distribution for each submodule
         self.dists = make_batched_model(
             DistributionLayer,
-            # Last dim is batch in distrax
             split_rngs=True,
-            out_axes=-1,
+            # Last dim is batch in distrax
+            # out_axes=-2,
             axis_size=self.config.num_modules,
         )(
-            self.config.out_size,
+            self.out_size,
             distribution=self.config.out_dist,
+            scale_bounds=self.config.dist_scale_bounds,
             norm=self.config.layer_config.norm,
             name="dists",
         )
@@ -532,7 +536,7 @@ class RNNEnsemble(nn.RNNCellBase):
             outs = self.mlps_out(outs)
 
         # Combine Ensemble predictions
-        if self.config.out_size is None:
+        if self.out_size is None:
             print("WARNING: RNNEnsemble out_size is None, skipped output processing.")
             return outs
 
@@ -549,7 +553,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 )
             elif self.config.ensemble_method == "dist":
                 combined_dist = distrax.MixtureSameFamily(
-                    distrax.Categorical(logits=jnp.zeros(_dists.loc.shape)), _dists
+                    distrax.Categorical(logits=jnp.zeros(_dists.batch_shape)), _dists
                 )
             else:
                 # Do not combine, return all distributions
@@ -606,15 +610,16 @@ class RNNEnsemble(nn.RNNCellBase):
             init_shape = x.shape[-1:]  # shape without time axis
             h = self.initialize_carry(jax.random.key(0), init_shape)
 
-        # call rnn submodules
-        carry_out, outs = self.ensembles(
-            h, x_tiled, training, *call_args, **call_kwargs
-        )
+        if self.config.model_name is not None:
+            # call rnn submodules
+            h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
+        else:
+            outs = x_tiled
 
         # Post-process and aggregate outputs
-        outs = self._postprocessing(outs, x)
+        outs = self._postprocessing(outs, x_tiled)
 
-        return carry_out, outs
+        return h, outs
 
     def _loss(self, hidden, loss_fn, target, x):
         # Post-process and aggregate outputs
@@ -642,6 +647,8 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
+        if self.config.model_name is None:
+            return None
         input_shape = input_shape[:-1] + (self.config.num_modules, input_shape[-1])
         return self.ensembles.initialize_carry(rng, input_shape)
         # return jax.vmap(

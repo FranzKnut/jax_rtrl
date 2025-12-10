@@ -38,11 +38,11 @@ class TrainingConfig:
             # model_name="rflo",
             # model_name="snap0",
             # model_name="rtrl",
-            # model_name="lrc_snap0",
+            model_name="lrc_snap0",
             # model_name="ltc_snap0",
             # model_name="ltc_rtrl",
             # model_name="lrc_rtrl",
-            model_name="ltc_rflo",
+            # model_name="ltc_rflo",
             layers=(32,),
             num_modules=1,
             num_blocks=1,
@@ -74,8 +74,7 @@ x_train, y_train, x_test, y_test = get_data(cfg.dataset)
 x_train = x_train.transpose(1, 0, 2)
 y_train = y_train.transpose(1, 0, 2)
 
-rnn_config = replace(cfg.rnn_config, out_size=y_train.shape[-1])
-model, params, h0 = make_model(x_train[0], key, rnn_config)
+model, params, h0 = make_model(x_train[0], key, y_train.shape[-1], cfg.rnn_config)
 
 # Compute initial loss
 y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)

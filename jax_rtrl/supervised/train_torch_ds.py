@@ -126,8 +126,7 @@ if __name__ == "__main__":
     x_train = x_train.transpose(1, 0, 2)
     y_train = y_train.transpose(1, 0, 2)
 
-    rnn_config = replace(cfg.rnn_config, out_size=y.shape[-1])
-    model, params, h0 = make_model(x_train[0], key, rnn_config)
+    model, params, h0 = make_model(x_train[0], key, y.shape[-1], cfg.rnn_config)
 
     # @jax.vmap
     def loss(p, __x, __y, rnn_state=None):

@@ -1,4 +1,5 @@
 """Timing of RTRL and RFLO for different hidden sizes."""
+
 import argparse
 import os
 import timeit
@@ -28,14 +29,22 @@ if not os.path.exists(args.outfile) or args.force:
 
     for plast in rows:
         for size in cols:
-            model, params, h0 = make_model(x[0], key, kwargs={"hidden_size": size, "plasticity": plast})
+            # FIXME
+            model, params, h0 = make_model(
+                x[0], key, kwargs={"hidden_size": size, "plasticity": plast}
+            )
 
             def loss(p, __x, __y, carry=None):
                 # MSE loss
                 carry, y_hat = model.apply(p, __x, carry)
                 return jnp.sum((y_hat - __y) ** 2), carry
 
-            t = timeit.timeit(lambda: train_rnn_online(loss, params, (x, y), key_train, h0, num_steps=100), number=3)
+            t = timeit.timeit(
+                lambda: train_rnn_online(
+                    loss, params, (x, y), key_train, h0, num_steps=100
+                ),
+                number=3,
+            )
             runtimes.loc[plast, size] = t
 
     runtimes.to_csv(args.outfile)
@@ -47,5 +56,7 @@ runtimes = runtimes.unstack().reset_index()
 runtimes.columns = ["size", "plasticity", "time"]
 
 plot = sns.barplot(x=runtimes["size"], y=runtimes["time"], hue=runtimes["plasticity"])
-plot.set_yscale('log')
-plot.figure.savefig(os.path.join(os.path.dirname(__file__), "..", "plots", "timing.png"))
+plot.set_yscale("log")
+plot.figure.savefig(
+    os.path.join(os.path.dirname(__file__), "..", "plots", "timing.png")
+)

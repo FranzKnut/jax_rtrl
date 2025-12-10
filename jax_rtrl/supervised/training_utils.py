@@ -159,9 +159,9 @@ def predict(model: nn.RNNCellBase, params, *inputs):
     return y_hat
 
 
-def make_model(initial_input, key, kwargs: RNNEnsembleConfig):
+def make_model(initial_input, key, out_size: int, kwargs: RNNEnsembleConfig):
     # key_model = jrand.split(key, initial_input.shape[0])
-    model = make_batched_model(RNNEnsemble)(kwargs)
+    model = make_batched_model(RNNEnsemble)(kwargs, out_size)
     params = model.init(key, None, initial_input)
     h0 = model.apply(params, key, initial_input.shape, method=model.initialize_carry)
     return model, params, h0
