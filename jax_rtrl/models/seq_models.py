@@ -56,7 +56,6 @@ class RNNEnsembleConfig(Serializable):
         method: Method for combining the outputs of the RNN modules.
         num_blocks: Number of input chunks for parallel processing.
         glu: Whether to use Gated Linear Unit structure.
-        out_size: Output size of the model.
         out_dist: Type of output distribution.
         input_layers: Configuration for input layers (if any).
         output_layers: Configuration for output layers (if any).
@@ -719,16 +718,27 @@ def scan_rnn(
     model: RNNEnsemble,
     params,
     init_carry: jnp.ndarray = None,
+    batched: bool = False,
     *xs,
 ):
-    """Scan RNN over time dimension. Make sure to use parallel scan if possible."""
-    if len(xs[0].shape) > 2:
-        batched = True
+    """Scan RNN over time dimension. Makes sure to use parallel scan if possible.
+
+
+    Parameters:
+        model: RNN model to scan.
+        params: Parameters of the model.
+        init_carry: Initial carry (hidden state) of the model.
+        batched: Whether the input is batched (batch, time, features).
+        xs: Input sequences to the model. Should be time-major if not batched.
+    Returns:
+        outputs: Final carry (hidden state) of the model.
+        y_hats: Output sequences of the model.
+    """
+    if batched:
         obs_time_major = jax.tree.map(
             lambda a: a.transpose(1, 0, *range(2, len(a.shape))), xs
         )
     else:
-        batched = False
         obs_time_major = xs
 
     if (
@@ -738,6 +748,7 @@ def scan_rnn(
 
     else:
         if init_carry is None:
+            print("WARNING: initializing carry with inferred shape. This may be wrong.")
             init_carry = model.apply(
                 params,
                 jax.random.PRNGKey(0),

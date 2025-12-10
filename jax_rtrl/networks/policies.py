@@ -109,6 +109,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         if self.config.use_cnn:
             if img is None:
                 img = x
+                x = None
             img_enc = ConvEncoder(self.config.cnn_config, name="cnn")(img)
             if x is None:
                 input_shape = img_enc.shape[:-1] + (0,)
