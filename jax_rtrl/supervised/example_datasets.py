@@ -157,12 +157,11 @@ def npz_headers(npz):
 def load_into_vault(
     path, vault_name, is_npz=True, num_files: int = None, vault_uid=None
 ) -> tuple[Any, jax.Array]:
-    """Load a set of npz or npz files from a folder and store them in a flashbax Vault.
+    """Load npz files from a folder and store them in a flashbax Vault.
 
     :param name: Path of rollout files
     :param is_npz: If True, the files in the folder are assumed to be .npz files containing multiple fields
     :param num_files: If not None, only loads the specified number of files
-    :param write_freq: How often to write to the vault
     :return: (Vault, file_starts)
     """
     import flashbax as fbx
@@ -190,6 +189,7 @@ def load_into_vault(
                 num_steps_per_file.append(read_array_header(_file)[0][0])
 
     total_num_steps = sum(num_steps_per_file)
+    print(f"Files contain {total_num_steps:d} steps total")
     # add_batch_size = np.gcd.reduce(num_steps_per_file)
 
     with jax.default_device(jax.devices("cpu")[0]):
@@ -233,10 +233,14 @@ def load_into_vault(
             experience_structure=buffer_state.experience,
             vault_uid=vault_uid,
         )
-        if vault.vault_index:
+        if vault.vault_index > total_num_steps:
             return vault, None  # Already exists
+        else:
+            start_file = vault.vault_index // num_steps_per_file[0]
+            if start_file < num_files:
+                print(f"Resuming from file {start_file}")
 
-        for f in tqdm(files[:num_files]):
+        for f in tqdm(files[start_file:num_files]):
             d = np.load(f, allow_pickle=True, mmap_mode="r")
             data = _prep_data(d)
             buffer_state = add_batch(buffer_state, data)
@@ -247,8 +251,6 @@ def load_into_vault(
             [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))]
         ).astype(int)
         file_starts = np.zeros(total_num_steps)[start_indices] = 1
-
-    print(f"Files contained {total_num_steps:d} steps total")
     return vault, file_starts
 
 

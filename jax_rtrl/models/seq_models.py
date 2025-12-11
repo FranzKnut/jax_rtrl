@@ -514,20 +514,21 @@ class RNNEnsemble(nn.RNNCellBase):
                 name="combine_layer",
             )
 
-        # Make distribution for each submodule
-        self.dists = make_batched_model(
-            DistributionLayer,
-            split_rngs=True,
-            # Last dim is batch in distrax
-            # out_axes=-2,
-            axis_size=self.config.num_modules,
-        )(
-            self.out_size,
-            distribution=self.config.out_dist,
-            scale_bounds=self.config.dist_scale_bounds,
-            norm=self.config.layer_config.norm,
-            name="dists",
-        )
+        if self.out_size is not None:
+            # Make distribution for each submodule
+            self.dists = make_batched_model(
+                DistributionLayer,
+                split_rngs=True,
+                # Last dim is batch in distrax
+                # out_axes=-2,
+                axis_size=self.config.num_modules,
+            )(
+                self.out_size,
+                distribution=self.config.out_dist,
+                scale_bounds=self.config.dist_scale_bounds,
+                norm=self.config.layer_config.norm,
+                name="dists",
+            )
 
     def _postprocessing(self, outs, x):
         # Output FF layers
@@ -565,6 +566,7 @@ class RNNEnsemble(nn.RNNCellBase):
         x: jax.Array = None,
         reset: bool = False,
         training: bool = True,
+        split_input: bool = False,
         *call_args,
         **call_kwargs,
     ):  # noqa
@@ -592,7 +594,13 @@ class RNNEnsemble(nn.RNNCellBase):
             _description_
         """
         # Mask x for ensemble modules
-        x_tiled = x[None] * jnp.ones((self.config.num_modules,) + (1,) * (x.ndim))
+        if split_input:
+            assert x.shape[0] == self.config.num_modules, (
+                "Input batch size must be equal to num_modules when split_input is True."
+            )
+            x_tiled = x
+        else:
+            x_tiled = x[None] * jnp.ones((self.config.num_modules,) + (1,) * (x.ndim))
         if self.config.num_modules > 1:
             ensemble_input_mask = jax.random.bernoulli(
                 self.ensemble_input_mask_rng,

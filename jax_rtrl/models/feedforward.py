@@ -216,12 +216,10 @@ class MLPEnsemble(nn.Module):
         return outs
 
 
-def straight_through_one_hot_wrapper(  # pylint: disable=invalid-name
+def straight_through_wrapper(  # pylint: disable=invalid-name
     Distribution,
 ) -> distrax.DistributionLike:
-    """Wrap a distribution to use straight-through gradient for samples.
-
-    Also one-hot encodes the sample in case of Categorical distribution."""
+    """Wrap a distribution to use straight-through gradient for samples."""
 
     def sample(self, seed, sample_shape=()):  # pylint: disable=g-doc-args
         """Sampling with straight through biased gradient estimator.
@@ -281,7 +279,7 @@ class DistributionLayer(nn.Module):
     out_size: int
     distribution: str = "LogStddevNormal"
     layers: tuple[int, ...] = ()
-    eps: float = 0.01  # Unimix epsilon TODO: rename and write doc for Normal
+    eps: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
     scale_bounds: float | tuple[float, float] | None = -2
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
@@ -361,7 +359,7 @@ class DistributionLayer(nn.Module):
             )
             s = probs.shape[-1] if self.distribution == "Categorical" else out_size
             probs = probs * (1 - self.eps) + self.eps / s
-            dist = straight_through_one_hot_wrapper(_dist)(probs=probs)
+            dist = straight_through_wrapper(_dist)(probs=probs)
 
         else:
             dist = _dist(x)

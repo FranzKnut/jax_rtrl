@@ -16,13 +16,9 @@ import jax_rtrl.util.checkpointing
 
 @dataclass(unsafe_hash=True)
 class PolicyConfig(RNNEnsembleConfig):
-    """Config for Policy.
-
-    TODO: this repeats many parameters found in the RNNEnsemble config.
-    """
+    """RNNEnsembleConfig for Policies."""
 
     hidden_size: int = 128
-    num_layers: int = 1
     stochastic: bool = False
     skip_connection: bool = False
     norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
