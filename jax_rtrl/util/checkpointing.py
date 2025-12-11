@@ -102,7 +102,7 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
             lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
         )
         out = checkpointer.save(orbax_path, _params, force=True)
-        # checkpointer.wait_until_finished()
+        checkpointer.wait_until_finished()
         return out
 
     restored_params = None

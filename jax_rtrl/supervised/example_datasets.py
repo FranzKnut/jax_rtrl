@@ -233,6 +233,7 @@ def load_into_vault(
             experience_structure=buffer_state.experience,
             vault_uid=vault_uid,
         )
+        print("Vault index is at:", vault.vault_index)
         if vault.vault_index > total_num_steps:
             return vault, None  # Already exists
         else:
