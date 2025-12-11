@@ -237,7 +237,7 @@ def load_into_vault(
             return vault, None  # Already exists
         else:
             start_file = vault.vault_index // num_steps_per_file[0]
-            if start_file < num_files:
+            if num_files is None or start_file < num_files:
                 print(f"Resuming from file {start_file}")
 
         for f in tqdm(files[start_file:num_files]):
