@@ -359,7 +359,8 @@ class DistributionLayer(nn.Module):
             )
             s = probs.shape[-1] if self.distribution == "Categorical" else out_size
             probs = probs * (1 - self.eps) + self.eps / s
-            dist = straight_through_wrapper(_dist)(probs=probs)
+            # dist = straight_through_wrapper(_dist)(probs=probs)
+            dist = _dist(probs=probs)
 
         else:
             dist = _dist(x)
