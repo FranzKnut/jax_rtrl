@@ -3,4 +3,4 @@ import unittest
 
 class TestSupervised(unittest.TestCase):
     def test_dummy(self):
-        self.assertTrue(True)
+        self.assertTrue(False, "No tests have been implemented for supervised yet.")

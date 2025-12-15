@@ -44,7 +44,9 @@ class Policy(nn.Module):
         out = self(*args, **kwargs)
         if self.use_rnn:
             *rest, out = out
-        action = out[0].sample(seed=rng)
+        if isinstance(out, tuple):
+            out = out[0]
+        action = out.sample(seed=rng)
         if self.use_rnn:
             return *rest, action
         else:
@@ -68,7 +70,7 @@ class PolicyMLP(Policy):
         x = MLPEnsemble(
             out_size=self.a_dim,
             num_modules=self.config.num_modules,
-            out_dist="Normal" if self.config.stochastic else None,
+            out_dist="Normal" if self.config.stochastic else "Deterministic",
             kwargs={"layers": layers, "norm": self.config.norm},
             name="mlp",
             skip_connection=self.config.skip_connection,
@@ -198,10 +200,10 @@ def restore_policy_from_ckpt(
         config = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
         # Try to unpack nested config and make config object
         config = PolicyConfig.from_dict(config.get("policy_config", config))
-    if config.model_name == "mlp":
-        policy = PolicyMLP(config=config)
-    else:
-        policy = PolicyRNN(config=config)
+    # if config.model_name == "mlp":
+    #     policy = PolicyMLP(config=config)
+    # else:
+    policy = PolicyRNN(config=config)
     target = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
     variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
     return policy.bind(variables)

@@ -314,6 +314,9 @@ class DistributionLayer(nn.Module):
 
         x = FADense(out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
 
+        if self.distribution is None:
+            return x
+
         dist_name = self.distribution.replace("Scaled", "")
         _dist = getattr(distrax, dist_name)
 

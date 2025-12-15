@@ -70,7 +70,7 @@ class RNNEnsembleConfig(Serializable):
     layers: tuple[int, ...] | None = None
     num_layers: tuple[int, ...] | None = 1
     hidden_size: int | None = None
-    ensemble_method: Literal["linear", "dist", None] = None
+    ensemble_method: Literal["linear", "dist", "mean"] = "mean"
     num_modules: int = 1
     num_blocks: int = 1
     # out_size: int | None = None
@@ -122,6 +122,16 @@ class RNNEnsembleConfig(Serializable):
         # assert self.hidden_size is not None or self.layers is not None, (
         #     "Either hidden_size or layers must be specified."
         # )
+        if self.layers is not None:
+            if self.num_layers != len(self.layers) or (
+                self.hidden_size is not None
+                and (len(self.layers) != 1 or self.layers[0] != self.hidden_size)
+            ):
+                print(
+                    "WARNING: layers is specified, ignoring num_layers and hidden_size."
+                )
+            self.num_layers = len(self.layers)
+            self.hidden_size = None
         if self.layers is None and self.hidden_size is not None:
             self.layers = (self.hidden_size,) * self.num_layers
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
@@ -474,7 +484,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def setup(self):
         """Initialize submodules."""
-        if self.config.model_name is not None:
+        if self.config.model_name in CELL_TYPES:
             self.ensembles = make_batched_model(
                 FAMultiLayerRNN,
                 split_rngs=True,
@@ -490,6 +500,10 @@ class RNNEnsemble(nn.RNNCellBase):
                 fa_type=self.config.fa_type,
                 name="ensemble",
                 layer_config=self.config.layer_config,  # Use the config directly
+            )
+        elif self.config.model_name is not None:
+            print(
+                f"WARNING: model_name {self.config.model_name} not in CELL_TYPES. No RNN used."
             )
 
         if self.config.num_modules > 1:
@@ -542,15 +556,16 @@ class RNNEnsemble(nn.RNNCellBase):
 
         else:
             _dists = self.dists(outs)
-            if self.config.ensemble_method == "linear":
+            if self.config.ensemble_method == "mean":
+                # Compute mean of outputs
+                combined_dist = jax.tree.map(lambda d: d.mean(axis=0), _dists)
+            elif self.config.ensemble_method == "linear":
                 # Compute linear combination of outputs
                 out_gates = self.combine_layer(
-                    jnp.concatenate([outs.flatten(), x], axis=-1)
+                    jnp.concatenate([outs.flatten(), x.flatten()], axis=-1)
                 )
                 out_gates = jax.nn.softmax(out_gates, axis=-1)
-                combined_dist = jax.tree.map(
-                    lambda d: jnp.sum(d * out_gates[None], axis=-1), _dists
-                )
+                combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), _dists)
             elif self.config.ensemble_method == "dist":
                 combined_dist = distrax.MixtureSameFamily(
                     distrax.Categorical(logits=jnp.zeros(_dists.batch_shape)), _dists
@@ -617,7 +632,7 @@ class RNNEnsemble(nn.RNNCellBase):
             init_shape = x.shape[-1:]  # shape without time axis
             h = self.initialize_carry(jax.random.key(0), init_shape)
 
-        if self.config.model_name is not None:
+        if self.config.model_name in CELL_TYPES:
             # call rnn submodules
             h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
         else:
@@ -654,7 +669,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
-        if self.config.model_name is None:
+        if self.config.model_name not in CELL_TYPES:
             return None
         input_shape = input_shape[:-1] + (self.config.num_modules, input_shape[-1])
         return self.ensembles.initialize_carry(rng, input_shape)

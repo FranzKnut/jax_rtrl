@@ -36,7 +36,7 @@ class TestCTRNNGradients(unittest.TestCase):
 
         self.multi_step_loss_fn = jax.grad(
             lambda params, h: mse_loss(
-                scan_rnn(self.cell, params, h, self.input_data)[1], self.target
+                scan_rnn(self.cell, params, h, False, self.input_data)[1], self.target
             )
         )
 

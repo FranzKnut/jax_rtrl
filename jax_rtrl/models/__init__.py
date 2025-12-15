@@ -79,7 +79,7 @@ def make_rnn_ensemble_config(
     return RNNEnsembleConfig(
         model_name=model_name,
         layers=(hidden_size,) * num_layers,
-        out_size=out_size,
+        # out_size=out_size,
         out_dist="Normal" if stochastic else "Deterministic",
         rnn_kwargs=rnn_kwargs,
         fa_type="fa" if f_align else "bp",
