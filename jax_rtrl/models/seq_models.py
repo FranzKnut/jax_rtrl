@@ -70,7 +70,7 @@ class RNNEnsembleConfig(Serializable):
     layers: tuple[int, ...] | None = None
     num_layers: tuple[int, ...] | None = 1
     hidden_size: int | None = None
-    ensemble_method: Literal["linear", "dist", "mean"] = "mean"
+    ensemble_method: Literal["linear", "dist", "mean", None] = "mean"
     num_modules: int = 1
     num_blocks: int = 1
     # out_size: int | None = None

@@ -18,7 +18,6 @@ import jax_rtrl.util.checkpointing
 class PolicyConfig(RNNEnsembleConfig):
     """RNNEnsembleConfig for Policies."""
 
-    hidden_size: int = 128
     stochastic: bool = False
     skip_connection: bool = False
     norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
@@ -178,7 +177,7 @@ class PolicyRTRL(PolicyRNN):
 
 
 def restore_policy_from_ckpt(
-    ckpt_path: str, config: PolicyConfig = None, **inputs
+    ckpt_path: str, a_dim: int, config: PolicyConfig = None, **inputs
 ) -> Policy:
     """Restore a policy from a checkpoint.
 
@@ -203,7 +202,7 @@ def restore_policy_from_ckpt(
     # if config.model_name == "mlp":
     #     policy = PolicyMLP(config=config)
     # else:
-    policy = PolicyRNN(config=config)
+    policy = PolicyRNN(a_dim=a_dim, config=config)
     target = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
     variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
     return policy.bind(variables)

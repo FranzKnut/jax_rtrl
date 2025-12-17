@@ -1,7 +1,5 @@
 """Utility functions for JAX models."""
 
-import json
-import os
 import re
 from functools import partial
 
@@ -11,7 +9,16 @@ import jax.random as jrandom
 import flax.linen as nn
 import jax.random as jrand
 import optax
-import orbax.checkpoint
+from pprint import pprint
+
+
+def pprint_params(params):
+    def mask_leaves(d):
+        if isinstance(d, dict):
+            return {k: mask_leaves(v) for k, v in d.items()}
+        return d.shape  # Replace all non-dict leaves
+
+    pprint(mask_leaves(params))
 
 
 class JaxRng:
