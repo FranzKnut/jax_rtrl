@@ -280,7 +280,7 @@ class DistributionLayer(nn.Module):
     distribution: str = "LogStddevNormal"
     layers: tuple[int, ...] = ()
     eps: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
-    scale_bounds: float | tuple[float, float] | None = -2
+    scale_bounds: float | tuple[float, float] | None = 0
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()

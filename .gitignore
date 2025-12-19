@@ -162,3 +162,5 @@ cython_debug/
 tmp/
 logs/
 data/
+.aim/
+output/
