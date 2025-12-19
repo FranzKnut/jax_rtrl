@@ -48,10 +48,7 @@ class ConvConfig(Serializable):
         if layers is None:
             layers = conv_presets[self.preset]
 
-        return [
-            ConvLayerConfig(features=f, kernel_size=ks)
-            for f, ks in conv_presets[self.preset]
-        ]
+        return [ConvLayerConfig(*c) for c in conv_presets[self.preset]]
 
 
 class ConvEncoder(nn.Module):
