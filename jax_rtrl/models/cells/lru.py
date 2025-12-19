@@ -108,6 +108,8 @@ class LRUCell(nn.Module):
         # Running the LRU + output projection
         # For details on parallel scan, check discussion in Smith et al (2022).
         inputs = jnp.reshape(inputs, (-1, input_dim))
+        if resets is not None:
+            resets = jnp.reshape(resets, (-1))
         Lambda_elements = jnp.repeat(Lambda[None, ...], inputs.shape[0], axis=0)
         Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs)
         if resets is None:

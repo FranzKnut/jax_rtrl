@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from functools import partial
 import re
 from typing import Literal
-from simple_parsing import Serializable, mutable_field
+from simple_parsing import mutable_field
+from simple_parsing.helpers import FrozenSerializable
 from ml_collections import FrozenConfigDict
 
 
@@ -43,8 +44,8 @@ class SequenceLayerConfig:
     learnable_scale_rnn_out: bool = False
 
 
-@dataclass
-class RNNEnsembleConfig(Serializable):
+@dataclass(frozen=True)
+class RNNEnsembleConfig(FrozenSerializable):
     """Configuration for RNNEnsemble.
 
     Attributes:
@@ -96,7 +97,9 @@ class RNNEnsembleConfig(Serializable):
             if match_plasticity:
                 self.rnn_kwargs["plasticity"] = match_plasticity.group(1)
             elif self.model_name in ["s5", "s5_rtrl"]:
-                self.rnn_kwargs = {"config": S5Config(**self.rnn_kwargs)}
+                object.__setattr__(
+                    self, "rnn_kwargs", {"config": S5Config(**self.rnn_kwargs)}
+                )
 
             # Set ODE type for given model_name
             match = self.model_name and re.search(r"(lrc|ltc|fltc)", self.model_name)
@@ -121,7 +124,9 @@ class RNNEnsembleConfig(Serializable):
                     )
         assert self.model_name is None or (
             self.hidden_size is not None or self.layers is not None
-        ), f"Either hidden_size or layers must be specified for model {self.model_name}."
+        ), (
+            f"Either hidden_size or layers must be specified for model {self.model_name}."
+        )
         if self.layers is not None:
             if self.num_layers != len(self.layers) or (
                 self.hidden_size is not None
@@ -130,10 +135,10 @@ class RNNEnsembleConfig(Serializable):
                 print(
                     "WARNING: layers is specified, ignoring num_layers and hidden_size."
                 )
-            self.num_layers = len(self.layers)
-            self.hidden_size = None
+            object.__setattr__(self, "num_layers", len(self.layers))
+            object.__setattr__(self, "hidden_size", None)
         if self.layers is None and self.hidden_size is not None:
-            self.layers = (self.hidden_size,) * self.num_layers
+            object.__setattr__(self, "layers", (self.hidden_size,) * self.num_layers)
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
 
@@ -174,11 +179,10 @@ class SequenceLayer(nn.Module):
         if self.config.skip_connection:
             inputs = self._input(inputs)
 
-        x = get_normalization_fn(self.config.norm, training=training)(
-            inputs
-        )  # input normalization
+        # input normalization
+        x = get_normalization_fn(self.config.norm, training=training)(inputs)
         x = nn.Dropout(
-            self.config.dropout, broadcast_dims=[0], deterministic=not training
+            self.config.dropout, broadcast_dims=[0], deterministic=~training
         )(x)  # input dropout
 
         # call seq model
@@ -203,7 +207,7 @@ class SequenceLayer(nn.Module):
 
         x = get_normalization_fn(self.config.norm, training=training)(x)
         x = nn.Dropout(
-            self.config.dropout, broadcast_dims=[0], deterministic=not training
+            self.config.dropout, broadcast_dims=[0], deterministic=~training
         )(x)  # input dropout
         return hidden, x
 
@@ -480,16 +484,20 @@ class RNNEnsemble(nn.RNNCellBase):
 
     config: RNNEnsembleConfig
     out_size: int | None = None
+    split_input: bool = False  # Whether to split input among ensemble modules
     num_submodule_extra_args: int = 0  # set to number of additional args for submodule!
 
     def setup(self):
         """Initialize submodules."""
         if self.config.model_name in CELL_TYPES:
+            in_axes = (0, 0, None)
+            if self.config.model_name in ["lru"]:
+                in_axes += (None,)
             self.ensembles = make_batched_model(
                 FAMultiLayerRNN,
                 split_rngs=True,
                 # [h, x, training, (*call_args, **call_kwargs)]
-                in_axes=(0, 0, None) + (None,) * self.num_submodule_extra_args,
+                in_axes=in_axes,
                 axis_size=self.config.num_modules,
                 # methods=["initialize_carry"],
             )(
@@ -573,15 +581,14 @@ class RNNEnsemble(nn.RNNCellBase):
             else:
                 # Do not combine, return all distributions
                 return _dists
+
         return combined_dist, _dists
 
     def __call__(
         self,
         h: jax.Array | None = None,
         x: jax.Array = None,
-        reset: bool = False,
         training: bool = True,
-        split_input: bool = False,
         *call_args,
         **call_kwargs,
     ):  # noqa
@@ -609,7 +616,7 @@ class RNNEnsemble(nn.RNNCellBase):
             _description_
         """
         # Mask x for ensemble modules
-        if split_input:
+        if self.split_input:
             assert x.shape[0] == self.config.num_modules, (
                 "Input batch size must be equal to num_modules when split_input is True."
             )
@@ -634,6 +641,11 @@ class RNNEnsemble(nn.RNNCellBase):
 
         if self.config.model_name in CELL_TYPES:
             # call rnn submodules
+            if self.config.model_name in ["lru"] and len(call_args) == 0:
+                # Add reset argument for SSMs
+                # The ensembles always need the same number of arguments.
+                # If no reset flag is given, we set it to False by default.
+                call_args = (jnp.zeros(()),)
             h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
         else:
             outs = x_tiled
@@ -641,6 +653,19 @@ class RNNEnsemble(nn.RNNCellBase):
         # Post-process and aggregate outputs
         outs = self._postprocessing(outs, x_tiled)
 
+        if (
+            self.out_size is not None
+            and self.config.model_name in ["lru"]
+            and x_tiled.ndim >= 3
+        ):
+            # HACK: SSMs compute output sequence which messes with the ordering of dimensions
+            def _try_swap(a):
+                try:
+                    return jnp.swapaxes(a, 1, 0)
+                except Exception:
+                    return a
+            _tmp = jax.tree.map(_try_swap, outs[1])
+            outs = (outs[0], _tmp)
         return h, outs
 
     def _loss(self, hidden, loss_fn, target, x):

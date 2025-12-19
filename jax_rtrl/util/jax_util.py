@@ -188,7 +188,7 @@ def get_normalization_fn(norm_type, training=True, **kwargs):
         return nn.LayerNorm(**kwargs)
     elif norm_type == "batch":
         return nn.BatchNorm(
-            use_running_average=not training, axis_name="batch", **kwargs
+            use_running_average=~training, axis_name="batch", **kwargs
         )
     else:
         raise ValueError(f"Unknown normalization type: {norm_type}")

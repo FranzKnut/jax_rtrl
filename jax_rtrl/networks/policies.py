@@ -14,7 +14,7 @@ import jax_rtrl.util
 import jax_rtrl.util.checkpointing
 
 
-@dataclass(unsafe_hash=True)
+@dataclass(unsafe_hash=True, frozen=True)
 class PolicyConfig(RNNEnsembleConfig):
     """RNNEnsembleConfig for Policies."""
 
