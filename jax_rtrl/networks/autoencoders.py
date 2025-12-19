@@ -6,18 +6,29 @@ import jax
 import jax.numpy as jnp
 import jax.random as jrandom
 import numpy as np
+from typing import Literal
 from flax import linen as nn
 from jax.nn import softmax
 from jax_rtrl.models.cells.ctrnn import CTRNNCell
 from jax_rtrl.util.checkpointing import restore_config, restore_params
 
-conv_presets = {"small": [(16, (3, 3)), (16, (3, 3)), (16, (3, 3))]}
+conv_presets = {
+    "legacy_small": [(16, (3, 3)), (16, (3, 3)), (16, (3, 3))],
+    "small": [
+        (16, (3, 3), 2),
+        (16, (3, 3), 2),
+        (16, (3, 3), 2),
+    ],
+}
 
 
 @dataclass
 class ConvLayerConfig:
     features: int = 16
     kernel_size: tuple[int, int] = (3, 3)
+    strides: tuple[int, int] | int = 1
+    pooling: Literal["avg", "max", None] = None
+    pool_size: tuple[int, int] | int = (2, 2)
 
 
 @dataclass
@@ -55,8 +66,17 @@ class ConvEncoder(nn.Module):
         """Encode given Image."""
         # Encode observation using CNN
         for l_conf in self.config.get_layers():
-            x = nn.Conv(features=l_conf.features, kernel_size=l_conf.kernel_size)(x)
-            x = nn.gelu(x)
+            x = nn.Conv(
+                features=l_conf.features,
+                kernel_size=l_conf.kernel_size,
+                strides=l_conf.strides,
+            )(x)
+            x = nn.gelu(x)  # Apply activation function
+            # Optionally apply Pooling
+            if l_conf.pooling:
+                _pool_fn = nn.max_pool if l_conf.pooling == "max" else nn.avg_pool
+                x = _pool_fn(x, window_shape=l_conf.pool_size)
+
         x = x.flatten()  # Image grid to single feature vector
         return nn.Dense(features=self.config.latent_size)(x)
 

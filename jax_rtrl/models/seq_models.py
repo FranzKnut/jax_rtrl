@@ -119,9 +119,9 @@ class RNNEnsembleConfig(Serializable):
                     self.rnn_kwargs["interneurons"] = self.hidden_size - (
                         self.out_size + 1
                     )
-        # assert self.hidden_size is not None or self.layers is not None, (
-        #     "Either hidden_size or layers must be specified."
-        # )
+        assert self.model_name is None or (
+            self.hidden_size is not None or self.layers is not None
+        ), f"Either hidden_size or layers must be specified for model {self.model_name}."
         if self.layers is not None:
             if self.num_layers != len(self.layers) or (
                 self.hidden_size is not None
