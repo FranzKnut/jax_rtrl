@@ -156,7 +156,7 @@ def npz_headers(npz):
 
 def load_into_vault(
     path, vault_name, is_npz=True, num_files: int = None, vault_uid=None
-) -> tuple[Any, jax.Array]:
+):
     """Load npz files from a folder and store them in a flashbax Vault.
 
     :param name: Path of rollout files
@@ -192,67 +192,70 @@ def load_into_vault(
     print(f"Files contain {total_num_steps:d} steps total")
     # add_batch_size = np.gcd.reduce(num_steps_per_file)
 
-    with jax.default_device(jax.devices("cpu")[0]):
-        buffer = fbx.make_trajectory_buffer(
-            add_batch_size=1,
-            max_length_time_axis=max(num_steps_per_file) + 1,
-            sample_batch_size=1,
-            sample_sequence_length=1,
-            min_length_time_axis=1,
-            period=1,
-        )
+    def _make_vault() -> tuple[Vault, jax.Array]:
+        with jax.default_device(jax.devices("cpu")[0]):
+            buffer = fbx.make_trajectory_buffer(
+                add_batch_size=1,
+                max_length_time_axis=max(num_steps_per_file) + 1,
+                sample_batch_size=1,
+                sample_sequence_length=1,
+                min_length_time_axis=1,
+                period=1,
+            )
 
-        add_batch = jax.jit(buffer.add, donate_argnums=0)
+            add_batch = jax.jit(buffer.add, donate_argnums=0)
 
-        d = jnp.load(files[0], allow_pickle=True)
+            d = jnp.load(files[0], allow_pickle=True)
 
-        class Data(NamedTuple):
-            img: jnp.ndarray
-            observation: jnp.ndarray
-            action: jnp.ndarray
+            class Data(NamedTuple):
+                img: jnp.ndarray
+                observation: jnp.ndarray
+                action: jnp.ndarray
 
-        def _prep_data(_d):
-            if is_npz:
-                _d = dict(_d)
-            _d = {
-                k: jnp.array(v)
-                for k, v in _d.items()
-                if k in ["observation", "action", "data"]
-            }
-            _d["img"] = _d["data"]
-            del _d["data"]
-            _d = jax.tree_util.tree_map(lambda x: x[None], _d)
-            return Data(**_d)
+            def _prep_data(_d):
+                if is_npz:
+                    _d = dict(_d)
+                _d = {
+                    k: jnp.array(v)
+                    for k, v in _d.items()
+                    if k in ["observation", "action", "data"]
+                }
+                _d["img"] = _d["data"]
+                del _d["data"]
+                _d = jax.tree_util.tree_map(lambda x: x[None], _d)
+                return Data(**_d)
 
-        init_data = jax.tree_util.tree_map(lambda x: x[0][0], _prep_data(d))
-        buffer_state = buffer.init(init_data)
+            init_data = jax.tree_util.tree_map(lambda x: x[0][0], _prep_data(d))
+            buffer_state = buffer.init(init_data)
 
-        # Create vault
-        vault = Vault(
-            vault_name=vault_name,
-            experience_structure=buffer_state.experience,
-            vault_uid=vault_uid,
-        )
-        print("Vault index is at:", vault.vault_index)
-        if vault.vault_index > total_num_steps:
-            return vault, None  # Already exists
-        else:
-            start_file = vault.vault_index // num_steps_per_file[0]
-            if num_files is None or start_file < num_files:
-                print(f"Resuming from file {start_file}")
+            # Create vault
+            vault = Vault(
+                vault_name=vault_name,
+                experience_structure=buffer_state.experience,
+                vault_uid=vault_uid,
+            )
+            print("Vault index is at:", vault.vault_index)
+            if vault.vault_index > total_num_steps:
+                return vault, None  # Already exists
+            else:
+                start_file = vault.vault_index // num_steps_per_file[0]
+                if num_files is None or start_file < num_files:
+                    print(f"Resuming from file {start_file}")
 
-        for f in tqdm(files[start_file:num_files]):
-            d = np.load(f, allow_pickle=True, mmap_mode="r")
-            data = _prep_data(d)
-            buffer_state = add_batch(buffer_state, data)
-            vault.write(buffer_state)
+            for f in tqdm(files[start_file:num_files]):
+                d = np.load(f, allow_pickle=True, mmap_mode="r")
+                data = _prep_data(d)
+                buffer_state = add_batch(buffer_state, data)
+                vault.write(buffer_state)
 
-        # An Array that is zero everywhere except at the start of each file
-        start_indices = np.concatenate(
-            [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))]
-        ).astype(int)
-        file_starts = np.zeros(total_num_steps)[start_indices] = 1
-    return vault, file_starts
+            # An Array that is zero everywhere except at the start of each file
+            start_indices = np.concatenate(
+                [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))]
+            ).astype(int)
+            file_starts = np.zeros(total_num_steps)[start_indices] = 1
+            return vault, file_starts
+
+    return _make_vault()
 
 
 # Toy datasets -----------------------------------------------------------------
