@@ -17,13 +17,14 @@ import jax_rtrl.util.checkpointing
 @dataclass(unsafe_hash=True, frozen=True)
 class PolicyConfig(RNNEnsembleConfig):
     """RNNEnsembleConfig for Policies."""
-
-    stochastic: bool = False
+    
+    # TODO: remove the mlp specific fields and use PolicyRNN only?
     skip_connection: bool = False
     norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
 
     # CNN specific
     use_cnn: bool = False
+    latent_size: int = 32
     cnn_config: ConvConfig = field(default_factory=ConvConfig)
 
 
@@ -69,10 +70,10 @@ class PolicyMLP(Policy):
         x = MLPEnsemble(
             out_size=self.a_dim,
             num_modules=self.config.num_modules,
-            out_dist="Normal" if self.config.stochastic else "Deterministic",
+            out_dist=self.config.out_dist,
             kwargs={"layers": layers, "norm": self.config.norm},
             name="mlp",
-            skip_connection=self.config.skip_connection,
+            # skip_connection=self.config.skip_connection,
         )(x, training)
         return x
 
@@ -133,7 +134,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         """Initialize the RNN cell carry."""
         if self.config.use_cnn:
             input_shape = input_shape[:-1] + (
-                self.config.cnn_config.latent_size + input_shape[-1],
+                self.config.latent_size + input_shape[-1],
             )
         return self.rnn.initialize_carry(rng, input_shape)
 

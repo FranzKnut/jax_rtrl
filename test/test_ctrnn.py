@@ -13,7 +13,10 @@ A_TOL = 1e-5
 class TestCTRNNGradients(unittest.TestCase):
     def setUp(self):
         self.cell = OnlineCTRNNCell(
-            num_units=5, plasticity="bptt", ode_type="murray", wiring="unconnected"
+            num_units=5,
+            plasticity="bptt",
+            ode_type="murray",
+            wiring="diagonal",
         )
         self.input_data = jax.random.normal(jax.random.PRNGKey(0), (10, 3))
         self.target = jax.random.normal(jax.random.PRNGKey(1), (5,))

@@ -25,8 +25,8 @@ conv_presets = {
 @dataclass
 class ConvLayerConfig:
     features: int = 16
-    kernel_size: tuple[int, int] = (3, 3)
-    strides: tuple[int, int] | int = 1
+    kernel_size: tuple[int, ...] = (3, 3)
+    strides: tuple[int, ...] | int = 1
     pooling: Literal["avg", "max", None] = None
     pool_size: tuple[int, int] | int = (2, 2)
 
@@ -34,7 +34,7 @@ class ConvLayerConfig:
 @dataclass
 class ConvConfig(Serializable):
     preset: str | None = "small"
-    layers: list[tuple[int, tuple[int, int]]] | None = None
+    layers: list[tuple[int, tuple[int, ...]], int] | None = None
     latent_size: int = 16
 
     def __post_init__(self):
@@ -50,12 +50,22 @@ class ConvConfig(Serializable):
 
         return [ConvLayerConfig(*c) for c in conv_presets[self.preset]]
 
+    def get_strides(self) -> int:
+        """Get total stride along given axis."""
+        all_strides = [np.array(_l.strides) for _l in self.get_layers()]
+        num_dims = max(1, max([s.ndim for s in all_strides]))
+        strides = np.ones(num_dims, dtype=int)
+        for l_conf in self.get_layers():
+            strides *= l_conf.strides
+        return strides
+
 
 class ConvEncoder(nn.Module):
     """2D-Convolutional Encoder.
 
     https://uvadlc-notebooks.readthedocs.io/en/latest/tutorial_notebooks/JAX/tutorial9/AE_CIFAR10.html"""
 
+    latent_size: int = 16
     config: ConvConfig = field(default_factory=ConvConfig)
 
     @nn.compact
@@ -75,7 +85,7 @@ class ConvEncoder(nn.Module):
                 x = _pool_fn(x, window_shape=l_conf.pool_size)
 
         x = x.flatten()  # Image grid to single feature vector
-        return nn.Dense(features=self.config.latent_size)(x)
+        return nn.Dense(features=self.latent_size)(x)
 
 
 class ConvDecoder(nn.Module):
@@ -85,34 +95,77 @@ class ConvDecoder(nn.Module):
     """
 
     img_shape: tuple[int]
-    c_hid: int = 8
     tanh_output: bool = False  # sigmoid otherwise
+    config: ConvConfig = field(default_factory=ConvConfig)
 
     @nn.compact
     def __call__(self, x):
         """Decode Image from latent vector."""
-        xy_shape = np.array(self.img_shape[:2]) / (
-            2 * 2
-        )  # initial img shape depends on number of layers
+        # initial img shape depends on number of layers
+        xy_shape = np.array(self.img_shape[:2]) / self.config.get_strides()
         if any(xy_shape != xy_shape.astype(int)):
             raise ValueError(
-                "The img x- and y-shapes must be divisible by number of expanding layers."
+                "The img_shape must be divisible by sum of strides of the decoding layers."
             )
 
-        x = nn.Dense(features=int(xy_shape.prod()) * self.c_hid)(x)
+        x = nn.Dense(features=int(xy_shape.prod()))(x)
         x = nn.relu(x)
         x = x.reshape(*[int(n) for n in xy_shape], -1)
-        x = nn.ConvTranspose(features=4 * self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=2 * self.c_hid, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.ConvTranspose(features=self.c_hid, kernel_size=(3, 3), strides=2)(x)
-        x = nn.relu(x)
+        # Decode observation using transposed CNN
+        for l_conf in self.config.get_layers():
+            x = nn.ConvTranspose(
+                features=l_conf.features,
+                kernel_size=l_conf.kernel_size,
+                strides=l_conf.strides,
+            )(x)
+            x = nn.gelu(x)  # Apply activation function
+            # Optionally apply Pooling
+            if l_conf.pooling:
+                _pool_fn = nn.max_pool if l_conf.pooling == "max" else nn.avg_pool
+                x = _pool_fn(x, window_shape=l_conf.pool_size)
+
         x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3))(x)
         x = nn.tanh(x) if self.tanh_output else nn.sigmoid(x)
         return x
+
+
+@dataclass
+class AutoencoderConfig(Serializable):
+    latent_size: int = 32
+    encoder_cfg: ConvConfig = field(default_factory=ConvConfig)
+    decoder_cfg: ConvConfig = field(default_factory=ConvConfig)
+
+
+class Autoencoder(nn.Module):
+    """Deterministic 2D-Autoencoder for dimension reduction."""
+
+    img_shape: tuple[int]
+    config: AutoencoderConfig = field(default_factory=AutoencoderConfig)
+    tanh_output: bool = False
+
+    def setup(self) -> None:
+        """Initialize submodules."""
+        super().setup()
+        self.enc = ConvEncoder(self.config.latent_size, self.config.encoder_cfg)
+        self.dec = ConvDecoder(
+            self.img_shape,
+            tanh_output=self.tanh_output,
+            config=self.config.decoder_cfg,
+        )
+
+    def encode(self, x, *_):
+        """Encode given Image."""
+        return self.enc(x)
+
+    def decode(self, latent):
+        """Decode Image from latent vector."""
+        return self.dec(latent)
+
+    def __call__(self, x, *_):
+        """Encode then decode. Returns prediction and latent vector."""
+        latent = self.enc(x)
+        pred = self.dec(latent)
+        return pred, latent
 
 
 class Autoencoder_RNN(nn.Module):
@@ -157,38 +210,6 @@ class Autoencoder_RNN(nn.Module):
         else:
             pred = nn.Dense(features=obs_size)(latent)
         return carry, pred, latent
-
-
-@dataclass
-class AutoencoderConfig(Serializable):
-    encoder_params: ConvConfig = field(default_factory=ConvConfig)
-
-
-class Autoencoder(nn.Module):
-    """Deterministic 2D-Autoencoder for dimension reduction."""
-
-    img_shape: tuple[int]
-    config: AutoencoderConfig = field(default_factory=AutoencoderConfig)
-
-    def setup(self) -> None:
-        """Initialize submodules."""
-        super().setup()
-        self.enc = ConvEncoder(self.config.encoder_params)
-        self.dec = ConvDecoder(self.img_shape)
-
-    def encode(self, x, *_):
-        """Encode given Image."""
-        return self.enc(x)
-
-    def decode(self, latent):
-        """Decode Image from latent vector."""
-        return self.dec(latent)
-
-    def __call__(self, x, *_):
-        """Encode then decode. Returns prediction and latent vector."""
-        latent = self.enc(x)
-        pred = self.dec(latent)
-        return pred, latent
 
 
 @dataclass
