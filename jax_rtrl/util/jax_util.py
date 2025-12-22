@@ -187,9 +187,7 @@ def get_normalization_fn(norm_type, training=True, **kwargs):
     if norm_type == "layer":
         return nn.LayerNorm(**kwargs)
     elif norm_type == "batch":
-        return nn.BatchNorm(
-            use_running_average=~training, axis_name="batch", **kwargs
-        )
+        return nn.BatchNorm(use_running_average=~training, axis_name="batch", **kwargs)
     else:
         raise ValueError(f"Unknown normalization type: {norm_type}")
 
@@ -221,8 +219,7 @@ def tree_stack(trees, axis=0):
 def symmetric_uniform_init(lim, dtype=jnp.float_):
     def init(key, shape, dtype=dtype, out_sharding=None):
         # dtype = dtypes.canonicalize_dtype(dtype)
-        return jrand.uniform(
-            key, shape, dtype, out_sharding=out_sharding, minval=-lim, maxval=lim
-        )
+        # out_sharding=out_sharding
+        return jrand.uniform(key, shape, dtype, minval=-lim, maxval=lim)
 
     return init

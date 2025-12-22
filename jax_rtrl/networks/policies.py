@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import auto
 from chex import PRNGKey
 from jax import numpy as jnp
 
@@ -6,7 +7,12 @@ from flax import linen as nn
 import jax
 
 import jax_rtrl
-from jax_rtrl.networks.autoencoders import ConvEncoder, ConvConfig
+from jax_rtrl.networks.autoencoders import (
+    Autoencoder,
+    AutoencoderConfig,
+    ConvEncoder,
+    ConvConfig,
+)
 from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
 
@@ -17,7 +23,7 @@ import jax_rtrl.util.checkpointing
 @dataclass(unsafe_hash=True, frozen=True)
 class PolicyConfig(RNNEnsembleConfig):
     """RNNEnsembleConfig for Policies."""
-    
+
     # TODO: remove the mlp specific fields and use PolicyRNN only?
     skip_connection: bool = False
     norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
@@ -70,10 +76,10 @@ class PolicyMLP(Policy):
         x = MLPEnsemble(
             out_size=self.a_dim,
             num_modules=self.config.num_modules,
-            out_dist=self.config.out_dist,
+            out_dist="Normal" if self.config.stochastic else "Deterministic",
             kwargs={"layers": layers, "norm": self.config.norm},
             name="mlp",
-            # skip_connection=self.config.skip_connection,
+            skip_connection=self.config.skip_connection,
         )(x, training)
         return x
 
@@ -110,7 +116,11 @@ class PolicyRNN(nn.RNNCellBase, Policy):
             if img is None:
                 img = x
                 x = None
-            img_enc = ConvEncoder(self.config.cnn_config, name="cnn")(img)
+            img_enc = ConvEncoder(
+                self.config.latent_size,
+                self.config.cnn_config,
+                name="cnn",
+            )(img)
             if x is None:
                 input_shape = img_enc.shape[:-1] + (0,)
                 x = img_enc
@@ -199,13 +209,38 @@ def restore_policy_from_ckpt(
         The restored policy module.
     """
     if config is None:
-        config = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
+        config_dict = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
         # Try to unpack nested config and make config object
-        config = PolicyConfig.from_dict(config.get("policy_config", config))
+        with_autoencoder = config_dict.get("use_autoencoder", False)
+        if with_autoencoder:
+            autoencoder_config = AutoencoderConfig.from_dict(
+                config_dict.get("autoencoder_cfg")
+            )
+        policy_config = PolicyConfig.from_dict(
+            config_dict.get("policy_config", config_dict)
+        )
     # if config.model_name == "mlp":
     #     policy = PolicyMLP(config=config)
     # else:
-    policy = PolicyRNN(a_dim=a_dim, config=config)
-    target = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
+
+    if with_autoencoder:
+        autoencoder = Autoencoder(
+            inputs["img"].shape, config=autoencoder_config, name="autoencoder"
+        )
+        autoencoder_params = autoencoder.lazy_init(jax.random.PRNGKey(0), inputs["img"])
+        inputs["x"] = jnp.zeros(autoencoder_config.latent_size)
+        target = (autoencoder_params,)
+    else:
+        target = ()
+
+    policy = PolicyRNN(a_dim=a_dim, config=policy_config)
+    policy_params = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
+    target = (policy_params,) + target
+
     variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
-    return policy.bind(variables)
+    policy = policy.bind(variables[0])
+    if with_autoencoder:
+        autoencoder = autoencoder.bind(variables[1])
+        return autoencoder, policy
+    else:
+        return policy

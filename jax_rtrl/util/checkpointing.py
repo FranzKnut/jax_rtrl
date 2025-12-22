@@ -20,7 +20,7 @@ def restore_remote(restore_path: str):
     else:
         api = wandb.Api()
         ancestor = api.artifact(path)
-    restore_path = ancestor.download(root="artifacts/restored")
+    restore_path = ancestor.download(root=os.path.join("artifacts/restored", path))
     if not os.path.exists(restore_path):
         raise FileNotFoundError(f"Checkpoint not found: {restore_path}")
     return restore_path
