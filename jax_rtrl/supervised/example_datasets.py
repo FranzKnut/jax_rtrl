@@ -215,8 +215,15 @@ def load_into_vault(
             def _prep_data(_d):
                 if is_npz:
                     _d = dict(_d)
+                    # For compatibility
+                    _d["observation"] = _d.get(
+                        "observation",
+                        _d.get("obs") if "img" in _d else (),
+                    )
+                    _d["action"] = _d.get("action", _d.get("act"))
+                    _d["data"] = _d.get("data", _d.get("img", _d.get("obs")))
                 _d = {
-                    k: jnp.array(v)
+                    k: jnp.array(jnp.nan_to_num(v))
                     for k, v in _d.items()
                     if k in ["observation", "action", "data"]
                 }
