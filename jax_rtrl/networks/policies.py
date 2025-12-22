@@ -191,7 +191,7 @@ class PolicyRTRL(PolicyRNN):
 
 def restore_policy_from_ckpt(
     ckpt_path: str, a_dim: int, config: PolicyConfig = None, **inputs
-) -> Policy:
+) -> Policy | tuple[Autoencoder, Policy]:
     """Restore a policy from a checkpoint.
 
     Parameters

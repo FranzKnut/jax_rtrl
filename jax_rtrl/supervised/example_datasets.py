@@ -4,22 +4,24 @@ import os
 import re
 import zipfile
 from collections.abc import Iterable
+from chex import PRNGKey
 import jax
 
-from typing import Any, NamedTuple
+from typing import Any
 import numpy as np
-from numpy.lib._version import NumpyVersion
 from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
 
+from jax_rl_util.util.logging_util import tree_stack
 
-def split_train_test(dataset, percent_eval: float = 0.2, shuffle: bool = False):
+
+def split_train_test(dataset, fraction_eval: float = 0.2, shuffle: bool = False):
     """Split the dataset into train and test sets along the first axis.
 
     Train episodes are taken from the beginning of the dataset, test episodes from the end.
     :param dataset: Pytree
-    :param percent_eval: float
+    :param fraction_eval: float
     :return: train and eval tuples of (inputs, target)
     """
     if shuffle:
@@ -29,7 +31,7 @@ def split_train_test(dataset, percent_eval: float = 0.2, shuffle: bool = False):
         )
         dataset = jax.tree.map(lambda x: x[perm], dataset)
     dataset_size = jax.tree.flatten(dataset)[0][0].shape[0]
-    train_size = int(dataset_size * (1 - percent_eval))
+    train_size = int(dataset_size * (1 - fraction_eval))
     dataset_train = jax.tree.map(lambda x: x[:train_size], dataset)
     dataset_eval = jax.tree.map(lambda x: x[train_size:], dataset)
 
@@ -77,12 +79,14 @@ def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=
         Tuple[Array, ...]
     """
     first_set = data if isinstance(data, jax.Array) else data[0]
+    if isinstance(first_set, dict):
+        first_set = list(first_set.values())[0]
     starts = jnp.arange(len(first_set) - seq_len + 1, step=seq_len - overlap)
-    sliced = [
-        jax.vmap(lambda start: jax.lax.dynamic_slice(d, (start,), (seq_len,)))(starts)
-        for d in data
-    ]
-    return [jnp.stack(s, axis=0) for s in sliced]
+    sliced = jax.tree.map(
+        lambda d: jnp.stack([d[s : s + seq_len] for s in starts]),
+        data,
+    )
+    return sliced
 
 
 def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=False):
@@ -155,7 +159,12 @@ def npz_headers(npz):
 
 
 def load_into_vault(
-    path, vault_name, is_npz=True, num_files: int = None, vault_uid=None
+    path,
+    vault_name,
+    is_npz=True,
+    num_files: int = None,
+    vault_uid=None,
+    data_transform_fn=None,
 ):
     """Load npz files from a folder and store them in a flashbax Vault.
 
@@ -206,33 +215,9 @@ def load_into_vault(
             add_batch = jax.jit(buffer.add, donate_argnums=0)
 
             d = jnp.load(files[0], allow_pickle=True)
-
-            class Data(NamedTuple):
-                img: jnp.ndarray
-                observation: jnp.ndarray
-                action: jnp.ndarray
-
-            def _prep_data(_d):
-                if is_npz:
-                    _d = dict(_d)
-                    # For compatibility
-                    _d["observation"] = _d.get(
-                        "observation",
-                        _d.get("obs") if "img" in _d else (),
-                    )
-                    _d["action"] = _d.get("action", _d.get("act"))
-                    _d["data"] = _d.get("data", _d.get("img", _d.get("obs")))
-                _d = {
-                    k: jnp.array(jnp.nan_to_num(v))
-                    for k, v in _d.items()
-                    if k in ["observation", "action", "data"]
-                }
-                _d["img"] = _d["data"]
-                del _d["data"]
-                _d = jax.tree_util.tree_map(lambda x: x[None], _d)
-                return Data(**_d)
-
-            init_data = jax.tree_util.tree_map(lambda x: x[0][0], _prep_data(d))
+            if data_transform_fn is not None:
+                d = data_transform_fn(d)
+            init_data = jax.tree_util.tree_map(lambda x: x[0][0], d)
             buffer_state = buffer.init(init_data)
 
             # Create vault
@@ -250,8 +235,9 @@ def load_into_vault(
                     print(f"Resuming from file {start_file}")
 
             for f in tqdm(files[start_file:num_files]):
-                d = np.load(f, allow_pickle=True, mmap_mode="r")
-                data = _prep_data(d)
+                data = np.load(f, allow_pickle=True, mmap_mode="r")
+                if data_transform_fn is not None:
+                    data = data_transform_fn(data)
                 buffer_state = add_batch(buffer_state, data)
                 vault.write(buffer_state)
 
@@ -260,9 +246,61 @@ def load_into_vault(
                 [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))]
             ).astype(int)
             file_starts = np.zeros(total_num_steps)[start_indices] = 1
+
+            print(f"Vault contains {vault.vault_index} samples.")
             return vault, file_starts
 
     return _make_vault()
+
+
+def read_vault_data(vault, start_id: int, num_steps: int = 1):
+    """Read a chunk of data from the vault.
+
+    :param start_id: Which start_id to read from (0-indexed)
+    :param chunk_size: How much percent of the data should be read
+    :return: The data chunk
+    """
+    start_percent = start_id * 100 / vault.vault_index
+    end_percent = start_percent + num_steps * 100 / vault.vault_index
+    assert start_percent >= 0, "Requested data chunk is out of bounds."
+    assert start_percent < end_percent, "start_percent must be < end_percent."
+
+    # Making sure to do all adjustments of the data in CPU or else we risk out of memory Errors!
+    with jax.default_device(jax.devices("cpu")[0]):
+        _buff_state = vault.read(percentiles=(start_percent, end_percent))
+        data = _buff_state.experience
+        data = jax.tree.map(jnp.nan_to_num, data)
+        data = jax.tree.map(lambda d: d[:, :num_steps], data)
+        # data = jax.tree.map(partial(jnp.swapaxes, axis1=0, axis2=1), data)
+        # Discard speed control from action
+
+    return _buff_state.replace(experience=data)
+
+
+def vault_generator(
+    key: PRNGKey,
+    vault: Any,
+    batch_size: int,
+    seq_len: int,
+    num_samples: int = 1,
+    eval_size: int = 0,
+):
+    for i in range(num_samples):
+        key_sample, key = jrandom.split(key)
+        batch_ids = jrandom.randint(
+            key_sample,
+            batch_size,
+            0,
+            vault.vault_index - seq_len - eval_size,
+        )
+        # HACK: Read a bit too much to avoid too small sequences
+        batch_ids = [b - 0.1 for b in batch_ids]
+        jit_tree_stack = jax.jit(tree_stack, static_argnames=["concatenate"])
+        sample = jit_tree_stack(
+            [read_vault_data(vault, start_id=c, num_steps=seq_len) for c in batch_ids],
+            concatenate=True,
+        ).experience
+        yield sample
 
 
 # Toy datasets -----------------------------------------------------------------
