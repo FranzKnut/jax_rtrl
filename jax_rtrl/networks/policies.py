@@ -229,13 +229,14 @@ def restore_policy_from_ckpt(
         )
         autoencoder_params = autoencoder.lazy_init(jax.random.PRNGKey(0), inputs["img"])
         inputs["x"] = jnp.zeros(autoencoder_config.latent_size)
-        target = (autoencoder_params,)
-    else:
-        target = ()
 
     policy = PolicyRNN(a_dim=a_dim, config=policy_config)
     policy_params = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
-    target = (policy_params,) + target
+
+    if with_autoencoder:
+        target = (policy_params, autoencoder_params)
+    else:
+        target = policy_params
 
     variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
     policy = policy.bind(variables[0])
