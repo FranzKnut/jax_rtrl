@@ -16,12 +16,16 @@ from tqdm import tqdm
 from jax_rl_util.util.logging_util import tree_stack
 
 
-def split_train_test(dataset, fraction_eval: float = 0.2, shuffle: bool = False):
+def split_train_test(
+    dataset, fraction_eval: float = 0.2, shuffle: bool = False, axis=0
+):
     """Split the dataset into train and test sets along the first axis.
 
     Train episodes are taken from the beginning of the dataset, test episodes from the end.
     :param dataset: Pytree
     :param fraction_eval: float
+    :param shuffle: Whether to shuffle the dataset before splitting
+    :param axis: Axis along which to split the dataset
     :return: train and eval tuples of (inputs, target)
     """
     if shuffle:
@@ -30,10 +34,16 @@ def split_train_test(dataset, fraction_eval: float = 0.2, shuffle: bool = False)
             key, jnp.arange(jax.tree_util.tree_leaves(dataset)[0].shape[0])
         )
         dataset = jax.tree.map(lambda x: x[perm], dataset)
-    dataset_size = jax.tree.flatten(dataset)[0][0].shape[0]
+    dataset_size = jax.tree.flatten(dataset)[0][0].shape[axis]
     train_size = int(dataset_size * (1 - fraction_eval))
-    dataset_train = jax.tree.map(lambda x: x[:train_size], dataset)
-    dataset_eval = jax.tree.map(lambda x: x[train_size:], dataset)
+
+    # Split dataset along axis
+    dataset_train = jax.tree.map(
+        lambda x: jnp.take(x, jnp.arange(train_size), axis=axis), dataset
+    )
+    dataset_eval = jax.tree.map(
+        lambda x: jnp.take(x, jnp.arange(train_size, dataset_size), axis=axis), dataset
+    )
 
     return dataset_train, dataset_eval
 
