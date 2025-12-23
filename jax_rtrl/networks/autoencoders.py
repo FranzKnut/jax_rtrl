@@ -1,6 +1,7 @@
 """Convolutional neural network autoencoders built with flax."""
 
 from dataclasses import dataclass, field
+from jax_rtrl.models.feedforward import DistributionLayer
 from simple_parsing import Serializable
 import jax
 import jax.numpy as jnp
@@ -18,6 +19,12 @@ conv_presets = {
         (16, (3, 3), 2),
         (16, (3, 3), 2),
         (16, (3, 3), 2),
+    ],
+    "medium": [
+        (16, (3, 3), 1),
+        (32, (3, 3), 2),
+        (32, (3, 3), 1),
+        (64, (3, 3), 2),
     ],
 }
 
@@ -166,6 +173,33 @@ class Autoencoder(nn.Module):
         latent = self.enc(x)
         pred = self.dec(latent)
         return pred, latent
+
+
+class VariationalAutoencoder(Autoencoder):
+    """Variational 2D-Autoencoder for dimension reduction."""
+
+    distribution: str = "LogStdvNormal"
+
+    @nn.compact
+    def encode(self, x, *_):
+        """Encode given Image."""
+        h = super().encode(x)
+        dist = DistributionLayer(
+            features=self.config.latent_size,
+            distribution=self.distribution,
+            name="latent_distribution",
+        )(h)
+        return dist
+
+    def __call__(self, x, *_):
+        """Encode then decode. Returns prediction and latent vector."""
+        dist = self.encode(x)
+        mu, log_var = dist
+        std = jnp.exp(0.5 * log_var)
+        eps = jax.random.normal(self.make_rng("latent"), std.shape)
+        latent = mu + eps * std  # Reparameterization trick
+        pred = self.dec(latent)
+        return pred, mu, log_var
 
 
 class Autoencoder_RNN(nn.Module):
