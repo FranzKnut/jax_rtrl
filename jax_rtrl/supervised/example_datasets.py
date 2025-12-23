@@ -42,7 +42,7 @@ def split_train_test(
         lambda x: jnp.take(x, jnp.arange(train_size), axis=axis), dataset
     )
     dataset_eval = jax.tree.map(
-        lambda x: jnp.take(x, jnp.arange(train_size, dataset_size), axis=axis), dataset
+        lambda x: jnp.take(x, jnp.arange(train_size, dataset_size-1), axis=axis), dataset
     )
 
     return dataset_train, dataset_eval
