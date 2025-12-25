@@ -34,6 +34,9 @@ class JaxRng:
         self._rng, rng = jax.jit(jrandom.split)(self._rng)
         return rng
 
+def index_tree(tree, index):
+    """Index into every leaf of a pytree."""
+    return jax.tree.map(lambda x: x[index], tree)
 
 def symlog(x):
     """Symmetric log."""

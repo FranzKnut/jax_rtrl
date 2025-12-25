@@ -646,6 +646,8 @@ class RNNEnsemble(nn.RNNCellBase):
                 # The ensembles always need the same number of arguments.
                 # If no reset flag is given, we set it to False by default.
                 call_args = (jnp.zeros(()),)
+            # if jnp.shape(training) != x_tiled.shape:
+            #     training = jnp.tile(training, x_tiled.shape[:-1])
             h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
         else:
             outs = x_tiled
@@ -664,6 +666,7 @@ class RNNEnsemble(nn.RNNCellBase):
                     return jnp.swapaxes(a, 1, 0)
                 except Exception:
                     return a
+
             _tmp = jax.tree.map(_try_swap, outs[1])
             outs = (outs[0], _tmp)
         return h, outs
