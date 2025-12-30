@@ -140,7 +140,7 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=Fa
         # An Array that is zero everywhere except at the start of each file
         start_indices = np.concatenate(
             [np.zeros(1, dtype=int), np.cumsum(np.array(num_steps_per_file[:-1]))]
-        )
+        ).astype(int)
         file_starts[start_indices] = 1
 
         return output, file_starts
