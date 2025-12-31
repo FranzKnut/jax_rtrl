@@ -42,7 +42,8 @@ def split_train_test(
         lambda x: jnp.take(x, jnp.arange(train_size), axis=axis), dataset
     )
     dataset_eval = jax.tree.map(
-        lambda x: jnp.take(x, jnp.arange(train_size, dataset_size-1), axis=axis), dataset
+        lambda x: jnp.take(x, jnp.arange(train_size, dataset_size - 1), axis=axis),
+        dataset,
     )
 
     return dataset_train, dataset_eval
@@ -175,12 +176,14 @@ def load_into_vault(
     num_files: int = None,
     vault_uid=None,
     data_transform_fn=None,
+    resume_load=False,
 ):
     """Load npz files from a folder and store them in a flashbax Vault.
 
     :param name: Path of rollout files
     :param is_npz: If True, the files in the folder are assumed to be .npz files containing multiple fields
     :param num_files: If not None, only loads the specified number of files
+    :param resume_load:  If true, will resume filling a partially created vault.
     :return: (Vault, file_starts)
     """
     import flashbax as fbx
@@ -237,8 +240,10 @@ def load_into_vault(
                 vault_uid=vault_uid,
             )
             print("Vault index is at:", vault.vault_index)
-            if vault.vault_index > total_num_steps:
-                return vault, None  # Already exists
+            if (vault.vault_index > 0 and not resume_load) or (
+                vault.vault_index > total_num_steps
+            ):
+                return vault, None  # Already (partially) exists
             else:
                 start_file = vault.vault_index // num_steps_per_file[0]
                 if num_files is None or start_file < num_files:
