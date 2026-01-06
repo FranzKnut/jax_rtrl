@@ -239,7 +239,8 @@ def load_into_vault(
                 experience_structure=buffer_state.experience,
                 vault_uid=vault_uid,
             )
-            print("Vault index is at:", vault.vault_index)
+            print(f"Vault: {vault._base_path}")
+            print("Index is at:", vault.vault_index)
             if (vault.vault_index > 0 and not resume_load) or (
                 vault.vault_index > total_num_steps
             ):
