@@ -1,6 +1,6 @@
 """Convolutional neural network autoencoders built with flax."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from jax_rtrl.models.feedforward import DistributionLayer
 from simple_parsing import Serializable
 import jax
@@ -25,6 +25,12 @@ conv_presets = {
         (32, (3, 3), 2),
         (32, (3, 3), 1),
         (64, (3, 3), 2),
+    ],
+    "larger": [
+        (16, (3, 3), 1),
+        (32, (5, 5), 2),
+        (32, (3, 3), 1),
+        (64, (5, 5), 2),
     ],
 }
 
@@ -102,7 +108,7 @@ class ConvDecoder(nn.Module):
     """
 
     img_shape: tuple[int]
-    tanh_output: bool = False  # sigmoid otherwise
+    output_fn: Literal["tanh", "sigmoid"] | None = "sigmoid"  # sigmoid otherwise
     config: ConvConfig = field(default_factory=ConvConfig)
 
     @nn.compact
@@ -132,23 +138,31 @@ class ConvDecoder(nn.Module):
                 x = _pool_fn(x, window_shape=l_conf.pool_size)
 
         x = nn.ConvTranspose(features=self.img_shape[-1], kernel_size=(3, 3))(x)
-        x = nn.tanh(x) if self.tanh_output else nn.sigmoid(x)
+        if self.output_fn == "tanh":
+            x = nn.tanh(x)
+        elif self.output_fn == "sigmoid":
+            x = nn.sigmoid(x)
         return x
 
 
 @dataclass
 class AutoencoderConfig(Serializable):
     latent_size: int = 32
+    preset: str | None = "medium"
     encoder_cfg: ConvConfig = field(default_factory=ConvConfig)
     decoder_cfg: ConvConfig = field(default_factory=ConvConfig)
 
+    def __post_init__(self):
+        if self.preset is not None:
+            self.encoder_cfg = replace(self.encoder_cfg, preset=self.preset)
+            self.decoder_cfg = replace(self.decoder_cfg, preset=self.preset)
 
 class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
 
     img_shape: tuple[int]
     config: AutoencoderConfig = field(default_factory=AutoencoderConfig)
-    tanh_output: bool = False
+    output_fn: Literal["tanh", "sigmoid"] | None = "sigmoid"
 
     def setup(self) -> None:
         """Initialize submodules."""
@@ -156,7 +170,7 @@ class Autoencoder(nn.Module):
         self.enc = ConvEncoder(self.config.latent_size, self.config.encoder_cfg)
         self.dec = ConvDecoder(
             self.img_shape,
-            tanh_output=self.tanh_output,
+            output_fn=self.output_fn,
             config=self.config.decoder_cfg,
         )
 

@@ -21,7 +21,7 @@ from supervised.training_utils import train_rnn_online as train
 
 
 # jax.config.update("jax_disable_jit", True)
-jax.config.update("jax_debug_nans", True)
+# jax.config.update("jax_debug_nans", True)
 
 
 @dataclass
