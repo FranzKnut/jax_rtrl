@@ -14,7 +14,12 @@ from jax_rtrl.models.cells.ctrnn import CTRNNCell
 from jax_rtrl.util.checkpointing import restore_config, restore_params
 
 conv_presets = {
-    "legacy_small": [(16, (3, 3)), (16, (3, 3)), (16, (3, 3))],
+    "linear": [],
+    "legacy_small": [
+        (16, (3, 3)),
+        (16, (3, 3)),
+        (16, (3, 3)),
+    ],
     "small": [
         (16, (3, 3), 2),
         (16, (3, 3), 2),
@@ -156,6 +161,7 @@ class AutoencoderConfig(Serializable):
         if self.preset is not None:
             self.encoder_cfg = replace(self.encoder_cfg, preset=self.preset)
             self.decoder_cfg = replace(self.decoder_cfg, preset=self.preset)
+
 
 class Autoencoder(nn.Module):
     """Deterministic 2D-Autoencoder for dimension reduction."""
