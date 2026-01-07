@@ -148,7 +148,7 @@ class ConvDecoder(nn.Module):
 @dataclass
 class AutoencoderConfig(Serializable):
     latent_size: int = 32
-    preset: str | None = "medium"
+    preset: str | None = "small"
     encoder_cfg: ConvConfig = field(default_factory=ConvConfig)
     decoder_cfg: ConvConfig = field(default_factory=ConvConfig)
 
