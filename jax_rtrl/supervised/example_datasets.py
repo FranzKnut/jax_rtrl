@@ -307,7 +307,7 @@ def vault_generator(
             key_sample,
             batch_size,
             0,
-            vault.vault_index - seq_len - eval_size,
+            vault.vault_index - seq_len - eval_size - 1,
         )
         # HACK: Read a bit too much to avoid too small sequences
         batch_ids = [b - 0.1 for b in batch_ids]

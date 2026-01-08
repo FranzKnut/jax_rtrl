@@ -1,7 +1,7 @@
-from dataclasses import dataclass, field
-from enum import auto
+from dataclasses import dataclass, field, replace
 from chex import PRNGKey
 from jax import numpy as jnp
+import os
 
 from flax import linen as nn
 import jax
@@ -209,16 +209,22 @@ def restore_policy_from_ckpt(
         The restored policy module.
     """
     if config is None:
+        if not os.path.exists(ckpt_path):
+            raise FileNotFoundError(f"Checkpoint path {ckpt_path} does not exist.")
         config_dict = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
         # Try to unpack nested config and make config object
+        policy_config = PolicyConfig.from_dict(
+            config_dict.get("policy_config", config_dict)
+        )
         with_autoencoder = config_dict.get("use_autoencoder", False)
         if with_autoencoder:
             autoencoder_config = AutoencoderConfig.from_dict(
                 config_dict.get("autoencoder_cfg")
             )
-        policy_config = PolicyConfig.from_dict(
-            config_dict.get("policy_config", config_dict)
-        )
+
+            policy_config = replace(
+                policy_config, latent_size=autoencoder_config.latent_size
+            )
     # if config.model_name == "mlp":
     #     policy = PolicyMLP(config=config)
     # else:

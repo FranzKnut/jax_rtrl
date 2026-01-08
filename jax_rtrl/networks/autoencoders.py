@@ -45,6 +45,8 @@ class ConvLayerConfig:
     features: int = 16
     kernel_size: tuple[int, ...] = (3, 3)
     strides: tuple[int, ...] | int = 1
+    act: Literal["relu", "gelu", None] = "gelu"
+    norm: Literal["layer", "group", None] = None
     pooling: Literal["avg", "max", None] = None
     pool_size: tuple[int, int] | int = (2, 2)
 
@@ -96,11 +98,22 @@ class ConvEncoder(nn.Module):
                 kernel_size=l_conf.kernel_size,
                 strides=l_conf.strides,
             )(x)
-            x = nn.gelu(x)  # Apply activation function
+
+            if l_conf.act == "relu":
+                x = nn.relu(x)
+            elif l_conf.act == "gelu":
+                x = nn.gelu(x)
+
             # Optionally apply Pooling
             if l_conf.pooling:
                 _pool_fn = nn.max_pool if l_conf.pooling == "max" else nn.avg_pool
                 x = _pool_fn(x, window_shape=l_conf.pool_size)
+
+            # Optionally apply Normalization
+            if l_conf.norm == "layer":
+                x = nn.LayerNorm()(x)
+            elif l_conf.norm == "group":
+                x = nn.GroupNorm(num_groups=8)(x)
 
         x = x.flatten()  # Image grid to single feature vector
         return nn.Dense(features=self.latent_size)(x)
