@@ -278,7 +278,7 @@ def read_vault_data(vault, start_id: int, num_steps: int = 1):
     """
     start_percent = start_id * 100 / vault.vault_index
     end_percent = start_percent + num_steps * 100 / vault.vault_index
-    assert start_percent >= 0, "Requested data chunk is out of bounds."
+    assert start_percent >= 0, "Requested data chunk is negative."
     assert start_percent < end_percent, "start_percent must be < end_percent."
 
     # Making sure to do all adjustments of the data in CPU or else we risk out of memory Errors!
@@ -307,10 +307,10 @@ def vault_generator(
             key_sample,
             batch_size,
             0,
-            vault.vault_index - seq_len - eval_size - 1,
+            vault.vault_index - seq_len - eval_size,
         )
         # HACK: Read a bit too much to avoid too small sequences
-        batch_ids = [b - 0.1 for b in batch_ids]
+        batch_ids = [max(b - 0.1, 0) for b in batch_ids]
         jit_tree_stack = jax.jit(tree_stack, static_argnames=["concatenate"])
         sample = jit_tree_stack(
             [read_vault_data(vault, start_id=c, num_steps=seq_len) for c in batch_ids],
