@@ -16,6 +16,7 @@ def restore_remote(artifact_id: str):
     # Get from wandb
     path = artifact_id.replace("wandb:", "")
     if wandb.run:
+        print(f"Linked {path} to current wandb run.")
         ancestor = wandb.run.use_artifact(path)
     else:
         api = wandb.Api()
