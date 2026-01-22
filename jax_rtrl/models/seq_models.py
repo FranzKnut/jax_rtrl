@@ -76,6 +76,7 @@ class RNNEnsembleConfig(FrozenSerializable):
     num_blocks: int = 1
     # out_size: int | None = None
     out_dist: str | None = "Deterministic"
+    dist_loc_bounds: tuple[float, float] | None = None
     dist_scale_bounds: float | tuple[float, float] = 0
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
@@ -101,7 +102,8 @@ class RNNEnsembleConfig(FrozenSerializable):
                     self, "rnn_kwargs", {"config": S5Config(**self.rnn_kwargs)}
                 )
 
-            # Set ODE type for given model_name
+            # HACK: Set ODE type for given model_name
+            # FIXME: This leads to problems if model_name is changed after initialization
             match = self.model_name and re.search(r"(lrc|ltc|fltc)", self.model_name)
             if match:
                 self.rnn_kwargs["ode_type"] = match.group(1)
@@ -484,6 +486,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
     config: RNNEnsembleConfig
     out_size: int | None = None
+    loc_bounds: tuple[float, float] | None = None
     split_input: bool = False  # Whether to split input among ensemble modules
     num_submodule_extra_args: int = 0  # set to number of additional args for submodule!
 
@@ -547,6 +550,7 @@ class RNNEnsemble(nn.RNNCellBase):
             )(
                 self.out_size,
                 distribution=self.config.out_dist,
+                loc_bounds=self.loc_bounds if self.loc_bounds is not None else self.config.dist_loc_bounds,
                 scale_bounds=self.config.dist_scale_bounds,
                 norm=self.config.layer_config.norm,
                 name="dists",

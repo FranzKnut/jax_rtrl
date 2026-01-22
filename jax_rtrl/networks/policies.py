@@ -88,6 +88,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
     """RNN Policy."""
 
     use_rnn: bool = True  # Do not alter!
+    loc_bounds: tuple[float, float] | None = None
     split_input: bool = False  # See RNNEnsemble
     num_submodule_extra_args: int = 0
 
@@ -97,6 +98,7 @@ class PolicyRNN(nn.RNNCellBase, Policy):
             self.config,
             out_size=self.a_dim,
             split_input=self.split_input,
+            loc_bounds=self.loc_bounds,
             num_submodule_extra_args=self.num_submodule_extra_args,
             name="rnn",
         )
