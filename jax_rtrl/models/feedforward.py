@@ -280,6 +280,7 @@ class DistributionLayer(nn.Module):
     distribution: str = "LogStddevNormal"
     layers: tuple[int, ...] = ()
     eps: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
+    loc_bounds: tuple[float, float] | None = None
     scale_bounds: float | tuple[float, float] | None = 0
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
@@ -300,12 +301,11 @@ class DistributionLayer(nn.Module):
         out_size = self.out_size
         # x = get_normalization_fn(self.norm, training=training)(x)
 
-        if self.distribution in [
-            "Normal",
-            "ScaledNormal",
-            "LogStddevNormal",
-            "LogStddevNormalScaled",
-        ]:
+        # Get the base distribution name
+        dist_name = self.distribution.replace("Scaled", "")
+        dist_name = dist_name.replace("Tanh", "")
+
+        if dist_name in ["Normal", "LogStddevNormal", "beta"]:
             out_size = 2 * out_size
         elif self.distribution in ["Categorical", "Bernoulli"] and isinstance(
             out_size, tuple
@@ -317,38 +317,56 @@ class DistributionLayer(nn.Module):
         if self.distribution is None:
             return x
 
-        dist_name = self.distribution.replace("Scaled", "")
+        if self.distribution.startswith("beta"):
+            if self.loc_bounds is not None:
+                # If action limits are defined we sample from [0, 1] and transform the event.
+                act_range = jnp.array(self.loc_bounds[1]) - jnp.array(
+                    self.loc_bounds[0]
+                )
+                act_min = jnp.array(self.loc_bounds[0])
+                scaling_transform = distrax.ScalarAffine(act_min, act_range)
+            alpha = jax.nn.softplus(x[..., : x.shape[-1] // 2])
+            beta = jax.nn.softplus(x[..., x.shape[-1] // 2 :])
+            return distrax.Transformed(distrax.Beta(alpha, beta), scaling_transform)
+
         _dist = getattr(distrax, dist_name)
 
-        if self.distribution in [
-            "Normal",
-            "ScaledNormal",
-            "LogStddevNormal",
-            "LogStddevNormalScaled",
-        ]:
+        if dist_name in ["Normal", "LogStddevNormal"]:
             loc, scale = jnp.split(x, 2, axis=-1)
             if isinstance(self.scale_bounds, tuple):
                 scale = sigmoid_between(scale, *self.scale_bounds)
             elif isinstance(self.scale_bounds, Number):
                 assert (
                     "LogStddevNormal" in self.distribution
+                    or "NormalTanh" in self.distribution
                 ) or self.scale_bounds >= 0, (
                     "scale_bounds must be non-negative for Normal distributions"
                 )
                 scale = jax.nn.softplus(scale) + self.scale_bounds
 
             dist = _dist(loc, scale)
+            if "Tanh" in self.distribution:
+                dist = distrax.Transformed(dist, distrax.Tanh())
+                # FIXME: Override mode function since distrax gives NotImplementedError
+                # def _mode():
+                #     return jnp.tanh(loc)
+                # dist.mode = _mode
+            # elif "Sigmoid" in self.distribution:
+            #     # sigmoid_transform = distrax.Sigmoid()
+            #     # bij = distrax.Chain([scaling_transform, sigmoid_transform])
+
             if self.distribution.startswith("Scaled"):
                 # Define limits and scale for bounded distributions
-                min_val = self.param(
-                    "min_val", nn.initializers.constant(-1.0), self.out_size
-                )
-                max_val = self.param(
-                    "max_val", nn.initializers.constant(1.0), self.out_size
-                )
-                # sigmoid_transform = distrax.Sigmoid()
+                if self.loc_bounds is not None:
+                    min_val, max_val = self.loc_bounds
+                else:
+                    min_val = self.param(
+                        "min_val", nn.initializers.constant(-1.0), self.out_size
+                    )
+                    max_val = self.param(
+                        "max_val", nn.initializers.constant(1.0), self.out_size
+                    )
                 bij = distrax.ScalarAffine(min_val, max_val - min_val)
-                # bij = distrax.Chain([scaling_transform, sigmoid_transform])
                 dist = distrax.Transformed(dist, bij)
 
         elif self.distribution in ["Categorical", "Bernoulli"]:
