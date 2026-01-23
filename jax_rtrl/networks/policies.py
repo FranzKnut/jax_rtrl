@@ -210,6 +210,7 @@ def restore_policy_from_ckpt(
     Policy
         The restored policy module.
     """
+    # FIXME: will fail if config is given!
     if config is None:
         if not os.path.exists(ckpt_path):
             raise FileNotFoundError(f"Checkpoint path {ckpt_path} does not exist.")

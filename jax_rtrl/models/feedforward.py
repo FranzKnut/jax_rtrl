@@ -281,7 +281,7 @@ class DistributionLayer(nn.Module):
     distribution: str = "LogStddevNormal"
     layers: tuple[int, ...] = ()
     eps: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
-    loc_bounds: tuple[float, float] | None = None
+    loc_bounds: float | tuple[float, float] | None = None  # Needs to be
     scale_bounds: float | tuple[float, float] | None = 0
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
@@ -356,20 +356,34 @@ class DistributionLayer(nn.Module):
             #     # bij = distrax.Chain([scaling_transform, sigmoid_transform])
 
             if self.distribution.startswith("Scaled"):
-                # Define limits and scale for bounded distributions
-                if self.loc_bounds is not None:
-                    bounds = jnp.array(self.loc_bounds)
-                    if bounds.ndim < 2:
-                        bounds = jnp.tile(bounds, (self.out_size, 1))
-                    min_val, max_val = bounds.T
+                if dist_name == "NormalTanh":
+                    # Adjust bounds for symmetric Tanh
+                    min_val = 0
+                    assert (
+                        isinstance(self.loc_bounds, Number)
+                        or self.loc_bounds[0] == -self.loc_bounds[1]
+                    ), (
+                        "For Scaled distribution with asymmetric bounds, please use ScaledNormal with a Sigmoid transform."
+                    )
+                    shift = 0
+                    scale = self.loc_bounds[1]
                 else:
-                    min_val = self.param(
-                        "min_val", nn.initializers.constant(-1.0), self.out_size
-                    )
-                    max_val = self.param(
-                        "max_val", nn.initializers.constant(1.0), self.out_size
-                    )
-                bij = distrax.ScalarAffine(min_val, max_val - min_val)
+                    # Define limits and scale for bounded distributions
+                    if self.loc_bounds is not None:
+                        bounds = jnp.array(self.loc_bounds)
+                        if bounds.ndim < 2:
+                            bounds = jnp.tile(bounds, (self.out_size, 1))
+                        min_val, max_val = bounds.T
+                    else:
+                        min_val = self.param(
+                            "min_val", nn.initializers.constant(-1.0), self.out_size
+                        )
+                        max_val = self.param(
+                            "max_val", nn.initializers.constant(1.0), self.out_size
+                        )
+                    shift = min_val
+                    scale = max_val - min_val
+                bij = distrax.ScalarAffine(shift, scale)
                 # dist = distrax.Transformed(
                 #     distrax.Independent(dist, 1), distrax.Block(bij, 1)
                 # )
