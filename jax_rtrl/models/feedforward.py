@@ -8,6 +8,7 @@ import distrax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+from jax_rtrl.models import distributions
 import numpy as np
 
 from jax_rtrl.util.jax_util import get_normalization_fn, sigmoid_between
@@ -303,9 +304,9 @@ class DistributionLayer(nn.Module):
 
         # Get the base distribution name
         dist_name = self.distribution.replace("Scaled", "")
-        dist_name = dist_name.replace("Tanh", "")
+        # dist_name = dist_name.replace("Tanh", "")
 
-        if dist_name in ["Normal", "LogStddevNormal", "beta"]:
+        if dist_name in ["Normal", "LogStddevNormal", "beta", "NormalTanh"]:
             out_size = 2 * out_size
         elif self.distribution in ["Categorical", "Bernoulli"] and isinstance(
             out_size, tuple
@@ -329,9 +330,12 @@ class DistributionLayer(nn.Module):
             beta = jax.nn.softplus(x[..., x.shape[-1] // 2 :])
             return distrax.Transformed(distrax.Beta(alpha, beta), scaling_transform)
 
-        _dist = getattr(distrax, dist_name)
+        if hasattr(distributions, dist_name):
+            _dist = getattr(distributions, dist_name)
+        else:
+            _dist = getattr(distrax, dist_name)
 
-        if dist_name in ["Normal", "LogStddevNormal"]:
+        if dist_name in ["Normal", "LogStddevNormal", "NormalTanh"]:
             loc, scale = jnp.split(x, 2, axis=-1)
             if isinstance(self.scale_bounds, tuple):
                 scale = sigmoid_between(scale, *self.scale_bounds)
@@ -345,12 +349,8 @@ class DistributionLayer(nn.Module):
                 scale = jax.nn.softplus(scale) + self.scale_bounds
 
             dist = _dist(loc, scale)
-            if "Tanh" in self.distribution:
-                dist = distrax.Transformed(dist, distrax.Tanh())
-                # FIXME: Override mode function since distrax gives NotImplementedError
-                # def _mode():
-                #     return jnp.tanh(loc)
-                # dist.mode = _mode
+            # if "Tanh" in self.distribution:
+            #     dist = distrax.Transformed(dist, distrax.Tanh())
             # elif "Sigmoid" in self.distribution:
             #     # sigmoid_transform = distrax.Sigmoid()
             #     # bij = distrax.Chain([scaling_transform, sigmoid_transform])
@@ -358,7 +358,10 @@ class DistributionLayer(nn.Module):
             if self.distribution.startswith("Scaled"):
                 # Define limits and scale for bounded distributions
                 if self.loc_bounds is not None:
-                    min_val, max_val = self.loc_bounds
+                    bounds = jnp.array(self.loc_bounds)
+                    if bounds.ndim < 2:
+                        bounds = jnp.tile(bounds, (self.out_size, 1))
+                    min_val, max_val = bounds.T
                 else:
                     min_val = self.param(
                         "min_val", nn.initializers.constant(-1.0), self.out_size
@@ -367,6 +370,9 @@ class DistributionLayer(nn.Module):
                         "max_val", nn.initializers.constant(1.0), self.out_size
                     )
                 bij = distrax.ScalarAffine(min_val, max_val - min_val)
+                # dist = distrax.Transformed(
+                #     distrax.Independent(dist, 1), distrax.Block(bij, 1)
+                # )
                 dist = distrax.Transformed(dist, bij)
 
         elif self.distribution in ["Categorical", "Bernoulli"]:
