@@ -8,7 +8,10 @@ class NormalTanh(distrax.Transformed):
     """A Normal distribution followed by a Tanh transformation."""
 
     def __init__(self, loc, scale):
-        super().__init__(distrax.Normal(loc, scale), distrax.Tanh())
+        super().__init__(
+            distrax.Independent(distrax.Normal(loc, scale), 1),
+            distrax.Block(distrax.Tanh(), 1),
+        )
 
     def mode(self) -> jax.Array:
         raw_sample = self.distribution.mode()

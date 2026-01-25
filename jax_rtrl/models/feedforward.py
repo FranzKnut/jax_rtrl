@@ -318,6 +318,11 @@ class DistributionLayer(nn.Module):
         if self.distribution is None:
             return x
 
+        if self.loc_bounds is not None:
+            bounds = jnp.array(self.loc_bounds)
+            if bounds.ndim < 2:
+                bounds = jnp.tile(bounds, (self.out_size, 1)).T
+
         if self.distribution.startswith("beta"):
             if self.loc_bounds is not None:
                 # If action limits are defined we sample from [0, 1] and transform the event.
@@ -365,15 +370,12 @@ class DistributionLayer(nn.Module):
                     ), (
                         "For Scaled distribution with asymmetric bounds, please use ScaledNormal with a Sigmoid transform."
                     )
-                    shift = 0
-                    scale = self.loc_bounds[1]
+                    shift = jnp.zeros_like(loc)
+                    scale = bounds if isinstance(self.loc_bounds, Number) else bounds[1]
                 else:
                     # Define limits and scale for bounded distributions
                     if self.loc_bounds is not None:
-                        bounds = jnp.array(self.loc_bounds)
-                        if bounds.ndim < 2:
-                            bounds = jnp.tile(bounds, (self.out_size, 1))
-                        min_val, max_val = bounds.T
+                        min_val, max_val = bounds
                     else:
                         min_val = self.param(
                             "min_val", nn.initializers.constant(-1.0), self.out_size
@@ -384,10 +386,8 @@ class DistributionLayer(nn.Module):
                     shift = min_val
                     scale = max_val - min_val
                 bij = distrax.ScalarAffine(shift, scale)
-                # dist = distrax.Transformed(
-                #     distrax.Independent(dist, 1), distrax.Block(bij, 1)
-                # )
-                dist = distrax.Transformed(dist, bij)
+                dist = distrax.Transformed(dist, distrax.Block(bij, 1))
+                # dist = distrax.Transformed(dist, bij)
 
         elif self.distribution in ["Categorical", "Bernoulli"]:
             if isinstance(self.out_size, tuple):
