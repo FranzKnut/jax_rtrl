@@ -55,7 +55,6 @@ class ConvLayerConfig:
 class ConvConfig(Serializable):
     preset: str | None = "small"
     layers: list[tuple[int, tuple[int, ...], int]] | None = None
-    latent_size: int = 16
 
     def __post_init__(self):
         assert self.preset is not None or self.layers is not None, (
