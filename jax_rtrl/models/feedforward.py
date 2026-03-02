@@ -280,7 +280,7 @@ class DistributionLayer(nn.Module):
     out_size: int
     distribution: str = "LogStddevNormal"
     layers: tuple[int, ...] = ()
-    eps: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
+    eps_unimix: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
     loc_bounds: float | tuple[float, float] | None = None  # Needs to be
     scale_bounds: float | tuple[float, float] | None = 0
     f_align: bool = False
@@ -312,6 +312,14 @@ class DistributionLayer(nn.Module):
             out_size, tuple
         ):
             out_size = np.prod(out_size)
+            
+        # elif self.act_dist_name == "brax":
+        #         from brax.training.distribution import NormalTanhDistribution
+
+        #         return NormalTanhDistribution(
+        #             event_size=self.a_dim,
+        #             min_std=jnp.exp(self.act_log_bounds),
+        #         ).create_dist(model_out)
 
         x = FADense(out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
 
@@ -347,7 +355,7 @@ class DistributionLayer(nn.Module):
             elif isinstance(self.scale_bounds, Number):
                 assert (
                     "LogStddevNormal" in self.distribution
-                    or "NormalTanh" in self.distribution
+                    # or "NormalTanh" in self.distribution
                 ) or self.scale_bounds >= 0, (
                     "scale_bounds must be non-negative for Normal distributions"
                 )
@@ -392,16 +400,23 @@ class DistributionLayer(nn.Module):
         elif self.distribution in ["Categorical", "Bernoulli"]:
             if isinstance(self.out_size, tuple):
                 x = x.reshape(self.out_size)
-            # Unimix
-            probs = (
-                jax.nn.sigmoid(x)
-                if self.distribution == "Bernoulli"
-                else jax.nn.softmax(x, axis=-1)
-            )
-            s = probs.shape[-1] if self.distribution == "Categorical" else out_size
-            probs = probs * (1 - self.eps) + self.eps / s
-            # dist = straight_through_wrapper(_dist)(probs=probs)
-            dist = _dist(probs=probs)
+            if self.eps_unimix > 0:
+                # Unimix: blend with uniform to prevent probability collapse
+                probs = (
+                    jax.nn.sigmoid(x)
+                    if self.distribution == "Bernoulli"
+                    else jax.nn.softmax(x, axis=-1)
+                )
+                s = probs.shape[-1] if self.distribution == "Categorical" else out_size
+                probs = probs * (1 - self.eps_unimix) + self.eps_unimix / s
+                # dist = straight_through_wrapper(_dist)(probs=probs)
+                dist = _dist(probs=probs)
+            else:
+                # Use logits directly so distrax uses log_softmax internally,
+                # which avoids log(softmax(x)) → log(0) = -inf.
+                # Clip to prevent log_softmax(inf, inf) = inf - inf = NaN when
+                # weights explode. A gap of 40 is still functionally deterministic.
+                dist = _dist(logits=jnp.clip(x, -20.0, 20.0))
 
         else:
             dist = _dist(x)

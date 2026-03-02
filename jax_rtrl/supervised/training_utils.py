@@ -155,7 +155,7 @@ def train_rnn_offline(
 
 def predict(model: nn.RNNCellBase, params, init_carry=None, *inputs):
     """Predict a sequence of outputs given an input sequence."""
-    _, y_hat = scan_rnn(model, params, init_carry, False, *inputs)
+    _, y_hat = scan_rnn(model, params, *inputs, init_carry=init_carry)
     return y_hat
 
 

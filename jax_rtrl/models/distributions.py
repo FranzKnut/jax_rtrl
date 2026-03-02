@@ -6,10 +6,16 @@ import jax
 
 class NormalTanh(distrax.Transformed):
     """A Normal distribution followed by a Tanh transformation."""
+    
+    def __getattr__(self, name):
+        if name == "__setstate__":
+            raise AttributeError(name)
+        return getattr(self._normal, name)
 
     def __init__(self, loc, scale):
+        self._normal = distrax.Normal(loc, scale)
         super().__init__(
-            distrax.Independent(distrax.Normal(loc, scale), 1),
+            distrax.Independent(self._normal, 1),
             distrax.Block(distrax.Tanh(), 1),
         )
 

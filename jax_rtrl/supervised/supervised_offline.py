@@ -70,7 +70,7 @@ x_train, y_train, x_test, y_test = get_data(cfg.dataset)
 model, params, h0 = make_model(x_train[:, 0], key, y_train.shape[-1], cfg.rnn_config)
 
 # Compute initial loss
-y_hat = predict(model, params, x_test[None] if x_test.ndim == 2 else x_test)
+y_hat = predict(model, params, None, x_test[None] if x_test.ndim == 2 else x_test)
 if cfg.rnn_config.ensemble_method is not None:
     y_hat = y_hat[0]
 y_hat = y_hat.mode().squeeze()
@@ -80,7 +80,7 @@ print(f"Initial loss: {test_loss:.3f}")
 
 def loss(p, __x, __y):
     # MSE loss
-    _, y_hat = scan_rnn(model, p, None, __x)
+    _, y_hat = scan_rnn(model, p, __x)
     if cfg.rnn_config.ensemble_method is not None:
         y_hat = y_hat[0]
     return mse_loss(y_hat.mode().mean(axis=-1), __y)

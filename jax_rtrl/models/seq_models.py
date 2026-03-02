@@ -78,6 +78,7 @@ class RNNEnsembleConfig(FrozenSerializable):
     out_dist: str | None = "Deterministic"
     dist_loc_bounds: tuple[float, float] | None = None
     dist_scale_bounds: float | tuple[float, float] = 0
+    dist_eps: float = 0.01  # Unimix epsilon for Categorical/Bernoulli (e.g. 0.01)
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
@@ -550,8 +551,11 @@ class RNNEnsemble(nn.RNNCellBase):
             )(
                 self.out_size,
                 distribution=self.config.out_dist,
-                loc_bounds=self.loc_bounds if self.loc_bounds is not None else self.config.dist_loc_bounds,
+                loc_bounds=self.loc_bounds
+                if self.loc_bounds is not None
+                else self.config.dist_loc_bounds,
                 scale_bounds=self.config.dist_scale_bounds,
+                eps_unimix=self.config.dist_eps,
                 norm=self.config.layer_config.norm,
                 name="dists",
             )
@@ -561,13 +565,14 @@ class RNNEnsemble(nn.RNNCellBase):
         if self.config.output_layers:
             outs = self.mlps_out(outs)
 
-        # Combine Ensemble predictions
         if self.out_size is None:
-            print("WARNING: RNNEnsemble out_size is None, skipped output processing.")
+            # print(f"WARNING: {self.name} out_size is None, skipped output processing.")
             return outs
 
         else:
+            # Compute output distributions
             _dists = self.dists(outs)
+            # Combine them using ensemble method
             if self.config.ensemble_method == "mean":
                 # Compute mean of outputs
                 combined_dist = jax.tree.map(lambda d: d.mean(axis=0), _dists)
@@ -772,9 +777,9 @@ def make_batched_model(
 def scan_rnn(
     model: RNNEnsemble,
     params,
+    *xs,
     init_carry: jnp.ndarray = None,
     batched: bool = False,
-    *xs,
 ):
     """Scan RNN over time dimension. Makes sure to use parallel scan if possible.
 
@@ -782,9 +787,9 @@ def scan_rnn(
     Parameters:
         model: RNN model to scan.
         params: Parameters of the model.
+        xs: Input sequences to the model. Should be time-major if not batched.
         init_carry: Initial carry (hidden state) of the model.
         batched: Whether the input is batched (batch, time, features).
-        xs: Input sequences to the model. Should be time-major if not batched.
     Returns:
         outputs: Final carry (hidden state) of the model.
         y_hats: Output sequences of the model.
