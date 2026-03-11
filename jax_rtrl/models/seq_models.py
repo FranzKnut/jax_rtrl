@@ -29,7 +29,6 @@ class SequenceLayerConfig:
     """Configuration for SequenceLayer.
 
     Attributes:
-        d_output: Output layer size.
         dropout: Dropout probability.
         norm: Type of normalization to use ('layer' or 'batch').
         glu: Whether to use Gated Linear Unit structure.
@@ -78,7 +77,7 @@ class RNNEnsembleConfig(FrozenSerializable):
     out_dist: str | None = "Deterministic"
     dist_loc_bounds: tuple[float, float] | None = None
     dist_scale_bounds: float | tuple[float, float] = 0
-    dist_eps: float = 0.01  # Unimix epsilon for Categorical/Bernoulli (e.g. 0.01)
+    dist_eps: float = 0.01  # Unimix epsilon for Categorical/Bernoulli
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
@@ -816,11 +815,12 @@ def scan_rnn(
                 method=model.initialize_carry,
             )
 
-        def _step(h, _b):
-            h, y_hat = model.apply(params, h, *_b)
-            return h, y_hat
+        def _step(_c, _b):
+            p, h = _c
+            h, y_hat = model.apply(p, h, *_b)
+            return (p, h), y_hat
 
-        outputs, y_hats = jax.lax.scan(_step, init_carry, obs_time_major)
+        outputs, y_hats = jax.lax.scan(_step, (params, init_carry), obs_time_major)
     if batched:
         y_hats = jax.tree.map(
             lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats
