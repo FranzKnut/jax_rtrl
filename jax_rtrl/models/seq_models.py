@@ -89,6 +89,9 @@ class RNNEnsembleConfig(FrozenSerializable):
 
     def __post_init__(self):
         """Post-initialization logic for RNNEnsembleConfig."""
+        assert self.model_name in CELL_TYPES or self.model_name is None, (
+            f"Unknown model_name: {self.model_name}"
+        )
         # Handle special cases for rnn_kwargs
         if not isinstance(self.rnn_kwargs, FrozenConfigDict):
             # Set plasticity for given model names
@@ -143,6 +146,9 @@ class RNNEnsembleConfig(FrozenSerializable):
             object.__setattr__(self, "layers", (self.hidden_size,) * self.num_layers)
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
+def not_(x):
+    """Element-wise 'not' compatible with bool and jnp.bool_."""
+    return not x if isinstance(x, bool) else ~x
 
 class SequenceLayer(nn.Module):
     """Single layer with normalization, sequence model, dropout, and optional GLU.
@@ -184,7 +190,9 @@ class SequenceLayer(nn.Module):
         # input normalization
         x = get_normalization_fn(self.config.norm, training=training)(inputs)
         x = nn.Dropout(
-            self.config.dropout, broadcast_dims=[0], deterministic=~training
+            self.config.dropout,
+            broadcast_dims=[0],
+            deterministic=not_(training),
         )(x)  # input dropout
 
         # call seq model
@@ -209,8 +217,10 @@ class SequenceLayer(nn.Module):
 
         x = get_normalization_fn(self.config.norm, training=training)(x)
         x = nn.Dropout(
-            self.config.dropout, broadcast_dims=[0], deterministic=~training
-        )(x)  # input dropout
+            self.config.dropout,
+            broadcast_dims=[0],
+                deterministic=not_(training),
+            )(x)  # input dropout
         return hidden, x
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
@@ -280,9 +290,11 @@ class MultiLayerRNN(nn.RNNCellBase):
         return 1
 
     @nn.compact
-    def __call__(self, carries, x, training=True, *args, **kwargs):
+    def __call__(self, carries=None, x=None, training=True, *args, **kwargs):
         """Call MLP."""
-        # x = self.input(x)
+        if carries is None:
+            carries = self.initialize_carry(self.make_rng(), x.shape)
+
         new_carries = []
         for i, rnn in enumerate(self.layers):
             _carry = (
@@ -309,12 +321,9 @@ class FAMultiLayerRNN(MultiLayerRNN):
     def setup(self):
         """Initialize submodules."""
         self.layers = self._make_layers()
-        # self.input = FADense(
-        #     self.sizes[0], f_align=self.fa_type in ["fa", "dfa"], name="input"
-        # )
 
     @nn.compact
-    def __call__(self, carries, x, training=True, *args, **kwargs):
+    def __call__(self, carries=None, x=None, training=True, *args, **kwargs):
         """Call the MultiLayerRNN with the given carries and input x."""
         if self.fa_type == "bp":
             return MultiLayerRNN.__call__(self, carries, x, training, *args, **kwargs)
@@ -647,15 +656,14 @@ class RNNEnsemble(nn.RNNCellBase):
             init_shape = x.shape[-1:]  # shape without time axis
             h = self.initialize_carry(jax.random.key(0), init_shape)
 
-        if self.config.model_name in CELL_TYPES:
+        if self.config.model_name in CELL_TYPES and not "mlp":
             # call rnn submodules
             if self.config.model_name in ["lru"] and len(call_args) == 0:
                 # Add reset argument for SSMs
                 # The ensembles always need the same number of arguments.
                 # If no reset flag is given, we set it to False by default.
                 call_args = (jnp.zeros(()),)
-            # if jnp.shape(training) != x_tiled.shape:
-            #     training = jnp.tile(training, x_tiled.shape[:-1])
+
             h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
         else:
             outs = x_tiled

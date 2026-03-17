@@ -144,20 +144,23 @@ class MLP(nn.Module):
         return x
 
 
-class RBFLayer(nn.Module):
-    """Gaussian Radial Basis Function Layer."""
+class MLPCell(nn.RNNCellBase):
+    """Wrapper to use Single-Layer-Perceptron as RNN cell."""
+    
+    num_units: int
 
-    output_size: int
-    c_initializer: nn.initializers.Initializer = nn.initializers.normal(1)
+    def setup(self):
+        """Initialize MLP cell."""
+        self.mlp = MLP(layers=[self.num_units])
 
     @nn.compact
-    def __call__(self, x):
-        """Compute the distance to centers."""
-        c = self.param("centers", self.c_initializer, (self.output_size, x.shape[-1]))
-        beta = self.param("beta", nn.initializers.ones_init(), (self.output_size, 1))
-        x = x.reshape(x.shape[:-1] + (1, x.shape[-1]))
-        z = jnp.exp(-beta * (x - c) ** 2)
-        return jnp.sum(z, axis=-1)
+    def __call__(self, carry, x, training: bool = True):
+        """Call MLP cell."""
+        out = self.mlp(x, training=training)
+        return carry, out
+    
+    def initialize_carry(self, rng, input_shape):
+        return None
 
 
 class MLPEnsemble(nn.Module):
@@ -215,6 +218,22 @@ class MLPEnsemble(nn.Module):
             )
 
         return outs
+
+
+class RBFLayer(nn.Module):
+    """Gaussian Radial Basis Function Layer."""
+
+    output_size: int
+    c_initializer: nn.initializers.Initializer = nn.initializers.normal(1)
+
+    @nn.compact
+    def __call__(self, x):
+        """Compute the distance to centers."""
+        c = self.param("centers", self.c_initializer, (self.output_size, x.shape[-1]))
+        beta = self.param("beta", nn.initializers.ones_init(), (self.output_size, 1))
+        x = x.reshape(x.shape[:-1] + (1, x.shape[-1]))
+        z = jnp.exp(-beta * (x - c) ** 2)
+        return jnp.sum(z, axis=-1)
 
 
 def straight_through_wrapper(  # pylint: disable=invalid-name
@@ -312,7 +331,7 @@ class DistributionLayer(nn.Module):
             out_size, tuple
         ):
             out_size = np.prod(out_size)
-            
+
         # elif self.act_dist_name == "brax":
         #         from brax.training.distribution import NormalTanhDistribution
 

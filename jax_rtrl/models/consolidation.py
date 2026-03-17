@@ -55,6 +55,12 @@ class WeightConsolidationConfig:
     """Configuration for online weight consolidation."""
 
     cons_type: Literal["ewc", "si", None] = None  # Type of consolidation
+    apply_when: Literal["step", "episode"] = (
+        "step"  # When to apply consolidation updates
+    )
+    apply_as: Literal["loss", "grad_scale"] = (
+        "loss"  # How to apply consolidation (as loss or to scale gradients)
+    )
     decay: float = 0.95  # Decay factor for importance weights
 
 

@@ -31,9 +31,9 @@ class S5Config:
     decode_into_subclasses: bool = True
 
     # Model Parameters
-    state_size: int = 256
+    state_size: int | None = None  # if None, will be set to d_model
     n_layers: int = 2
-    blocks: int = 8
+    blocks: int | None = None  # if None, will be set to state_size // 8
     C_init: str = "trunc_standard_normal"
     discretization: str = "zoh"
     # mode: str = "pool"
@@ -65,7 +65,9 @@ class SequenceLayer(nn.Module):
 
     def setup(self):
         """Initializes the ssm, layer norm and dense layers"""
-        self.seq = init_S5SSM(self.d_model, self.config)(step_rescale=self.config.step_rescale)
+        self.seq = init_S5SSM(self.d_model, self.config)(
+            step_rescale=self.config.step_rescale
+        )
 
         if self.config.activation_fn in ["full_glu"]:
             self.out1 = nn.Dense(self.d_model)
@@ -106,7 +108,9 @@ class SequenceLayer(nn.Module):
         elif self.config.activation_fn in ["gelu"]:
             x = nn.gelu(x)
         else:
-            raise NotImplementedError("Activation: {} not implemented".format(self.config.activation_fn))
+            raise NotImplementedError(
+                "Activation: {} not implemented".format(self.config.activation_fn)
+            )
 
         x = skip + x
         if not self.config.prenorm and self.config.do_norm:
@@ -137,7 +141,9 @@ def log_step_initializer(dt_min=0.001, dt_max=0.1):
         Returns:
             sampled log_step (float32)
         """
-        return random.uniform(key, shape) * (np.log(dt_max) - np.log(dt_min)) + np.log(dt_min)
+        return random.uniform(key, shape) * (np.log(dt_max) - np.log(dt_min)) + np.log(
+            dt_min
+        )
 
     return init
 
@@ -304,16 +310,20 @@ class S5SSM(nn.Module):
 
         Lambda, V, Vinv = init_hippo(self.P, self.blocks, self.conj_sym)
 
-        if self.conj_sym:
-            # Need to account for case where we actually sample real B and C, and then multiply
-            # by the half sized Vinv and possibly V
-            local_P = 2 * self.P
-        else:
-            local_P = self.P
+        # if self.conj_sym:
+        #     # Need to account for case where we actually sample real B and C, and then multiply
+        #     # by the half sized Vinv and possibly V
+        #     local_P = 2 * self.P
+        # else:
+        local_P = self.P
 
         # Initialize diagonal state to state matrix Lambda (eigenvalues)
-        self.Lambda_re = self.param("Lambda_re", lambda rng, shape: Lambda.real, (None,))
-        self.Lambda_im = self.param("Lambda_im", lambda rng, shape: Lambda.imag, (None,))
+        self.Lambda_re = self.param(
+            "Lambda_re", lambda rng, shape: Lambda.real, (None,)
+        )
+        self.Lambda_im = self.param(
+            "Lambda_im", lambda rng, shape: Lambda.imag, (None,)
+        )
         if self.clip_eigs:
             self.Lambda = np.clip(self.Lambda_re, None, -1e-4) + 1j * self.Lambda_im
         else:
@@ -322,7 +332,9 @@ class S5SSM(nn.Module):
         # Initialize input to state (B) matrix
         B_init = lecun_normal()
         B_shape = (local_P, self.H)
-        self.B = self.param("B", lambda rng, shape: init_VinvB(B_init, rng, shape, Vinv), B_shape)
+        self.B = self.param(
+            "B", lambda rng, shape: init_VinvB(B_init, rng, shape, Vinv), B_shape
+        )
         B_tilde = self.B[..., 0] + 1j * self.B[..., 1]
 
         # Initialize state to output (C) matrix
@@ -335,7 +347,9 @@ class S5SSM(nn.Module):
         elif self.C_init in ["complex_normal"]:
             C_init = normal(stddev=0.5**0.5)
         else:
-            raise NotImplementedError("C_init method {} not implemented".format(self.C_init))
+            raise NotImplementedError(
+                "C_init method {} not implemented".format(self.C_init)
+            )
 
         if self.C_init in ["complex_normal"]:
             if self.bidirectional:
@@ -348,15 +362,21 @@ class S5SSM(nn.Module):
 
         else:
             if self.bidirectional:
-                self.C1 = self.param("C1", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape)
-                self.C2 = self.param("C2", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape)
+                self.C1 = self.param(
+                    "C1", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape
+                )
+                self.C2 = self.param(
+                    "C2", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape
+                )
 
                 C1 = self.C1[..., 0] + 1j * self.C1[..., 1]
                 C2 = self.C2[..., 0] + 1j * self.C2[..., 1]
                 self.C_tilde = np.concatenate((C1, C2), axis=-1)
 
             else:
-                self.C = self.param("C", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape)
+                self.C = self.param(
+                    "C", lambda rng, shape: init_CV(C_init, rng, shape, V), C_shape
+                )
 
                 self.C_tilde = self.C[..., 0] + 1j * self.C[..., 1]
 
@@ -364,16 +384,22 @@ class S5SSM(nn.Module):
         self.D = self.param("D", normal(stddev=1.0), (self.H,))
 
         # Initialize learnable discretization timescale value
-        self.log_step = self.param("log_step", init_log_steps, (self.P, self.dt_min, self.dt_max))
+        self.log_step = self.param(
+            "log_step", init_log_steps, (self.P, self.dt_min, self.dt_max)
+        )
         step = self.step_rescale * np.exp(self.log_step[:, 0])
 
         # Discretize
         if self.discretization in ["zoh"]:
             self.Lambda_bar, self.B_bar = discretize_zoh(self.Lambda, B_tilde, step)
         elif self.discretization in ["bilinear"]:
-            self.Lambda_bar, self.B_bar = discretize_bilinear(self.Lambda, B_tilde, step)
+            self.Lambda_bar, self.B_bar = discretize_bilinear(
+                self.Lambda, B_tilde, step
+            )
         else:
-            raise NotImplementedError("Discretization method {} not implemented".format(self.discretization))
+            raise NotImplementedError(
+                "Discretization method {} not implemented".format(self.discretization)
+            )
 
     def __call__(self, hidden, input_sequence, resets):
         """
@@ -385,10 +411,12 @@ class S5SSM(nn.Module):
         Returns:
             output sequence (float32): (L, H)
         """
-        Lambda_elements = self.Lambda_bar * jnp.ones((*input_sequence.shape[:-1], self.Lambda_bar.shape[0])).reshape(
-            -1, self.Lambda_bar.shape[0]
+        Lambda_elements = self.Lambda_bar * jnp.ones(
+            (*input_sequence.shape[:-1], self.Lambda_bar.shape[0])
+        ).reshape(-1, self.Lambda_bar.shape[0])
+        Bu_elements = jax.vmap(lambda u: self.B_bar @ u)(
+            input_sequence.reshape(-1, input_sequence.shape[-1])
         )
-        Bu_elements = jax.vmap(lambda u: self.B_bar @ u)(input_sequence.reshape(-1, input_sequence.shape[-1]))
 
         Lambda_elements = jnp.concatenate(
             [
@@ -405,7 +433,9 @@ class S5SSM(nn.Module):
         )
 
         if resets is None:
-            _, xs = jax.lax.associative_scan(binary_operator, (Lambda_elements, Bu_elements))
+            _, xs = jax.lax.associative_scan(
+                binary_operator, (Lambda_elements, Bu_elements)
+            )
         else:
             resets = jnp.concatenate(
                 [
@@ -413,19 +443,27 @@ class S5SSM(nn.Module):
                     resets,
                 ]
             )
-            _, xs, _ = jax.lax.associative_scan(binary_operator_reset, (Lambda_elements, Bu_elements, resets))
+            _, xs, _ = jax.lax.associative_scan(
+                binary_operator_reset, (Lambda_elements, Bu_elements, resets)
+            )
         xs = xs[1:]
 
         if self.conj_sym:
             hidden = xs[..., -1, :]
-            ys = jax.vmap(lambda x: 2 * (self.C_tilde @ x).real)(xs).reshape(input_sequence.shape)
+            ys = jax.vmap(lambda x: 2 * (self.C_tilde @ x).real)(xs).reshape(
+                input_sequence.shape
+            )
         else:
             hidden = xs[..., -1, :]
-            ys = jax.vmap(lambda x: (self.C_tilde @ x).real)(xs).reshape(input_sequence.shape)
+            ys = jax.vmap(lambda x: (self.C_tilde @ x).real)(xs).reshape(
+                input_sequence.shape
+            )
 
         # Add feedthrough matrix output Du;
         input_time_dim = input_sequence.reshape(-1, input_sequence.shape[-1])
-        Du = jax.vmap(lambda u: self.D * u)(input_time_dim).reshape(input_sequence.shape)
+        Du = jax.vmap(lambda u: self.D * u)(input_time_dim).reshape(
+            input_sequence.shape
+        )
         return hidden, ys + Du
 
 
@@ -461,7 +499,7 @@ def init_S5SSM(d_model, config: S5Config):
     return partial(
         S5SSM,
         H=d_model,
-        P=config.state_size,
+        P=config.state_size or d_model,
         C_init=config.C_init,
         discretization=config.discretization,
         dt_min=config.dt_min,
@@ -469,7 +507,7 @@ def init_S5SSM(d_model, config: S5Config):
         conj_sym=config.conj_sym,
         clip_eigs=config.clip_eigs,
         bidirectional=config.bidirectional,
-        blocks=config.blocks,
+        blocks=config.blocks or max(1, (config.state_size or d_model) // 8),
         **config.kwargs,
     )
 
@@ -538,12 +576,9 @@ def make_DPLR_HiPPO(N):
 class StackedEncoderModel(nn.Module):
     """Defines a stack of S5 layers to be used as an encoder.
     Args:
-        config         (nn.Module): the SSM to be used (i.e. S5 ssm)
         d_model     (int32):    this is the feature size of the layer inputs and outputs
-                                 we usually refer to this size as H
-        n_layers    (int32):    the number of S5 layers to stack
-        activation  (string):   Type of activation function to use
-        prenorm     (bool):     apply prenorm if true or postnorm if false
+                                we usually refer to this size as H
+        config      (S5Config): the SSM config to be used
     """
 
     d_model: int
@@ -582,5 +617,9 @@ class StackedEncoderModel(nn.Module):
     @nn.nowrap
     def initialize_carry(self, rng, input_shape):
         # Use a dummy key since the default state init fn is just zeros.
-        local_P = self.config.state_size // 2 if self.config.conj_sym else self.config.state_size
-        return [jnp.zeros((*input_shape[:-1], local_P), dtype=jnp.complex64) for _ in range(self.config.n_layers)]
+        P = self.config.state_size or self.d_model
+        local_P = P // 2 if self.config.conj_sym else P
+        return [
+            jnp.zeros((*input_shape[:-1], local_P), dtype=jnp.complex64)
+            for _ in range(self.config.n_layers)
+        ]

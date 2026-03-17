@@ -219,7 +219,7 @@ def tree_stack(trees, axis=0):
     return treedef.unflatten(result_leaves)
 
 
-def symmetric_uniform_init(lim, dtype=jnp.float_):
+def symmetric_uniform_init(lim, dtype=jnp.float32):
     def init(key, shape, dtype=dtype, out_sharding=None):
         # dtype = dtypes.canonicalize_dtype(dtype)
         # out_sharding=out_sharding
