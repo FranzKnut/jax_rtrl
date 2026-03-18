@@ -63,7 +63,7 @@ CELL_TYPES = {
 }
 
 
-def make_cell(cell_type, **kwargs):
+def get_cell_class(cell_type, **kwargs):
     if cell_type in ONLINE_CELL_TYPES:
         return ONLINE_CELL_TYPES[cell_type](**kwargs)
     elif cell_type in CELL_TYPES:

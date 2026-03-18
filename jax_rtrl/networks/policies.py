@@ -25,8 +25,8 @@ class PolicyConfig(RNNEnsembleConfig):
     """RNNEnsembleConfig for Policies."""
 
     # TODO: remove the mlp specific fields and use PolicyRNN only?
-    skip_connection: bool = False
-    norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
+    # skip_connection: bool = False
+    # norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
 
     # CNN specific
     use_cnn: bool = False

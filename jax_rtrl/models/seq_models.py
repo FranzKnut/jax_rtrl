@@ -70,7 +70,6 @@ class RNNEnsembleConfig(FrozenSerializable):
     layers: tuple[int, ...] | None = None
     num_layers: tuple[int, ...] | None = 1
     hidden_size: int | None = None
-    ensemble_method: Literal["linear", "dist", "mean", None] = "mean"
     num_modules: int = 1
     num_blocks: int = 1
     # out_size: int | None = None
@@ -81,6 +80,7 @@ class RNNEnsembleConfig(FrozenSerializable):
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
+    ensemble_method: Literal["linear", "dist", "mean", None] = "mean"
     ensemble_visible_obs_prob: float = 1.0
     ensemble_first_full_obs: bool = True
     static_rng_seed: int = 0  # Used for ensemble input mask
@@ -146,9 +146,11 @@ class RNNEnsembleConfig(FrozenSerializable):
             object.__setattr__(self, "layers", (self.hidden_size,) * self.num_layers)
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
+
 def not_(x):
     """Element-wise 'not' compatible with bool and jnp.bool_."""
     return not x if isinstance(x, bool) else ~x
+
 
 class SequenceLayer(nn.Module):
     """Single layer with normalization, sequence model, dropout, and optional GLU.
@@ -219,8 +221,8 @@ class SequenceLayer(nn.Module):
         x = nn.Dropout(
             self.config.dropout,
             broadcast_dims=[0],
-                deterministic=not_(training),
-            )(x)  # input dropout
+            deterministic=not_(training),
+        )(x)  # input dropout
         return hidden, x
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
@@ -656,7 +658,7 @@ class RNNEnsemble(nn.RNNCellBase):
             init_shape = x.shape[-1:]  # shape without time axis
             h = self.initialize_carry(jax.random.key(0), init_shape)
 
-        if self.config.model_name in CELL_TYPES and not "mlp":
+        if self.config.model_name in CELL_TYPES:
             # call rnn submodules
             if self.config.model_name in ["lru"] and len(call_args) == 0:
                 # Add reset argument for SSMs
