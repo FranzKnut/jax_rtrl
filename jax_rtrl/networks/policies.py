@@ -23,7 +23,9 @@ import jax_rtrl.util.checkpointing
 @dataclass(unsafe_hash=True, frozen=True)
 class PolicyConfig(RNNEnsembleConfig):
     """RNNEnsembleConfig for Policies."""
-
+    
+    agent_type: str | None = None  # HACK: overwrites model_name in RNNEnsembleConfig
+    
     # TODO: remove the mlp specific fields and use PolicyRNN only?
     # skip_connection: bool = False
     # norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
@@ -32,6 +34,11 @@ class PolicyConfig(RNNEnsembleConfig):
     use_cnn: bool = False
     latent_size: int = 32
     cnn_config: ConvConfig = field(default_factory=ConvConfig)
+    
+    def __post_init__(self):
+        super().__post_init__()
+        if self.agent_type is not None:
+            object.__setattr__(self, "model_name", self.agent_type)
 
 
 class Policy(nn.Module):

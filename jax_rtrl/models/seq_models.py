@@ -95,12 +95,13 @@ class RNNEnsembleConfig(FrozenSerializable):
         # Handle special cases for rnn_kwargs
         if not isinstance(self.rnn_kwargs, FrozenConfigDict):
             # Set plasticity for given model names
-            match_plasticity = self.model_name and re.search(
-                r"(rflo|rtrl|snap0)", self.model_name
-            )
-            if match_plasticity:
-                self.rnn_kwargs["plasticity"] = match_plasticity.group(1)
-            elif self.model_name in ["s5", "s5_rtrl"]:
+            # match_plasticity = self.model_name and re.search(
+            #     r"(rflo|rtrl|snap0)", self.model_name
+            # )
+            # if match_plasticity:
+            #     self.rnn_kwargs["plasticity"] = match_plasticity.group(1)
+            # el
+            if self.model_name in ["s5", "s5_rtrl"]:
                 object.__setattr__(
                     self, "rnn_kwargs", {"config": S5Config(**self.rnn_kwargs)}
                 )
@@ -186,9 +187,6 @@ class SequenceLayer(nn.Module):
     def __call__(self, hidden, inputs, training=True, *args, **kwargs):
         """Apply, layer norm, seq model, dropout and GLU in that order."""
 
-        if self.config.skip_connection:
-            inputs = self._input(inputs)
-
         # input normalization
         x = get_normalization_fn(self.config.norm, training=training)(inputs)
         x = nn.Dropout(
@@ -206,7 +204,8 @@ class SequenceLayer(nn.Module):
 
         # Optional skip connection
         if self.config.skip_connection:
-            x = x + inputs
+            skip = self._input(inputs)
+            x = x + skip
 
         if self.config.learnable_scale_rnn_out:
             scale = self.param("rnn_out_scale", nn.initializers.zeros, (self.rnn_size))
@@ -299,9 +298,10 @@ class MultiLayerRNN(nn.RNNCellBase):
 
         new_carries = []
         for i, rnn in enumerate(self.layers):
-            _carry = (
-                carries[0][i] if len(carries) <= 1 else tuple(c[i] for c in carries)
-            )
+            if len(carries) <= 1:
+                _carry = carries[0][i]
+            else:
+                _carry = tuple(c[i] for c in carries)
             _carry, x = rnn(_carry, x, training, *args, **kwargs)
             new_carries.append(_carry)
         return self._make_tuple_of_list_from_carries(new_carries), x
@@ -586,6 +586,9 @@ class RNNEnsemble(nn.RNNCellBase):
             if self.config.ensemble_method == "mean":
                 # Compute mean of outputs
                 combined_dist = jax.tree.map(lambda d: d.mean(axis=0), _dists)
+            elif self.config.ensemble_method == "median":
+                # Compute median of outputs
+                combined_dist = jax.tree.map(lambda d: d.median(axis=0), _dists)
             elif self.config.ensemble_method == "linear":
                 # Compute linear combination of outputs
                 out_gates = self.combine_layer(
@@ -594,6 +597,8 @@ class RNNEnsemble(nn.RNNCellBase):
                 out_gates = jax.nn.softmax(out_gates, axis=-1)
                 combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), _dists)
             elif self.config.ensemble_method == "dist":
+                # HACK: Distrax MixtureSameFamily expects batch_dim in the last dimension? so we swap axes here.
+                _dists = jax.tree.map(lambda d: jnp.swapaxes(d, 0, -1), _dists)
                 combined_dist = distrax.MixtureSameFamily(
                     distrax.Categorical(logits=jnp.zeros(_dists.batch_shape)), _dists
                 )
