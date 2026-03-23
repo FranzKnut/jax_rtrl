@@ -247,7 +247,7 @@ class MultiLayerRNN(nn.RNNCellBase):
     layer_config: SequenceLayerConfig = mutable_field(SequenceLayerConfig)
 
     @nn.nowrap
-    def _make_layers(self):
+    def _make_layers(self, f_align=False):
         """Create the Sequence submodels."""
         return [
             SequenceLayer(
@@ -257,6 +257,7 @@ class MultiLayerRNN(nn.RNNCellBase):
                 rnn_kwargs=self.rnn_kwargs,
                 # d_output=size,
                 config=self.layer_config,
+                f_align=f_align,
                 name=f"layer_{i}",
             )
             for i, size in enumerate(self.sizes)
@@ -322,34 +323,40 @@ class FAMultiLayerRNN(MultiLayerRNN):
 
     def setup(self):
         """Initialize submodules."""
-        self.layers = self._make_layers()
+        self.layers = self._make_layers(f_align=self.fa_type != "bp")
 
     @nn.compact
     def __call__(self, carries=None, x=None, training=True, *args, **kwargs):
         """Call the MultiLayerRNN with the given carries and input x."""
-        if self.fa_type == "bp":
+        if self.fa_type in ["bp", "fa"]:
+            # For feedback alignment, random weights inbetween layers handled by FADense
             return MultiLayerRNN.__call__(self, carries, x, training, *args, **kwargs)
-        elif self.fa_type in ["fa", "dfa"]:
-            Bs = [
+        if self.fa_type == "dfa":
+            # Direct feedback alignment: random weights from output to each layer
+            for i, size in enumerate((x.shape[-1],) + self.sizes[:-1]):
                 self.variable(
                     "falign",
                     f"B{i}",
                     self.kernel_init,
                     self.make_rng() if self.has_rng("params") else None,
                     (size, self.sizes[-1]),
-                ).value
-                for i, size in enumerate(self.sizes)
-            ]
+                )
         else:
             raise ValueError("unknown fa_type: " + self.fa_type)
 
-        def f(mdl, _carries, x, _Bs):
+        def f(mdl, _carries, x):
             return MultiLayerRNN.__call__(mdl, _carries, x, *args, **kwargs)
 
-        def fwd(mdl: FAMultiLayerRNN, _carries, x, _Bs):
-            """Forward pass with tmp for backward pass."""
+        def fwd(mdl: FAMultiLayerRNN, _carries, x):
+            """Forward pass with tmp for backward pass.
+
+            Args:
+                mdl: Module instance
+                _carries: Initial carries
+                x: Input
+                falign_vars: Feedback alignment variables (pre-extracted to avoid tracer leaks)
+            """
             vjps = []
-            # x, vjp_in = nn.vjp(FADense.__call__, mdl.input, x)
             _new_carries = []
             for i, rnn in enumerate(mdl.layers):
                 _carry = (
@@ -357,43 +364,41 @@ class FAMultiLayerRNN(MultiLayerRNN):
                     if isinstance(_carries, tuple)
                     else _carries[i]
                 )
-                (_carry, x), vjp_func = nn.vjp(SequenceLayer.__call__, rnn, _carry, x)
+                (_carry, x), vjp_func = nn.vjp(rnn.__call__, rnn, _carry, x)
                 _new_carries.append(_carry)
                 vjps.append(vjp_func)
 
             return (mdl._make_tuple_of_list_from_carries(_new_carries), x), (
                 # vjp_in,
                 vjps,
-                _Bs,
+                mdl.variables["falign"],
             )
 
         def bwd(tmp, y_bar):
             """Backward pass that may use feedback alignment."""
             vjps, _Bs = tmp
-            # vjp_in, vjps, _Bs = tmp
-            y_t = y_bar[1]  # Initial output for the first layer
+            c_bar, y_t = y_bar
+            c_bar = [tuple(c[i] for c in c_bar) for i in range(len(self.sizes))]
             grads = {}
             grads_inputs = []
-            for i in range(len(self.sizes)):
-                params_t, *inputs_t = vjps[i]((y_bar[0][i], y_t))
+            last_idx = len(self.sizes) - 1
+            params_t, *inputs_t = vjps[last_idx]((c_bar[last_idx], y_t))
+            grads[f"layer_{last_idx}"] = params_t["params"]
+            grads_inputs.append(inputs_t[0])
+            for i in range(last_idx - 1, -1, -1):
+                params_t, *inputs_t = vjps[i]((c_bar[i], y_t))
                 grads[f"layer_{i}"] = params_t["params"]
                 grads_inputs.append(inputs_t[0])
-                if self.fa_type == "dfa":
-                    # Direct feedback alignment
-                    y_t = _Bs[i] @ y_bar[1]
-                elif self.fa_type == "fa":
-                    # Feedback alignment
-                    y_t = _Bs[i] @ y_t
-
-            # in_grad, x_grad = vjp_in(y_t)
+                # Direct feedback alignment
+                y_t = _Bs[f"B{i}"] @ y_bar[1]
             x_grad = y_t
-            # grads["input"] = in_grad["params"]
 
+            grads_inputs = grads_inputs[::-1]
             return ({"params": grads}, grads_inputs, x_grad, zeros_like_tree(_Bs))
 
         fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
 
-        return fa_grad(self, carries, x, Bs)
+        return fa_grad(self, carries, x)
 
 
 class BlockWrapper(nn.RNNCellBase):
@@ -539,14 +544,14 @@ class RNNEnsemble(nn.RNNCellBase):
                 axis_size=self.config.num_modules,
             )(
                 self.config.output_layers,
-                f_align=self.config.rnn_kwargs.get("f_align", False),
+                f_align=self.config.fa_type != "bp",
                 name="mlps_out",
             )
 
         if self.config.ensemble_method == "linear":
             self.combine_layer = FADense(
                 self.config.num_modules,
-                f_align=self.config.rnn_kwargs.get("f_align", False),
+                f_align=self.config.fa_type != "bp",
                 name="combine_layer",
             )
 
