@@ -1,4 +1,4 @@
-"""Tests for Hopfield Network layer implementations."""
+"""Tests for Hopfield Network cell implementations."""
 
 import unittest
 
@@ -6,299 +6,286 @@ import jax
 import jax.numpy as jnp
 
 from jax_rtrl.models.cells.hopfield import (
-    HopfieldLayer,
-    classical_update,
-    hebbian_weights,
-    modern_update,
+    HopfieldCell,
+    classical_hopfield,
+    modern_hopfield,
 )
+from jax_rtrl.models.seq_models import scan_rnn
+from jax_rtrl.util.jax_util import mse_loss
 
 A_TOL = 1e-5
 
 
-class TestHebbianWeights(unittest.TestCase):
-    """Unit tests for the hebbian_weights helper function."""
-
-    def test_shape(self):
-        """Weight matrix has shape (num_units, num_units)."""
-        patterns = jnp.ones((3, 8))
-        W = hebbian_weights(patterns)
-        self.assertEqual(W.shape, (8, 8))
-
-    def test_symmetry(self):
-        """Weight matrix is symmetric."""
-        patterns = jax.random.normal(jax.random.PRNGKey(0), (5, 10))
-        W = hebbian_weights(patterns)
-        self.assertTrue(jnp.allclose(W, W.T, atol=A_TOL))
-
-    def test_zero_diagonal(self):
-        """Diagonal of weight matrix is zero (no self-connections)."""
-        patterns = jax.random.normal(jax.random.PRNGKey(0), (5, 10))
-        W = hebbian_weights(patterns)
-        self.assertTrue(jnp.allclose(jnp.diag(W), jnp.zeros(10), atol=A_TOL))
+## ODE function tests
 
 
-class TestClassicalUpdate(unittest.TestCase):
-    """Unit tests for the classical_update helper function."""
-
-    def test_output_values(self):
-        """Output is strictly bipolar {-1, +1}."""
-        W = jnp.eye(4)
-        x = jnp.array([0.5, -0.5, 0.0, -0.1])
-        out = classical_update(x, W)
-        self.assertTrue(jnp.all(jnp.abs(out) == 1.0))
-
-    def test_non_negative_maps_to_plus_one(self):
-        """Non-negative net-input maps to +1."""
-        W = jnp.eye(4)
-        x = jnp.array([1.0, 0.0, 0.0, 0.0])
-        out = classical_update(x, W)
-        self.assertEqual(float(out[0]), 1.0)
-
-    def test_negative_maps_to_minus_one(self):
-        """Negative net-input maps to -1."""
-        W = jnp.eye(4)
-        x = jnp.array([-1.0, 0.0, 0.0, 0.0])
-        out = classical_update(x, W)
-        self.assertEqual(float(out[0]), -1.0)
-
-
-class TestModernUpdate(unittest.TestCase):
-    """Unit tests for the modern_update helper function."""
-
-    def test_output_shape(self):
-        """Output has the same shape as the query."""
-        patterns = jax.random.normal(jax.random.PRNGKey(0), (6, 8))
-        x = jax.random.normal(jax.random.PRNGKey(1), (8,))
-        out = modern_update(x, patterns)
-        self.assertEqual(out.shape, (8,))
-
-    def test_batched_output_shape(self):
-        """Output has correct shape with a batch dimension."""
-        patterns = jax.random.normal(jax.random.PRNGKey(0), (6, 8))
-        x = jax.random.normal(jax.random.PRNGKey(1), (4, 8))
-        out = modern_update(x, patterns)
-        self.assertEqual(out.shape, (4, 8))
-
-    def test_high_beta_retrieves_closest(self):
-        """With very high beta the output is the pattern closest to the query."""
-        # Use identity matrix as patterns so each column is a basis vector.
-        d = 8
-        patterns = jnp.eye(d)
-        # Query is the 3rd basis vector with slight noise.
-        x = patterns[2] + 0.01 * jax.random.normal(jax.random.PRNGKey(7), (d,))
-        out = modern_update(x, patterns, beta=1000.0)
-        self.assertTrue(jnp.allclose(out, patterns[2], atol=1e-3))
-
-
-class TestClassicalHopfieldLayer(unittest.TestCase):
-    """Tests for HopfieldLayer in classical mode."""
+class TestClassicalHopfieldODE(unittest.TestCase):
+    """Tests for the classical_hopfield standalone ODE function."""
 
     def setUp(self):
-        self.rng = jax.random.PRNGKey(0)
+        self.num_units = 5
+        self.input_dim = 3
+        key = jax.random.PRNGKey(0)
+        w_shape = (self.num_units, self.input_dim + self.num_units + 1)
+        self.params = {
+            "W": jax.random.normal(key, w_shape),
+            "tau": jnp.ones(self.num_units),
+        }
+        self.h = jax.random.normal(jax.random.PRNGKey(1), (self.num_units,))
+        self.x = jax.random.normal(jax.random.PRNGKey(2), (self.input_dim,))
+
+    def test_output_shape(self):
+        """ODE derivative has shape (num_units,)."""
+        dh = classical_hopfield(self.params, self.h, self.x)
+        self.assertEqual(dh.shape, (self.num_units,))
+
+    def test_fixed_point_is_bipolar(self):
+        """At a fixed point (dh/dt = 0), the hidden state must be bipolar."""
+        # At a fixed point: h = sign(W @ [x, h, 1]), so h is bipolar.
+        # Simulate convergence by many Euler steps.
+        h = jnp.sign(self.h)  # start close to a bipolar state
+        tau = jnp.ones(self.num_units) * 0.1
+        params = {**self.params, "tau": tau}
+        for _ in range(200):
+            dh = classical_hopfield(params, h, self.x)
+            h = h + 0.1 * dh
+        # After convergence the state should be approximately bipolar.
+        self.assertTrue(jnp.allclose(jnp.abs(h), jnp.ones_like(h), atol=0.01))
+
+
+class TestModernHopfieldODE(unittest.TestCase):
+    """Tests for the modern_hopfield standalone ODE function."""
+
+    def setUp(self):
         self.num_units = 8
+        self.input_dim = 3
+        self.num_stored = 8
+        key = jax.random.PRNGKey(0)
+        w_shape = (self.num_units, self.input_dim + self.num_units + 1)
+        self.params = {
+            "W": jax.random.normal(key, w_shape),
+            "tau": jnp.ones(self.num_units),
+            "patterns": jnp.eye(self.num_stored),  # orthonormal patterns
+        }
+        self.h = jax.random.normal(jax.random.PRNGKey(1), (self.num_units,))
+        self.x = jnp.zeros(self.input_dim)
 
     def test_output_shape(self):
-        """Output has shape (..., num_units)."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="classical")
-        x = jax.random.normal(self.rng, (self.num_units,))
-        patterns = jax.random.normal(self.rng, (4, self.num_units))
-        params = layer.init(self.rng, x, patterns)
-        out = layer.apply(params, x, patterns)
-        self.assertEqual(out.shape, (self.num_units,))
+        """ODE derivative has shape (num_units,)."""
+        dh = modern_hopfield(self.params, self.h, self.x)
+        self.assertEqual(dh.shape, (self.num_units,))
 
-    def test_batched_output_shape(self):
-        """Output preserves a leading batch dimension."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="classical")
-        x = jax.random.normal(self.rng, (5, self.num_units))
-        patterns = jax.random.normal(self.rng, (4, self.num_units))
-        params = layer.init(self.rng, x, patterns)
-        out = layer.apply(params, x, patterns)
-        self.assertEqual(out.shape, (5, self.num_units))
-
-    def test_retrieves_stored_pattern(self):
-        """Exact stored pattern is a fixed point of the classical network."""
-        # Two orthogonal bipolar patterns of length 4.
-        patterns = jnp.array([[1.0, -1.0, 1.0, -1.0], [-1.0, 1.0, -1.0, 1.0]])
-        layer = HopfieldLayer(num_units=4, mode="classical", num_steps=10)
-        params = layer.init(self.rng, patterns[0], patterns)
-        retrieved = layer.apply(params, patterns[0], patterns)
+    def test_high_beta_attracts_to_nearest_pattern(self):
+        """With very high beta and zero input, ODE converges to nearest pattern."""
+        # Zero W so query = W @ [x, h, 1] = h (only recurrent part).
+        # Use identity patterns so similarity = h[i].
+        w_shape = (self.num_units, self.input_dim + self.num_units + 1)
+        W_zero_input = jnp.zeros(w_shape)
+        # Make the recurrent block an identity so query = h.
+        W_zero_input = W_zero_input.at[:, self.input_dim : self.input_dim + self.num_units].set(
+            jnp.eye(self.num_units)
+        )
+        params = {**self.params, "W": W_zero_input, "tau": jnp.ones(self.num_units) * 0.1}
+        # Start hidden state near pattern 3.
+        h = jnp.eye(self.num_units)[3] * 0.9
+        for _ in range(300):
+            dh = modern_hopfield(params, h, self.x, beta=100.0)
+            h = h + 0.1 * dh
         self.assertTrue(
-            jnp.allclose(retrieved, patterns[0], atol=A_TOL),
-            "Exact stored pattern should be retrieved unchanged.",
+            jnp.allclose(h, jnp.eye(self.num_units)[3], atol=0.05),
+            "ODE should converge to the nearest stored pattern.",
         )
 
-    def test_output_is_bipolar(self):
-        """All output values are in {-1, +1}."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="classical", num_steps=3)
-        x = jax.random.normal(self.rng, (self.num_units,))
-        patterns = jax.random.normal(self.rng, (4, self.num_units))
-        params = layer.init(self.rng, x, patterns)
-        out = layer.apply(params, x, patterns)
-        self.assertTrue(jnp.all(jnp.abs(out) == 1.0))
 
-    def test_learned_weight_matrix(self):
-        """Classical layer with learned weights (no patterns argument) runs and has the right shape."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="classical")
-        x = jax.random.normal(self.rng, (self.num_units,))
-        params = layer.init(self.rng, x)
-        out = layer.apply(params, x)
-        self.assertEqual(out.shape, (self.num_units,))
-        # The weight param should exist and be square.
-        self.assertIn("W", params["params"])
-        self.assertEqual(params["params"]["W"].shape, (self.num_units, self.num_units))
+## Cell tests
 
 
-class TestModernHopfieldLayer(unittest.TestCase):
-    """Tests for HopfieldLayer in modern mode."""
+class HopfieldCellTestBase(unittest.TestCase):
+    """Base class for HopfieldCell tests with common setup."""
+
+    def get_cell_kwargs(self):
+        return {"num_units": 5, "update_type": "modern"}
 
     def setUp(self):
-        self.rng = jax.random.PRNGKey(0)
-        self.num_units = 16
+        self.cell = HopfieldCell(**self.get_cell_kwargs())
+        self.input_data = jax.random.normal(jax.random.PRNGKey(0), (10, 3))
+        self.target = jax.random.normal(jax.random.PRNGKey(1), (5,))
+        self.params = self.cell.init(jax.random.PRNGKey(3), None, self.input_data[0])
+        self.initialize_carry = lambda: self.cell.apply(
+            self.params,
+            jax.random.PRNGKey(4),
+            self.input_data[0].shape,
+            method=self.cell.initialize_carry,
+        )
+
+
+class TestModernHopfieldCell(HopfieldCellTestBase):
+    def get_cell_kwargs(self):
+        return {"num_units": 5, "update_type": "modern", "beta": 2.0}
 
     def test_output_shape(self):
-        """Output has shape (..., num_units)."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="modern")
-        x = jax.random.normal(self.rng, (self.num_units,))
-        patterns = jax.random.normal(self.rng, (8, self.num_units))
-        params = layer.init(self.rng, x, patterns)
-        out = layer.apply(params, x, patterns)
-        self.assertEqual(out.shape, (self.num_units,))
+        """Cell output has shape (num_units,)."""
+        h = self.initialize_carry()
+        carry, out = self.cell.apply(self.params, h, self.input_data[0])
+        self.assertEqual(out.shape, (5,))
 
-    def test_batched_output_shape(self):
-        """Output preserves a leading batch dimension."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="modern")
-        x = jax.random.normal(self.rng, (4, self.num_units))
-        patterns = jax.random.normal(self.rng, (8, self.num_units))
-        params = layer.init(self.rng, x, patterns)
-        out = layer.apply(params, x, patterns)
-        self.assertEqual(out.shape, (4, self.num_units))
+    def test_carry_shape(self):
+        """Carry has the same shape as the output."""
+        h = self.initialize_carry()
+        carry, out = self.cell.apply(self.params, h, self.input_data[0])
+        self.assertEqual(carry.shape, out.shape)
 
-    def test_learned_patterns_shape(self):
-        """Learned patterns parameter has shape (num_stored_patterns, num_units)."""
-        num_stored = 32
-        layer = HopfieldLayer(
-            num_units=self.num_units, mode="modern", num_stored_patterns=num_stored
-        )
-        x = jax.random.normal(self.rng, (self.num_units,))
-        params = layer.init(self.rng, x)
-        self.assertIn("patterns", params["params"])
+    def test_params_structure(self):
+        """Modern mode creates W, tau, and patterns parameters."""
+        self.assertIn("W", self.params["params"])
+        self.assertIn("tau", self.params["params"])
+        self.assertIn("patterns", self.params["params"])
+
+    def test_patterns_shape(self):
+        """Stored patterns have shape (num_stored_patterns, num_units)."""
         self.assertEqual(
-            params["params"]["patterns"].shape, (num_stored, self.num_units)
+            self.params["params"]["patterns"].shape, (5, 5)
         )
 
-    def test_default_learned_patterns_shape(self):
-        """Without num_stored_patterns, the default is num_units patterns."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="modern")
-        x = jax.random.normal(self.rng, (self.num_units,))
-        params = layer.init(self.rng, x)
-        self.assertEqual(
-            params["params"]["patterns"].shape, (self.num_units, self.num_units)
+    def test_custom_num_stored_patterns(self):
+        """num_stored_patterns attribute controls the patterns parameter shape."""
+        cell = HopfieldCell(num_units=5, update_type="modern", num_stored_patterns=12)
+        params = cell.init(jax.random.PRNGKey(0), None, self.input_data[0])
+        self.assertEqual(params["params"]["patterns"].shape, (12, 5))
+
+    def test_gradient_flow(self):
+        """Gradients flow through all parameters."""
+        h = self.initialize_carry()
+        loss_fn = jax.grad(
+            lambda params, h: mse_loss(
+                self.cell.apply(params, h, self.input_data[0])[1], self.target
+            )
         )
+        grads = loss_fn(self.params, h)["params"]
+        for key in grads:
+            self.assertFalse(
+                jnp.all(grads[key] == 0),
+                f"Gradient for '{key}' should be non-zero.",
+            )
 
-    def test_high_beta_retrieves_closest_pattern(self):
-        """With high beta, the layer retrieves the closest stored pattern."""
-        d = self.num_units
-        patterns = jnp.eye(d)  # orthonormal basis
-        layer = HopfieldLayer(num_units=d, mode="modern", beta=500.0)
-        # Query is the 5th basis vector with slight noise.
-        x = patterns[5] + 0.01 * jax.random.normal(self.rng, (d,))
-        params = layer.init(self.rng, x, patterns)
-        out = layer.apply(params, x, patterns)
-        self.assertTrue(
-            jnp.allclose(out, patterns[5], atol=1e-3),
-            "With high beta the closest pattern should be retrieved.",
+    def test_multi_step_gradient_flow(self):
+        """Gradients flow over multiple sequence steps."""
+        h = self.initialize_carry()
+        loss_fn = jax.grad(
+            lambda params, _h: mse_loss(
+                scan_rnn(self.cell, params, self.input_data, init_carry=_h)[1],
+                self.target,
+            )
         )
-
-    def test_gradient_flow_external_patterns(self):
-        """Gradients flow through the layer when patterns are provided externally."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="modern")
-        x = jax.random.normal(self.rng, (self.num_units,))
-        patterns = jax.random.normal(self.rng, (8, self.num_units))
-        params = layer.init(self.rng, x, patterns)
-
-        def loss_fn(params):
-            out = layer.apply(params, x, patterns)
-            return jnp.sum(out**2)
-
-        grads = jax.grad(loss_fn)(params)
-        # No learned params in this case – gradient computation should not error.
+        grads = loss_fn(self.params, h)["params"]
         self.assertIsNotNone(grads)
 
-    def test_gradient_flow_learned_patterns(self):
-        """Gradients flow through learned stored patterns."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="modern")
-        x = jax.random.normal(self.rng, (self.num_units,))
-        params = layer.init(self.rng, x)
 
-        def loss_fn(params):
-            out = layer.apply(params, x)
-            return jnp.sum(out**2)
+class TestClassicalHopfieldCell(HopfieldCellTestBase):
+    def get_cell_kwargs(self):
+        return {"num_units": 5, "update_type": "classical"}
 
-        grads = jax.grad(loss_fn)(params)
+    def test_output_shape(self):
+        """Cell output has shape (num_units,)."""
+        h = self.initialize_carry()
+        carry, out = self.cell.apply(self.params, h, self.input_data[0])
+        self.assertEqual(out.shape, (5,))
+
+    def test_carry_shape(self):
+        """Carry has the same shape as the output."""
+        h = self.initialize_carry()
+        carry, out = self.cell.apply(self.params, h, self.input_data[0])
+        self.assertEqual(carry.shape, out.shape)
+
+    def test_params_structure(self):
+        """Classical mode creates W and tau parameters (no patterns)."""
+        self.assertIn("W", self.params["params"])
+        self.assertIn("tau", self.params["params"])
+        self.assertNotIn("patterns", self.params["params"])
+
+    def test_w_shape(self):
+        """W has shape (num_units, input_dim + num_units + 1)."""
+        input_dim = self.input_data.shape[-1]
+        expected = (5, input_dim + 5 + 1)
+        self.assertEqual(self.params["params"]["W"].shape, expected)
+
+    def test_gradient_flow(self):
+        """tau gradient flows; W gradient is zero because sign() is non-differentiable."""
+        h = self.initialize_carry()
+        loss_fn = jax.grad(
+            lambda params, h: mse_loss(
+                self.cell.apply(params, h, self.input_data[0])[1], self.target
+            )
+        )
+        grads = loss_fn(self.params, h)["params"]
+        # sign() has zero gradient, so W gradient is expected to be zero.
         self.assertTrue(
-            jnp.any(grads["params"]["patterns"] != 0),
-            "Gradients w.r.t. learned patterns should be non-zero.",
+            jnp.all(grads["W"] == 0),
+            "W gradient should be zero (sign() is non-differentiable).",
+        )
+        # tau gradient should be non-zero: d/d_tau = -(sign(u)-h)/tau^2
+        self.assertFalse(
+            jnp.all(grads["tau"] == 0),
+            "tau gradient should be non-zero.",
         )
 
-    def test_multiple_steps_converges(self):
-        """More retrieval steps should not increase the energy."""
-        d = self.num_units
-        patterns = jax.random.normal(jax.random.PRNGKey(1), (d, d))
-        beta = 2.0
-        x_init = jax.random.normal(self.rng, (d,))
-
-        def energy(x):
-            scores = beta * patterns @ x
-            return -jax.nn.logsumexp(scores) + 0.5 * jnp.dot(x, x)
-
-        layer_1 = HopfieldLayer(num_units=d, mode="modern", beta=beta, num_steps=1)
-        layer_5 = HopfieldLayer(num_units=d, mode="modern", beta=beta, num_steps=5)
-        # Both layers have no learnable params when patterns are provided.
-        params = layer_1.init(self.rng, x_init, patterns)
-
-        x_1 = layer_1.apply(params, x_init, patterns)
-        x_5 = layer_5.apply(params, x_init, patterns)
-
-        e_init = float(energy(x_init))
-        e_1 = float(energy(x_1))
-        e_5 = float(energy(x_5))
-
-        self.assertLessEqual(e_1, e_init + 1e-5, "One step should not increase energy.")
-        self.assertLessEqual(e_5, e_init + 1e-5, "Five steps should not increase energy.")
+    def test_multi_step_gradient_flow(self):
+        """Gradients flow over multiple sequence steps."""
+        h = self.initialize_carry()
+        loss_fn = jax.grad(
+            lambda params, _h: mse_loss(
+                scan_rnn(self.cell, params, self.input_data, init_carry=_h)[1],
+                self.target,
+            )
+        )
+        grads = loss_fn(self.params, h)["params"]
+        self.assertIsNotNone(grads)
 
 
-class TestHopfieldLayerModeSwitch(unittest.TestCase):
-    """Tests ensuring mode selection works correctly."""
+class TestHopfieldCellUpdateType(unittest.TestCase):
+    """Tests for update_type selection and cell-level differences."""
 
     def setUp(self):
-        self.rng = jax.random.PRNGKey(42)
+        self.rng = jax.random.PRNGKey(0)
         self.num_units = 8
+        self.input_data = jax.random.normal(self.rng, (10, 4))
 
-    def test_modern_mode_default(self):
-        """Default mode is 'modern'."""
-        layer = HopfieldLayer(num_units=self.num_units)
-        self.assertEqual(layer.mode, "modern")
+    def test_default_update_type_is_modern(self):
+        """Default update_type is 'modern'."""
+        cell = HopfieldCell(num_units=self.num_units)
+        self.assertEqual(cell.update_type, "modern")
 
-    def test_classical_mode_attribute(self):
-        """Classical mode attribute is set correctly."""
-        layer = HopfieldLayer(num_units=self.num_units, mode="classical")
-        self.assertEqual(layer.mode, "classical")
+    def test_classical_update_type(self):
+        """update_type='classical' attribute is stored correctly."""
+        cell = HopfieldCell(num_units=self.num_units, update_type="classical")
+        self.assertEqual(cell.update_type, "classical")
 
-    def test_classical_output_differs_from_modern(self):
-        """Classical and modern modes produce different outputs."""
-        x = jax.random.normal(self.rng, (self.num_units,))
-        patterns = jax.random.normal(self.rng, (4, self.num_units))
+    def test_invalid_update_type_raises(self):
+        """Invalid update_type raises ValueError at call time."""
+        cell = HopfieldCell(num_units=self.num_units, update_type="unknown")
+        with self.assertRaises(ValueError):
+            cell.init(self.rng, None, self.input_data[0])
 
-        layer_c = HopfieldLayer(num_units=self.num_units, mode="classical")
-        layer_m = HopfieldLayer(num_units=self.num_units, mode="modern")
+    def test_classical_and_modern_produce_different_outputs(self):
+        """Classical and modern modes produce different outputs for the same input."""
+        x = jax.random.normal(self.rng, (self.input_data.shape[-1],))
 
-        params_c = layer_c.init(self.rng, x, patterns)
-        params_m = layer_m.init(self.rng, x, patterns)
+        cell_c = HopfieldCell(num_units=self.num_units, update_type="classical")
+        cell_m = HopfieldCell(num_units=self.num_units, update_type="modern")
 
-        out_c = layer_c.apply(params_c, x, patterns)
-        out_m = layer_m.apply(params_m, x, patterns)
+        params_c = cell_c.init(self.rng, None, x)
+        params_m = cell_m.init(self.rng, None, x)
 
-        # Outputs should differ: classical is bipolar, modern is continuous.
+        h_c = cell_c.apply(
+            params_c, self.rng, x.shape, method=cell_c.initialize_carry
+        )
+        h_m = cell_m.apply(
+            params_m, self.rng, x.shape, method=cell_m.initialize_carry
+        )
+
+        _, out_c = cell_c.apply(params_c, h_c, x)
+        _, out_m = cell_m.apply(params_m, h_m, x)
+
         self.assertFalse(
             jnp.allclose(out_c, out_m, atol=A_TOL),
             "Classical and modern modes should produce different outputs.",
