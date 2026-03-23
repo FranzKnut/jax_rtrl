@@ -1,6 +1,7 @@
 from functools import partial
 
 from jax_rtrl.models.cells.ctrnn import CTRNNCell, OnlineCTRNNCell
+from jax_rtrl.models.cells.lif import LIFCell, OnlineLIFCell
 from jax_rtrl.models.cells.lrc import LRCCell, OnlineLRCCell
 from jax_rtrl.models.cells.lru import OnlineLRULayer
 from jax_rtrl.models.cells.ltc import LTCCell, OnlineLTCCell
@@ -47,6 +48,9 @@ ONLINE_CELL_TYPES = {
     "ltc_snap0": partial(OnlineLTCCell, plasticity="snap0"),
     # LRC
     "lrc_snap0": partial(OnlineLRCCell, plasticity="snap0"),
+    # LIF
+    "lif_eprop": partial(OnlineLIFCell, plasticity="eprop"),
+    "adlif_eprop": partial(OnlineLIFCell, lif_type="adlif", plasticity="eprop"),
 }
 
 
@@ -57,6 +61,9 @@ CELL_TYPES = {
     "ltc": LTCCell,
     "lrc": LRCCell,
     "mlp": MLPCell,
+    # LIF (BPTT with surrogate gradients)
+    "lif": LIFCell,
+    "adlif": partial(LIFCell, lif_type="adlif"),
     # "linear": StackedEncoderModel, # TODO: homogenize StackedEncoderModel and MultiLayerRNN
     # "gru": StackedEncoderModel,
     **ONLINE_CELL_TYPES,
