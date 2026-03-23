@@ -1,6 +1,7 @@
 from functools import partial
 
 from jax_rtrl.models.cells.ctrnn import CTRNNCell, OnlineCTRNNCell
+from jax_rtrl.models.cells.hopfield import HopfieldLayer
 from jax_rtrl.models.cells.lrc import LRCCell, OnlineLRCCell
 from jax_rtrl.models.cells.lru import OnlineLRULayer
 from jax_rtrl.models.cells.ltc import LTCCell, OnlineLTCCell
