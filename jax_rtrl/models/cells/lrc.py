@@ -170,6 +170,61 @@ class OnlineLRCCell(OnlineODECell, LRCCell):
             raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
         return traces
 
+    @nn.compact
+    def __call__(self, carry, x, return_sequences=False):  # noqa
+        """Call ODE solver.
+
+        For ``plasticity="deer"`` the full input sequence ``x`` of shape
+        ``(T, input_dim)`` is processed in parallel using the DEER quasi-Newton
+        iteration (see :func:`jax_rtrl.models.cells.deer_util.seq1d`).  All
+        other plasticity modes delegate to the parent class, which processes
+        inputs one step at a time.
+        """
+        if self.plasticity != "deer":
+            return super().__call__(carry, x, return_sequences)
+
+        # --- DEER mode: x must be a sequence (T, input_dim) ---
+        _is_sequence = x.ndim > 1
+        x_seq = x if _is_sequence else x[None]  # ensure (T, input_dim)
+
+        if carry is None:
+            carry = self.initialize_carry(self.make_rng(), x_seq.shape[-1:])
+
+        # Initialise parameters using a single input example.
+        self._make_params(x_seq[0])
+
+        return self._deer_solve(carry, x_seq)
+
+    def _deer_solve(self, h0, xs, max_iter=10):
+        """Run the DEER parallel sequence solver for a full input sequence.
+
+        Args:
+            h0: (ny,) initial hidden state.
+            xs: (T, input_dim) input sequence.
+            max_iter: number of quasi-Newton iterations for :func:`seq1d`.
+
+        Returns:
+            Tuple ``(h_final, all_hidden_states)`` where ``h_final`` is the
+            last hidden state ``(ny,)`` and ``all_hidden_states`` is ``(T, ny)``.
+        """
+        from jax_rtrl.models.cells.deer_util import seq1d
+
+        params = self.variables["params"]
+
+        if self.wiring is not None:
+            mask = jax.lax.stop_gradient(self.variables["wiring"]["mask"])
+            params = jax.tree.map(lambda W: W * mask, params)
+
+        use_sym = self.use_symmetric
+        dt = self.dt
+
+        def func_step(h, x, p):
+            """Single Euler step of the LRC ODE."""
+            return h + dt * lrc_ode(p, h, x, use_sym)
+
+        all_h = seq1d(func_step, h0, xs, params, max_iter=max_iter)
+        return all_h[-1], all_h
+
 
 if __name__ == "__main__":
     import numpy as np
