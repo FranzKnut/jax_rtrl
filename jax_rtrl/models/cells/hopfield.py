@@ -78,7 +78,7 @@ class HopfieldCell(ODECell):
 
     Attributes:
         num_units: Dimension of the hidden state / pattern space.
-        update_type: ``"classical"`` (Hopfield 1982) or ``"modern"``
+        ode_type: ``"classical"`` (Hopfield 1982) or ``"modern"``
             (Ramsauer et al. 2020).
         beta: Inverse temperature for modern mode.  Higher values produce
             sharper, more winner-take-all retrieval.
@@ -86,7 +86,7 @@ class HopfieldCell(ODECell):
             Defaults to ``num_units`` when ``None``.
     """
 
-    update_type: str = "modern"
+    ode_type: str = "modern"
     beta: float = 1.0
     num_stored_patterns: int | None = None
 
@@ -108,7 +108,7 @@ class HopfieldCell(ODECell):
         self.param(
             "tau", partial(jrand.uniform, minval=1, maxval=8), (self.num_units,)
         )
-        if self.update_type == "modern":
+        if self.ode_type == "modern":
             num_stored = self.num_stored_patterns or self.num_units
             self.param(
                 "patterns",
@@ -119,12 +119,12 @@ class HopfieldCell(ODECell):
     def _f(self, h, x):
         """Compute the derivative of the state."""
         params = self.variables["params"]
-        if self.update_type == "classical":
+        if self.ode_type == "classical":
             return classical_hopfield(params, h, x)
-        elif self.update_type == "modern":
+        elif self.ode_type == "modern":
             return modern_hopfield(params, h, x, beta=self.beta)
         else:
-            raise ValueError(f"Unknown update_type: {self.update_type!r}")
+            raise ValueError(f"Unknown update_type: {self.ode_type!r}")
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""

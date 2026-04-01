@@ -48,6 +48,10 @@ ONLINE_CELL_TYPES = {
     "ltc_snap0": partial(OnlineLTCCell, plasticity="snap0"),
     # LRC
     "lrc_snap0": partial(OnlineLRCCell, plasticity="snap0"),
+    
+    # Hopfield
+    "hopfield": partial(HopfieldCell, ode_type="classical"),
+    "modern_hopfield": partial(HopfieldCell, ode_type="modern"),
 }
 
 

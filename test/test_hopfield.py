@@ -104,7 +104,7 @@ class HopfieldCellTestBase(unittest.TestCase):
     """Base class for HopfieldCell tests with common setup."""
 
     def get_cell_kwargs(self):
-        return {"num_units": 5, "update_type": "modern"}
+        return {"num_units": 5, "ode_type": "modern"}
 
     def setUp(self):
         self.cell = HopfieldCell(**self.get_cell_kwargs())
@@ -121,7 +121,7 @@ class HopfieldCellTestBase(unittest.TestCase):
 
 class TestModernHopfieldCell(HopfieldCellTestBase):
     def get_cell_kwargs(self):
-        return {"num_units": 5, "update_type": "modern", "beta": 2.0}
+        return {"num_units": 5, "ode_type": "modern", "beta": 2.0}
 
     def test_output_shape(self):
         """Cell output has shape (num_units,)."""
@@ -149,7 +149,7 @@ class TestModernHopfieldCell(HopfieldCellTestBase):
 
     def test_custom_num_stored_patterns(self):
         """num_stored_patterns attribute controls the patterns parameter shape."""
-        cell = HopfieldCell(num_units=5, update_type="modern", num_stored_patterns=12)
+        cell = HopfieldCell(num_units=5, ode_type="modern", num_stored_patterns=12)
         params = cell.init(jax.random.PRNGKey(0), None, self.input_data[0])
         self.assertEqual(params["params"]["patterns"].shape, (12, 5))
 
@@ -183,7 +183,7 @@ class TestModernHopfieldCell(HopfieldCellTestBase):
 
 class TestClassicalHopfieldCell(HopfieldCellTestBase):
     def get_cell_kwargs(self):
-        return {"num_units": 5, "update_type": "classical"}
+        return {"num_units": 5, "ode_type": "classical"}
 
     def test_output_shape(self):
         """Cell output has shape (num_units,)."""
@@ -243,26 +243,26 @@ class TestClassicalHopfieldCell(HopfieldCellTestBase):
 
 
 class TestHopfieldCellUpdateType(unittest.TestCase):
-    """Tests for update_type selection and cell-level differences."""
+    """Tests for ode_type selection and cell-level differences."""
 
     def setUp(self):
         self.rng = jax.random.PRNGKey(0)
         self.num_units = 8
         self.input_data = jax.random.normal(self.rng, (10, 4))
 
-    def test_default_update_type_is_modern(self):
-        """Default update_type is 'modern'."""
+    def test_default_ode_type_is_modern(self):
+        """Default ode_type is 'modern'."""
         cell = HopfieldCell(num_units=self.num_units)
-        self.assertEqual(cell.update_type, "modern")
+        self.assertEqual(cell.ode_type, "modern")
 
-    def test_classical_update_type(self):
-        """update_type='classical' attribute is stored correctly."""
-        cell = HopfieldCell(num_units=self.num_units, update_type="classical")
-        self.assertEqual(cell.update_type, "classical")
+    def test_classical_ode_type(self):
+        """ode_type='classical' attribute is stored correctly."""
+        cell = HopfieldCell(num_units=self.num_units, ode_type="classical")
+        self.assertEqual(cell.ode_type, "classical")
 
-    def test_invalid_update_type_raises(self):
-        """Invalid update_type raises ValueError at call time."""
-        cell = HopfieldCell(num_units=self.num_units, update_type="unknown")
+    def test_invalid_ode_type_raises(self):
+        """Invalid ode_type raises ValueError at call time."""
+        cell = HopfieldCell(num_units=self.num_units, ode_type="unknown")
         with self.assertRaises(ValueError):
             cell.init(self.rng, None, self.input_data[0])
 
@@ -270,8 +270,8 @@ class TestHopfieldCellUpdateType(unittest.TestCase):
         """Classical and modern modes produce different outputs for the same input."""
         x = jax.random.normal(self.rng, (self.input_data.shape[-1],))
 
-        cell_c = HopfieldCell(num_units=self.num_units, update_type="classical")
-        cell_m = HopfieldCell(num_units=self.num_units, update_type="modern")
+        cell_c = HopfieldCell(num_units=self.num_units, ode_type="classical")
+        cell_m = HopfieldCell(num_units=self.num_units, ode_type="modern")
 
         params_c = cell_c.init(self.rng, None, x)
         params_m = cell_m.init(self.rng, None, x)
