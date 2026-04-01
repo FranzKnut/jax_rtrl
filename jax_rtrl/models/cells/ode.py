@@ -169,7 +169,7 @@ class OnlineODECell(ODECell):
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize the carry with jacobian traces."""
         h = super().initialize_carry(rng, input_shape)
-        if self.plasticity == "bptt":
+        if self.plasticity in ("bptt", "deer"):
             return h
 
         # jh = jnp.zeros(h.shape[:-1] + (h.shape[-1], h.shape[-1]))
