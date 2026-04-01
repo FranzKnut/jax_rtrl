@@ -18,6 +18,8 @@ from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
 
 import jax_rtrl.util
 import jax_rtrl.util.checkpointing
+from jax_rtrl.util.checkpointing import restore_remote
+from jax_rtrl.util.jax_util import pprint_params
 
 
 @dataclass(unsafe_hash=True, frozen=True)
@@ -261,3 +263,20 @@ def restore_policy_from_ckpt(
         return autoencoder, policy
     else:
         return policy
+
+
+def download_policy(ckpt_path: str, a_dim: int, **inputs):
+    """Download a policy checkpoint from remote storage."""
+    ckpt_path = restore_remote(ckpt_path)
+
+    policy = restore_policy_from_ckpt(
+        a_dim=a_dim,
+        ckpt_path=ckpt_path,
+        **inputs,
+    )
+    print("Successfully restored policy from checkpoint:", ckpt_path)
+    if isinstance(policy, tuple):
+        autoencoder, policy = policy
+        print("Also restored autoencoder.")
+        pprint_params(autoencoder.variables)
+    pprint_params(policy.variables)
