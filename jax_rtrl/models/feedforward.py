@@ -23,8 +23,10 @@ class FADense(nn.Dense):
     @nn.compact
     def __call__(self, x):
         """Make use of randomly initialized Feedback Matrix B when f_align is True."""
-        if self.f_align:
-            B = self.variable(
+        if not self.f_align:
+            return nn.Dense.__call__(self, x)
+            
+        B = self.variable(
                 "falign",
                 "B",
                 self.kernel_init,
@@ -32,13 +34,6 @@ class FADense(nn.Dense):
                 (x.shape[-1], self.features),
                 self.param_dtype,
             ).value
-        else:
-            B = self.param(
-                "kernel",
-                self.kernel_init,
-                (x.shape[-1], self.features),
-                self.param_dtype,
-            )
 
         def f(mdl, x, _B):
             return nn.Dense.__call__(mdl, x)
