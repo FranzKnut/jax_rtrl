@@ -97,6 +97,10 @@ class LRCCell(ODECell):
             raise ValueError(f"Unknown ode_type: {self.ode_type}")
         return df_dt
 
+    def _ode(self, params, h, x):
+        """Compute the LRC ODE with explicit params."""
+        return lrc_ode(params, h, x, self.use_symmetric)
+
     @nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
@@ -198,6 +202,9 @@ class OnlineLRCCell(OnlineODECell, LRCCell):
     def _deer_solve(self, h0, xs, max_iter=10):
         """Run the DEER parallel sequence solver for a full input sequence.
 
+        Uses the diagonal ``seq1d`` variant since the LRC ODE has an exactly
+        diagonal Jacobian w.r.t. the hidden state.
+
         Args:
             h0: (ny,) initial hidden state.
             xs: (T, input_dim) input sequence.
@@ -210,17 +217,11 @@ class OnlineLRCCell(OnlineODECell, LRCCell):
         from jax_rtrl.models.cells.deer_util import seq1d
 
         params = self.variables["params"]
-
-        if self.wiring is not None:
-            mask = jax.lax.stop_gradient(self.variables["wiring"]["mask"])
-            params = jax.tree.map(lambda W: W * mask, params)
-
-        use_sym = self.use_symmetric
         dt = self.dt
 
         def func_step(h, x, p):
             """Single Euler step of the LRC ODE."""
-            return h + dt * lrc_ode(p, h, x, use_sym)
+            return h + dt * self._ode(p, h, x)
 
         all_h = seq1d(func_step, h0, xs, params, max_iter=max_iter)
         return all_h[-1], all_h

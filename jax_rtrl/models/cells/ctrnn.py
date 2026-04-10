@@ -112,20 +112,22 @@ class CTRNNCell(ODECell):
             params = (W, tau)
         return params
 
+    def _ode(self, params, h, x):
+        """Compute the CTRNN ODE with explicit params."""
+        if self.wiring is not None:
+            mask = jax.lax.stop_gradient(self.variables["wiring"]["mask"])
+            params = {**params, "W": params["W"] * mask}
+        if self.ode_type == "murray":
+            return ctrnn_ode(params, h, x)
+        elif self.ode_type == "tau_softplus":
+            return ctrnn_ode_tau_softplus(params, h, x, min_tau=self.tau_min)
+        elif self.ode_type == "tg":
+            return ctrnn_tg(params, h, x)
+        raise ValueError(f"Unknown ode_type: {self.ode_type}")
+
     def _f(self, h, x):
         """Compute the derivative of the state."""
-        params = self.variables["params"]
-        if self.wiring is not None:
-            params["W"] = (
-                jax.lax.stop_gradient(self.variables["wiring"]["mask"]) * params["W"]
-            )
-        if self.ode_type == "murray":
-            df_dt = ctrnn_ode(params, h, x)
-        elif self.ode_type == "tau_softplus":
-            df_dt = ctrnn_ode_tau_softplus(params, h, x, min_tau=self.tau_min)
-        elif self.ode_type == "tg":
-            df_dt = ctrnn_tg(params, h, x)
-        return df_dt
+        return self._ode(self.variables["params"], h, x)
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""

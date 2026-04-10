@@ -20,6 +20,7 @@ from flax import linen as nn
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.cells.lrc import OnlineLRCCell
 from jax_rtrl.models.cells.lru import LRUCell, OnlineLRUCell
+from jax_rtrl.models.cells.ode import DEERCell
 from jax_rtrl.models.s5 import S5SSM, S5Config
 from jax_rtrl.util.jax_util import zeros_like_tree, get_normalization_fn
 from jax_rtrl.models.feedforward import MLP, DistributionLayer, FADense
@@ -823,7 +824,7 @@ def scan_rnn(
 
     if (
         isinstance(model, RNNEnsemble) and model.config.model_name in ["s5", "lru"]
-    ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell)) or (
+    ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell, DEERCell)) or (
         isinstance(model, OnlineLRCCell) and model.plasticity == "deer"
     ):
         outputs, y_hats = model.apply(params, init_carry, *xs)

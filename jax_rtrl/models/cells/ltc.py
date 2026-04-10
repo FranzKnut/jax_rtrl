@@ -74,22 +74,20 @@ class LTCCell(ODECell):
             # self.param("p", nn.initializers.uniform(-1), self.num_units)
         super()._make_params(x)
 
-    def _f(self, h, x):  # noqa
-        """Compute euler integration step or CTRNN ODE."""
-        params = self.variables["params"]
-
+    def _ode(self, params, h, x):
+        """Compute the LTC ODE with explicit params."""
         if self.wiring is not None:
             mask = jax.lax.stop_gradient(self.variables["wiring"]["mask"])
             params = jax.tree.map(lambda W: W * mask, params)
         if self.ode_type in ["hasani", "ltc"]:
-            df_dt = ltc_hasani(params, h, x)
+            return ltc_hasani(params, h, x)
         elif self.ode_type in ["farsang", "fltc"]:
-            df_dt = ltc_farsang(params, h, x)
-        # elif self.ode_type == "lrc":
-        #     df_dt = lrc_ode(params, h, x)
-        else:
-            raise ValueError(f"Unknown ode_type: {self.ode_type}")
-        return df_dt
+            return ltc_farsang(params, h, x)
+        raise ValueError(f"Unknown ode_type: {self.ode_type}")
+
+    def _f(self, h, x):  # noqa
+        """Compute euler integration step or CTRNN ODE."""
+        return self._ode(self.variables["params"], h, x)
 
     @nowrap
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):

@@ -189,5 +189,107 @@ class TestDEERLRCCell(unittest.TestCase):
         self.assertEqual(final_h.shape, (self.num_units,))
 
 
+class TestDEERCTRNNCell(unittest.TestCase):
+    """Tests for :class:`DEERCTRNNCell`.
+
+    The CTRNN ODE has a full (non-diagonal) hidden-to-hidden Jacobian, so this
+    exercises the general-purpose :func:`seq1d_full` path.
+    """
+
+    def setUp(self):
+        from jax_rtrl.models.cells.ctrnn import CTRNNCell
+        from jax_rtrl.models.cells.deer import DEERCTRNNCell
+
+        self.num_units = 8
+        self.input_data = jax.random.normal(jax.random.PRNGKey(0), (10, 4))
+        self.target = jax.random.normal(jax.random.PRNGKey(1), (self.num_units,))
+
+        # BPTT reference – sequential Euler integration
+        bptt_cell = CTRNNCell(num_units=self.num_units, ode_type="murray")
+        self.params = bptt_cell.init(
+            jax.random.PRNGKey(3), None, self.input_data[0]
+        )
+        bptt_h0 = bptt_cell.apply(
+            self.params,
+            jax.random.PRNGKey(4),
+            self.input_data[0].shape,
+            method=bptt_cell.initialize_carry,
+        )
+        _, self.bptt_hs = scan_rnn(
+            bptt_cell, self.params, self.input_data, init_carry=bptt_h0
+        )
+        self.bptt_grads = jax.grad(
+            lambda p: mse_loss(
+                scan_rnn(bptt_cell, p, self.input_data, init_carry=bptt_h0)[1],
+                self.target,
+            )
+        )(self.params)["params"]
+
+        # DEER cell – same parameters, parallel forward pass
+        # Use more iterations because CTRNN has off-diagonal Jacobians
+        self.deer_cell = DEERCTRNNCell(
+            num_units=self.num_units, ode_type="murray", max_deer_iter=20
+        )
+        self.deer_h0 = self.deer_cell.apply(
+            self.params,
+            jax.random.PRNGKey(4),
+            self.input_data[0].shape,
+            method=self.deer_cell.initialize_carry,
+        )
+
+    def test_deer_initialize_carry_shape(self):
+        """DEERCTRNNCell carry should be a plain (num_units,) array."""
+        self.assertEqual(self.deer_h0.shape, (self.num_units,))
+
+    def test_deer_forward_matches_sequential(self):
+        """DEERCTRNNCell hidden states should match sequential BPTT."""
+        _, deer_hs = self.deer_cell.apply(
+            self.params, self.deer_h0, self.input_data
+        )
+        self.assertEqual(deer_hs.shape, (len(self.input_data), self.num_units))
+        self.assertTrue(
+            jnp.allclose(deer_hs, self.bptt_hs, atol=DEER_TOL),
+            f"DEERCTRNNCell deviates from sequential. Max diff: "
+            f"{jnp.max(jnp.abs(deer_hs - self.bptt_hs)):.2e}",
+        )
+
+    def test_deer_forward_via_scan_rnn(self):
+        """scan_rnn should call DEERCTRNNCell directly without jax.lax.scan."""
+        _, deer_hs = scan_rnn(
+            self.deer_cell, self.params, self.input_data, init_carry=self.deer_h0
+        )
+        self.assertEqual(deer_hs.shape, self.bptt_hs.shape)
+        self.assertTrue(
+            jnp.allclose(deer_hs, self.bptt_hs, atol=DEER_TOL),
+            f"scan_rnn DEERCTRNNCell deviates. Max diff: "
+            f"{jnp.max(jnp.abs(deer_hs - self.bptt_hs)):.2e}",
+        )
+
+    def test_deer_gradients_match_bptt(self):
+        """DEERCTRNNCell gradients should be close to BPTT gradients."""
+        deer_grads = jax.grad(
+            lambda p: mse_loss(
+                self.deer_cell.apply(p, self.deer_h0, self.input_data)[1],
+                self.target,
+            )
+        )(self.params)["params"]
+
+        for key in deer_grads:
+            self.assertTrue(
+                jnp.allclose(deer_grads[key], self.bptt_grads[key], atol=DEER_TOL),
+                f"DEERCTRNNCell gradient mismatch for '{key}'. Max diff: "
+                f"{jnp.max(jnp.abs(deer_grads[key] - self.bptt_grads[key])):.2e}",
+            )
+
+    def test_deer_single_input_fallback(self):
+        """DEERCTRNNCell should accept a single (non-sequence) input."""
+        x_single = self.input_data[0]  # shape (4,)
+        h_final, all_h = self.deer_cell.apply(
+            self.params, self.deer_h0, x_single
+        )
+        self.assertEqual(all_h.shape, (1, self.num_units))
+        self.assertEqual(h_final.shape, (self.num_units,))
+
+
 if __name__ == "__main__":
     unittest.main()

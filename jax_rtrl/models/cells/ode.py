@@ -2,6 +2,7 @@ from dataclasses import field
 from typing import Literal
 from chex import PRNGKey
 import flax.linen as nn
+from flax.linen import nowrap
 import jax
 import jax.numpy as jnp
 
@@ -22,6 +23,23 @@ class ODECell(nn.RNNCellBase):
     def _f(self, h, x):
         """Compute the derivative of the state."""
         raise NotImplementedError("_f must be implemented in subclasses.")
+
+    def _ode(self, params, h, x):
+        """Compute the ODE derivative with *explicit* params.
+
+        Unlike :meth:`_f`, this method receives the parameter pytree as an
+        argument instead of reading it from ``self.variables["params"]``.
+        This is required by the DEER solver, which needs to differentiate
+        through the parameters.
+
+        Subclasses that support :class:`DEERCell` must override this method.
+        The default implementation raises :class:`NotImplementedError`.
+        """
+        raise NotImplementedError(
+            "_ode(params, h, x) must be implemented by subclasses that support "
+            "the DEER parallel solver.  The method should be equivalent to _f "
+            "but accept params as an explicit argument."
+        )
 
     def _make_params(self, x):
         """Create parameters for ODECell."""
@@ -225,3 +243,97 @@ def rtrl(cell, carry, params, x, ode):
     # Update dh_dx approximation
     dh_dx = jax.tree.map(rtrl_step, comm_x, df_dx)
     return dh_dw, dh_dx
+
+
+class DEERCell(ODECell):
+    """ODECell that processes whole sequences in parallel via DEER.
+
+    ``DEERCell`` uses the DEER quasi-Newton iteration
+    (Lim et al., 2024) with **full** Jacobian matrices to solve the discrete
+    recurrence
+
+        h[t+1] = h[t] + dt * ode(params, h[t], x[t])
+
+    for an entire input sequence in parallel, replacing the sequential Euler
+    loop in the base :class:`ODECell`.
+
+    Each Newton step linearises the nonlinear recurrence around the current
+    iterate, then solves the resulting *linear* system in O(log T) depth using
+    ``jax.lax.associative_scan`` (see :func:`~jax_rtrl.models.cells.deer_util.seq1d_full`).
+
+    Usage
+    -----
+    Combine with any concrete :class:`ODECell` subclass via multiple
+    inheritance::
+
+        class DEERCTRNNCell(DEERCell, CTRNNCell):
+            pass
+
+    The concrete cell must implement :meth:`_ode` (see :class:`ODECell`).
+
+    Attributes
+    ----------
+    max_deer_iter : int
+        Number of quasi-Newton iterations.  10 is usually sufficient.
+    """
+
+    max_deer_iter: int = 10
+
+    @nn.compact
+    def __call__(self, carry, x, return_sequences=False):  # noqa
+        """Process a sequence using DEER parallel computation.
+
+        Args:
+            carry: Initial hidden state ``(ny,)``, or ``None`` to initialise.
+            x: Input sequence ``(T, nx)`` **or** a single step ``(nx,)``.
+            return_sequences: Ignored (all hidden states are always returned as
+                the second element of the output tuple).
+
+        Returns:
+            ``(h_final, all_hidden_states)`` where ``h_final`` has shape
+            ``(ny,)`` and ``all_hidden_states`` has shape ``(T, ny)``.
+        """
+        _is_sequence = x.ndim > 1
+        x_seq = x if _is_sequence else x[None]  # ensure (T, nx)
+
+        if carry is None:
+            carry = self.initialize_carry(self.make_rng(), x_seq.shape[-1:])
+
+        self._make_params(x_seq[0])
+
+        all_h = self._deer_solve(carry, x_seq)
+        return all_h[-1], all_h
+
+    def _deer_solve(self, h0, xs):
+        """Run the DEER parallel solver for the full sequence.
+
+        Args:
+            h0: ``(ny,)`` initial hidden state.
+            xs: ``(T, nx)`` input sequence.
+
+        Returns:
+            ``(T, ny)`` hidden-state sequence ``h[1], ..., h[T]``.
+        """
+        from jax_rtrl.models.cells.deer_util import seq1d_full
+
+        params = self.variables["params"]
+
+        dt = self.dt
+
+        def func_step(h, x, p):
+            return h + dt * self._ode(p, h, x)
+
+        return seq1d_full(func_step, h0, xs, params, max_iter=self.max_deer_iter)
+
+    @nowrap
+    def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
+        """Return a plain hidden-state array (no trace tensors)."""
+        # Delegate to the concrete cell's initialize_carry via MRO
+        # (skipping ODECell itself since it doesn't define initialize_carry)
+        for cls in type(self).__mro__:
+            if cls is DEERCell:
+                continue
+            if "initialize_carry" in cls.__dict__:
+                return cls.initialize_carry(self, rng, input_shape)
+        return jnp.zeros(input_shape[:-1] + (self.num_units,))
+

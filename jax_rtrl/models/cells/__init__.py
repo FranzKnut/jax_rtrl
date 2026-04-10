@@ -1,11 +1,13 @@
 from functools import partial
 
 from jax_rtrl.models.cells.ctrnn import CTRNNCell, OnlineCTRNNCell
+from jax_rtrl.models.cells.deer import DEERCTRNNCell, DEERLRCCell, DEERLTCCell
 from jax_rtrl.models.cells.hopfield import HopfieldCell
 from jax_rtrl.models.cells.lif import LIFCell, OnlineLIFCell
 from jax_rtrl.models.cells.lrc import LRCCell, OnlineLRCCell
 from jax_rtrl.models.cells.lru import OnlineLRULayer
 from jax_rtrl.models.cells.ltc import LTCCell, OnlineLTCCell
+from jax_rtrl.models.cells.ode import DEERCell
 from jax_rtrl.models.s5 import StackedEncoderModel
 from jax_rtrl.models.feedforward import MLPCell
 
@@ -57,6 +59,11 @@ ONLINE_CELL_TYPES = {
     # LIF
     "lif_eprop": partial(OnlineLIFCell, plasticity="eprop"),
     "adlif_eprop": partial(OnlineLIFCell, lif_type="adlif", plasticity="eprop"),
+
+    # DEER – parallel sequence computation via quasi-Newton iteration
+    "lrc_deer": DEERLRCCell,
+    "ctrnn_deer": partial(DEERCTRNNCell, ode_type="murray"),
+    "ltc_deer": DEERLTCCell,
 }
 
 

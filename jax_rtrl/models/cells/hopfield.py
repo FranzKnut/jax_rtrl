@@ -116,15 +116,17 @@ class HopfieldCell(ODECell):
                 (num_stored, self.num_units),
             )
 
-    def _f(self, h, x):
-        """Compute the derivative of the state."""
-        params = self.variables["params"]
+    def _ode(self, params, h, x):
+        """Compute the Hopfield ODE with explicit params."""
         if self.ode_type == "classical":
             return classical_hopfield(params, h, x)
         elif self.ode_type == "modern":
             return modern_hopfield(params, h, x, beta=self.beta)
-        else:
-            raise ValueError(f"Unknown update_type: {self.ode_type!r}")
+        raise ValueError(f"Unknown update_type: {self.ode_type!r}")
+
+    def _f(self, h, x):
+        """Compute the derivative of the state."""
+        return self._ode(self.variables["params"], h, x)
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple[int, ...]):
         """Initialize neuron states."""
