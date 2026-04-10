@@ -3,27 +3,36 @@
 This module provides:
 - ``spike``: a spiking function with a piecewise-linear surrogate gradient via
   ``jax.custom_vjp``, used for backpropagation through spiking networks.
-- ``LIFCell``: a classical LIF or adLIF RNN cell whose forward pass uses the
-  surrogate spike function, enabling gradient-based training (BPTT).
+- ``LIFCell``: a classical LIF or adLIF RNN cell that inherits from ``ODECell``,
+  supporting a configurable integration step size ``dt`` and total integration
+  time ``T`` per external timestep.  The forward pass uses the surrogate spike
+  function, enabling gradient-based training (BPTT).
 - ``eprop_lif`` / ``eprop_adlif``: RFLO-style eligibility-trace update functions
   that approximate the e-prop learning rule for LIF and adLIF networks.
 - ``OnlineLIFCell``: wraps ``LIFCell`` with ``flax.linen.custom_vjp`` to replace
   BPTT gradients with e-prop eligibility traces for online (time-local) learning.
 
-LIF dynamics (discrete time, soft reset)::
+LIF dynamics (one sub-step of size ``dt``, soft reset)::
 
-    I[t]     = W_in @ x[t] + W_rec @ s[t-1] + bias
-    v[t]     = alpha * v[t-1] + (1 - alpha) * I[t] - threshold * s[t-1]
-    s[t]     = spike(v[t] - threshold)
+    alpha     = sigmoid(log_alpha) ** dt          # dt-scaled membrane decay
+    I[t]      = W_in @ x[t] + W_rec @ s[t-1] + bias
+    v[t]      = alpha * v[t-1] + (1 - alpha) * I[t] - threshold * s[t-1]
+    s[t]      = spike(v[t] - threshold)
+
+``T / dt`` sub-steps are executed per external timestep, all receiving the same
+input ``x``.  With the default ``dt=T=1.0`` the behaviour is identical to a
+single-step discrete-time LIF.
 
 adLIF adds an adaptation variable::
 
-    a[t]     = rho * a[t-1] + (1 - rho) * s[t-1]
-    I[t]     = W_in @ x[t] + W_rec @ s[t-1] + bias
-    v[t]     = alpha * v[t-1] + (1-alpha)*(I[t] - beta*a[t]) - threshold*s[t-1]
-    s[t]     = spike(v[t] - threshold)
+    rho       = sigmoid(log_rho) ** dt            # dt-scaled adaptation decay
+    a[t]      = rho * a[t-1] + (1 - rho) * s[t-1]
+    I[t]      = W_in @ x[t] + W_rec @ s[t-1] + bias
+    v[t]      = alpha * v[t-1] + (1-alpha)*(I[t] - beta*a[t]) - threshold*s[t-1]
+    s[t]      = spike(v[t] - threshold)
 
-where ``alpha = sigmoid(log_alpha)`` and ``rho = sigmoid(log_rho)``.
+where ``sigmoid(log_alpha)`` / ``sigmoid(log_rho)`` are the per-unit-time decay
+factors and are scaled to ``** dt`` for sub-step integration.
 """
 
 from typing import Literal
@@ -33,7 +42,8 @@ import jax
 import jax.numpy as jnp
 from chex import PRNGKey
 
-from jax_rtrl.models.cells.ode import OnlineODECell
+from jax_rtrl.models.cells.ode import ODECell, OnlineODECell
+from jax_rtrl.util.jax_util import tree_stack
 
 
 # ============================================================
@@ -88,20 +98,26 @@ def _psi(v_new, threshold):
 # ============================================================
 
 
-class LIFCell(nn.RNNCellBase):
+class LIFCell(ODECell):
     """Leaky Integrate-and-Fire (LIF) or adaptive-LIF (adLIF) RNN cell.
+
+    Inherits ``dt``, ``T``, ``solver``, ``wiring``, and ``wiring_kwargs`` from
+    :class:`~jax_rtrl.models.cells.ode.ODECell`.  Each call to ``__call__``
+    unrolls ``T / dt`` internal sub-steps, all receiving the same input ``x``.
 
     Parameters are initialised as learnable Flax parameters:
 
     * ``W_in``  – input weights ``(num_units, n_in)``.
     * ``W_rec``  – recurrent weights ``(num_units, num_units)``.
     * ``bias``   – bias ``(num_units,)``.
-    * ``log_alpha`` – log-sigmoid membrane decay; ``alpha = sigmoid(log_alpha)``.
+    * ``log_alpha`` – per-unit-time membrane decay in logit space;
+      ``alpha_dt = sigmoid(log_alpha) ** dt``.
     * ``v_threshold`` – per-neuron spike threshold ``(num_units,)``.
 
     For ``lif_type="adlif"`` two additional parameters are created:
 
-    * ``log_rho`` – log-sigmoid adaptation decay; ``rho = sigmoid(log_rho)``.
+    * ``log_rho`` – per-unit-time adaptation decay in logit space;
+      ``rho_dt = sigmoid(log_rho) ** dt``.
     * ``beta``    – per-neuron adaptation strength ``(num_units,)``.
 
     Carry structure:
@@ -109,10 +125,10 @@ class LIFCell(nn.RNNCellBase):
     * LIF:   ``(v, s)``      – membrane potential, previous spikes.
     * adLIF: ``(v, a, s)``   – membrane potential, adaptation, previous spikes.
 
-    The cell output at every time step is the spike train ``s``.
+    The cell output at every external timestep is the spike train ``s`` produced
+    by the **last** internal sub-step.
 
     Attributes:
-        num_units:     Number of neurons.
         lif_type:      ``"lif"`` (classical) or ``"adlif"`` (adaptive).
         v_threshold:   Initial spike threshold value.
         tau_v_init:    Initial membrane time constant (in time steps).
@@ -120,7 +136,7 @@ class LIFCell(nn.RNNCellBase):
         beta_init:     Initial adaptation strength for adLIF.
     """
 
-    num_units: int
+    # num_units is inherited from ODECell
     lif_type: Literal["lif", "adlif"] = "lif"
     v_threshold: float = 1.0
     tau_v_init: float = 20.0
@@ -172,7 +188,11 @@ class LIFCell(nn.RNNCellBase):
             )
 
     def _forward_step(self, h, x, params):
-        """One LIF / adLIF step (no parameter init side-effects).
+        """One LIF / adLIF sub-step (no parameter-init side-effects).
+
+        Uses ``alpha_dt = sigmoid(log_alpha) ** self.dt`` so that the membrane
+        decay automatically scales with the integration step size.  For
+        ``dt=1.0`` (the default) this is identical to ``sigmoid(log_alpha)``.
 
         Args:
             h:      Current carry – ``(v, s)`` for LIF, ``(v, a, s)`` for adLIF.
@@ -183,24 +203,26 @@ class LIFCell(nn.RNNCellBase):
             ``(new_carry, spikes)`` – new hidden state and spike output.
         """
         alpha = jax.nn.sigmoid(params["log_alpha"])
+        alpha_dt = alpha ** self.dt          # dt-scaled membrane decay
         threshold = params["v_threshold"]
         i_syn = x @ params["W_in"].T
 
         if self.lif_type == "lif":
             v, s = h
             i_syn = i_syn + s @ params["W_rec"].T + params["bias"]
-            v_new = alpha * v + (1.0 - alpha) * i_syn - threshold * s
+            v_new = alpha_dt * v + (1.0 - alpha_dt) * i_syn - threshold * s
             s_new = spike(v_new - threshold)
             return (v_new, s_new), s_new
 
         elif self.lif_type == "adlif":
             v, a, s = h
             rho = jax.nn.sigmoid(params["log_rho"])
-            a_new = rho * a + (1.0 - rho) * s
+            rho_dt = rho ** self.dt          # dt-scaled adaptation decay
+            a_new = rho_dt * a + (1.0 - rho_dt) * s
             i_syn = i_syn + s @ params["W_rec"].T + params["bias"]
             v_new = (
-                alpha * v
-                + (1.0 - alpha) * (i_syn - params["beta"] * a_new)
+                alpha_dt * v
+                + (1.0 - alpha_dt) * (i_syn - params["beta"] * a_new)
                 - threshold * s
             )
             s_new = spike(v_new - threshold)
@@ -208,6 +230,33 @@ class LIFCell(nn.RNNCellBase):
 
         else:
             raise ValueError(f"Unknown lif_type: {self.lif_type!r}")
+
+    def solve(self, h, x, return_sequences=False):
+        """Run ``T / dt`` LIF sub-steps, all with the same input ``x``.
+
+        Args:
+            h:                Current carry.
+            x:                Input vector (held constant for all sub-steps).
+            return_sequences: If ``True``, stack and return the spike output of
+                              every sub-step instead of only the last.
+
+        Returns:
+            ``(final_carry, spikes)`` – or stacked sequences if
+            ``return_sequences=True``.
+        """
+        outs = []
+        spikes = None
+        if self.solver == "euler":
+            for _step in jnp.arange(0, self.T, self.dt):
+                h, spikes = self._forward_step(h, x, self.variables["params"])
+                if return_sequences:
+                    outs.append(spikes)
+        else:
+            raise ValueError(f"Unknown solver: {self.solver!r}")
+
+        if return_sequences:
+            return tree_stack(outs)
+        return h, spikes
 
     @nn.compact
     def __call__(self, carry, x):
@@ -218,12 +267,13 @@ class LIFCell(nn.RNNCellBase):
             x:     Input vector.
 
         Returns:
-            ``(new_carry, spikes)`` tuple.
+            ``(new_carry, spikes)`` tuple where ``spikes`` is the output of the
+            last internal sub-step.
         """
         if carry is None:
             carry = self.initialize_carry(self.make_rng(), x.shape)
         self._make_params(x)
-        return self._forward_step(carry, x, self.variables["params"])
+        return self.solve(carry, x)
 
     def initialize_carry(self, rng: PRNGKey, input_shape: tuple):
         """Return zero-initialised carry.
@@ -263,13 +313,16 @@ def eprop_lif(cell: LIFCell, carry, params, x):
     spike with respect to the corresponding weight.  The update rule for weight
     *W* is::
 
-        jp_W[t+1] = alpha * jp_W[t]  +  d(s_new)/d(W)|_{immediate}
+        jp_W[t+1] = alpha_dt * jp_W[t]  +  d(s_new)/d(W)|_{immediate}
 
-    This matches BPTT (with surrogate gradients) exactly for a single time step
+    where ``alpha_dt = sigmoid(log_alpha) ** cell.dt`` is the dt-scaled membrane
+    decay.  For ``cell.dt = 1`` this is identical to the previous formulation.
+
+    This matches BPTT (with surrogate gradients) exactly for a single sub-step
     and provides a causal, time-local approximation for longer sequences.
 
     Args:
-        cell:   ``LIFCell`` instance (provides ``num_units``).
+        cell:   ``LIFCell`` instance (provides ``num_units`` and ``dt``).
         carry:  Full online carry ``(h, jp, jx)`` where ``h = (v, s)``.
         params: Parameter dict from ``self.variables["params"]``.
         x:      Current input vector.
@@ -281,34 +334,35 @@ def eprop_lif(cell: LIFCell, carry, params, x):
     v, s = h
 
     alpha = jax.nn.sigmoid(params["log_alpha"])
+    alpha_dt = alpha ** cell.dt          # dt-scaled decay (trace filter coefficient)
     threshold = params["v_threshold"]
 
     # Recompute forward quantities for the trace
     i_syn = x @ params["W_in"].T + s @ params["W_rec"].T + params["bias"]
-    v_new = alpha * v + (1.0 - alpha) * i_syn - threshold * s
+    v_new = alpha_dt * v + (1.0 - alpha_dt) * i_syn - threshold * s
 
     # Pseudo-derivative: psi_i = max(0, 1 - |v_new_i - threshold_i|)
     psi = _psi(v_new, threshold)  # (n_h,)
 
     # Immediate Jacobians  d(s_new[i])/d(W[i,j]) = psi[i] * d(v_new[i])/d(W[i,j])
-    # W_in:        d(v_new)/d(W_in[i,j])  = (1-alpha[i]) * x[j]
+    # W_in:   d(v_new)/d(W_in[i,j])  = (1 - alpha_dt[i]) * x[j]
     jp_W_in = (
-        alpha[:, None] * jp["W_in"]
-        + psi[:, None] * (1.0 - alpha)[:, None] * x[None, :]
+        alpha_dt[:, None] * jp["W_in"]
+        + psi[:, None] * (1.0 - alpha_dt)[:, None] * x[None, :]
     )
-    # W_rec:       d(v_new)/d(W_rec[i,j]) = (1-alpha[i]) * s[j]
+    # W_rec:  d(v_new)/d(W_rec[i,j]) = (1 - alpha_dt[i]) * s[j]
     jp_W_rec = (
-        alpha[:, None] * jp["W_rec"]
-        + psi[:, None] * (1.0 - alpha)[:, None] * s[None, :]
+        alpha_dt[:, None] * jp["W_rec"]
+        + psi[:, None] * (1.0 - alpha_dt)[:, None] * s[None, :]
     )
-    # bias:        d(v_new)/d(bias[i])    = (1-alpha[i])
-    jp_bias = alpha * jp["bias"] + psi * (1.0 - alpha)
+    # bias:   d(v_new)/d(bias[i])    = (1 - alpha_dt[i])
+    jp_bias = alpha_dt * jp["bias"] + psi * (1.0 - alpha_dt)
 
-    # log_alpha:   d(v_new[i])/d(log_alpha[i])
-    #              = alpha[i]*(1-alpha[i]) * (v[i] - I[i])
+    # log_alpha:  d(alpha_dt)/d(log_alpha) = dt * alpha_dt * (1 - alpha)
+    #             d(v_new)/d(log_alpha)     = (v - I) * dt * alpha_dt * (1 - alpha)
     jp_log_alpha = (
-        alpha * jp["log_alpha"]
-        + psi * alpha * (1.0 - alpha) * (v - i_syn)
+        alpha_dt * jp["log_alpha"]
+        + psi * (v - i_syn) * cell.dt * alpha_dt * (1.0 - alpha)
     )
 
     # v_threshold: d(s_new[i])/d(threshold[i])
@@ -316,7 +370,7 @@ def eprop_lif(cell: LIFCell, carry, params, x):
     #              = psi[i] * (-s[i])                + (-psi[i])
     #              = -psi[i] * (s[i] + 1)
     jp_v_threshold = (
-        alpha * jp["v_threshold"]
+        alpha_dt * jp["v_threshold"]
         - psi * (s + 1.0)
     )
 
@@ -328,10 +382,10 @@ def eprop_lif(cell: LIFCell, carry, params, x):
         "v_threshold": jp_v_threshold,
     }
 
-    # Input gradient: d(s_new[i])/d(x[j]) = psi[i] * (1-alpha[i]) * W_in[i,j]
+    # Input gradient: d(s_new[i])/d(x[j]) = psi[i] * (1 - alpha_dt[i]) * W_in[i,j]
     jx_new = (
-        alpha[:, None] * jx
-        + psi[:, None] * (1.0 - alpha)[:, None] * params["W_in"]
+        alpha_dt[:, None] * jx
+        + psi[:, None] * (1.0 - alpha_dt)[:, None] * params["W_in"]
     )
 
     return jp_new, jx_new
@@ -357,56 +411,59 @@ def eprop_adlif(cell: LIFCell, carry, params, x):
     v, a, s = h
 
     alpha = jax.nn.sigmoid(params["log_alpha"])
+    alpha_dt = alpha ** cell.dt          # dt-scaled membrane decay
     rho = jax.nn.sigmoid(params["log_rho"])
+    rho_dt = rho ** cell.dt              # dt-scaled adaptation decay
     threshold = params["v_threshold"]
     beta = params["beta"]
 
     # Recompute forward quantities
-    a_new = rho * a + (1.0 - rho) * s
+    a_new = rho_dt * a + (1.0 - rho_dt) * s
     i_syn = x @ params["W_in"].T + s @ params["W_rec"].T + params["bias"]
     i_eff = i_syn - beta * a_new
-    v_new = alpha * v + (1.0 - alpha) * i_eff - threshold * s
+    v_new = alpha_dt * v + (1.0 - alpha_dt) * i_eff - threshold * s
 
     psi = _psi(v_new, threshold)  # (n_h,)
 
     # W_in: same as LIF (adaptation doesn't affect input directly)
     jp_W_in = (
-        alpha[:, None] * jp["W_in"]
-        + psi[:, None] * (1.0 - alpha)[:, None] * x[None, :]
+        alpha_dt[:, None] * jp["W_in"]
+        + psi[:, None] * (1.0 - alpha_dt)[:, None] * x[None, :]
     )
 
-    # W_rec: adaptation reduces the effective recurrent contribution
-    #   d(v_new[i])/d(W_rec[i,j]) = (1-alpha[i]) * s[j]  (a_new doesn't depend on W_rec)
+    # W_rec: d(v_new[i])/d(W_rec[i,j]) = (1 - alpha_dt[i]) * s[j]
     jp_W_rec = (
-        alpha[:, None] * jp["W_rec"]
-        + psi[:, None] * (1.0 - alpha)[:, None] * s[None, :]
+        alpha_dt[:, None] * jp["W_rec"]
+        + psi[:, None] * (1.0 - alpha_dt)[:, None] * s[None, :]
     )
 
-    jp_bias = alpha * jp["bias"] + psi * (1.0 - alpha)
+    jp_bias = alpha_dt * jp["bias"] + psi * (1.0 - alpha_dt)
 
-    # log_alpha: d(v_new)/d(log_alpha) = alpha*(1-alpha) * (v - i_eff)
+    # log_alpha:  d(alpha_dt)/d(log_alpha) = dt * alpha_dt * (1 - alpha)
+    #             d(v_new)/d(log_alpha)     = (v - I_eff) * dt * alpha_dt * (1 - alpha)
     jp_log_alpha = (
-        alpha * jp["log_alpha"]
-        + psi * alpha * (1.0 - alpha) * (v - i_eff)
+        alpha_dt * jp["log_alpha"]
+        + psi * (v - i_eff) * cell.dt * alpha_dt * (1.0 - alpha)
     )
 
     # v_threshold: same formula as LIF
     jp_v_threshold = (
-        alpha * jp["v_threshold"]
+        alpha_dt * jp["v_threshold"]
         - psi * (s + 1.0)
     )
 
-    # log_rho: d(a_new[i])/d(log_rho[i]) = rho[i]*(1-rho[i]) * (a[i] - s[i])
-    #          d(v_new[i])/d(log_rho[i])  = -(1-alpha[i])*beta[i]*rho[i]*(1-rho[i])*(a-s)
+    # log_rho: d(rho_dt)/d(log_rho) = dt * rho_dt * (1 - rho)
+    #          d(a_new)/d(log_rho)   = (a - s) * dt * rho_dt * (1 - rho)
+    #          d(v_new)/d(log_rho)   = -(1-alpha_dt)*beta*(a-s)*dt*rho_dt*(1-rho)
     jp_log_rho = (
-        alpha * jp["log_rho"]
-        + psi * (-(1.0 - alpha) * beta * rho * (1.0 - rho) * (a - s))
+        alpha_dt * jp["log_rho"]
+        + psi * (-(1.0 - alpha_dt) * beta * (a - s) * cell.dt * rho_dt * (1.0 - rho))
     )
 
-    # beta: d(v_new[i])/d(beta[i]) = -(1-alpha[i]) * a_new[i]
+    # beta: d(v_new[i])/d(beta[i]) = -(1 - alpha_dt[i]) * a_new[i]
     jp_beta = (
-        alpha * jp["beta"]
-        + psi * (-(1.0 - alpha) * a_new)
+        alpha_dt * jp["beta"]
+        + psi * (-(1.0 - alpha_dt) * a_new)
     )
 
     jp_new = {
@@ -421,8 +478,8 @@ def eprop_adlif(cell: LIFCell, carry, params, x):
 
     # Input gradient: same formula as LIF
     jx_new = (
-        alpha[:, None] * jx
-        + psi[:, None] * (1.0 - alpha)[:, None] * params["W_in"]
+        alpha_dt[:, None] * jx
+        + psi[:, None] * (1.0 - alpha_dt)[:, None] * params["W_in"]
     )
 
     return jp_new, jx_new
@@ -446,7 +503,10 @@ class OnlineLIFCell(LIFCell):
         grads_W[i, j] = learning_signal[i] * eligibility_trace_W[i, j]
 
     where the learning signal is the gradient of the loss with respect to the
-    current step's output spikes.
+    current sub-step's output spikes.
+
+    Multiple internal sub-steps (``T / dt``) are handled inside ``solve()``,
+    mirroring the structure of :class:`~jax_rtrl.models.cells.ode.OnlineODECell`.
 
     Online carry structure:
 
@@ -461,25 +521,23 @@ class OnlineLIFCell(LIFCell):
 
     plasticity: str = "eprop"
 
-    @nn.compact
-    def __call__(self, carry, x):
-        """Forward pass.
+    def solve(self, carry, x, return_sequences=False):
+        """Run ``T / dt`` e-prop sub-steps, each with its own backward pass.
+
+        In ``plasticity="bptt"`` mode this delegates to the parent ``solve()``.
 
         Args:
-            carry: Previous online carry (or ``None`` for auto-init).
-            x:     Input vector.
+            carry:            Current online carry.
+            x:                Input vector (held constant across sub-steps).
+            return_sequences: Stack spike outputs from every sub-step.
 
         Returns:
-            ``(new_carry, spikes)`` tuple.
+            ``(final_carry, spikes)`` or stacked sequence.
         """
-        if carry is None:
-            carry = self.initialize_carry(self.make_rng(), x.shape)
-        self._make_params(x)
-
         if self.plasticity == "bptt":
-            return self._forward_step(carry, x, self.variables["params"])
+            return super().solve(carry, x, return_sequences)
 
-        # ---- online e-prop mode ----
+        outs = []
 
         def f(mdl, _carry, _x):
             """Step function used when not differentiating."""
@@ -491,7 +549,7 @@ class OnlineLIFCell(LIFCell):
             """Forward pass: compute next state and update eligibility traces."""
             h = _carry[0]
             new_h, out = mdl._forward_step(h, _x, mdl.variables["params"])
-            # Skip trace computation during parameter initialisation (traces are None)
+            # Skip trace computation during parameter initialisation (traces None)
             if all(c is None for c in _carry[1:]):
                 traces = _carry[1:]
             else:
@@ -513,8 +571,34 @@ class OnlineLIFCell(LIFCell):
             carry_zeros = jax.tree.map(jnp.zeros_like, tmp)
             return ({"params": grads_p}, carry_zeros, grads_x)
 
-        f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-        return f_grad(self, carry, x)
+        if self.solver == "euler":
+            f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
+            for _step in jnp.arange(0, self.T, self.dt):
+                carry, spikes = f_grad(self, carry, x)
+                if return_sequences:
+                    outs.append(spikes)
+        else:
+            raise ValueError(f"Unknown solver: {self.solver!r}")
+
+        if return_sequences:
+            return tree_stack(outs)
+        return carry, spikes
+
+    @nn.compact
+    def __call__(self, carry, x):
+        """Forward pass.
+
+        Args:
+            carry: Previous online carry (or ``None`` for auto-init).
+            x:     Input vector.
+
+        Returns:
+            ``(new_carry, spikes)`` tuple.
+        """
+        if carry is None:
+            carry = self.initialize_carry(self.make_rng(), x.shape)
+        self._make_params(x)
+        return self.solve(carry, x)
 
     def _trace_update(self, carry, params, x):
         """Dispatch eligibility-trace update based on ``lif_type``.
