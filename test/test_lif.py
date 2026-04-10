@@ -274,5 +274,163 @@ class TestAdLIFGradients(LIFGradientsTestBase):
         self.assertEqual(spikes.shape, (self.time_steps, self.num_units))
 
 
+class TestLIFSubsteps(unittest.TestCase):
+    """Tests for LIFCell / OnlineLIFCell with sub-step integration (dt < T)."""
+
+    num_units = 5
+    n_in = 3
+    time_steps = 6
+    dt = 0.5
+    T = 1.0  # 2 sub-steps per external timestep
+
+    def setUp(self):
+        key = jax.random.PRNGKey(7)
+        key_data, key_target, key_params = jax.random.split(key, 3)
+
+        self.input_data = jax.random.normal(
+            key_data, (self.time_steps, self.n_in)
+        )
+        self.target = jax.random.normal(key_target, (self.num_units,))
+
+        # Cell with dt=0.5 (2 sub-steps per external step)
+        self.cell = LIFCell(num_units=self.num_units, dt=self.dt, T=self.T)
+        self.params = self.cell.init(key_params, None, self.input_data[0])
+
+        # Reference cell with dt=1.0 (single step per external step)
+        self.cell_dt1 = LIFCell(num_units=self.num_units, dt=1.0, T=1.0)
+
+        # Online cell with sub-steps
+        self.eprop_cell = OnlineLIFCell(
+            num_units=self.num_units, dt=self.dt, T=self.T, plasticity="eprop"
+        )
+
+    def _carry(self, cell, params):
+        return cell.apply(
+            params,
+            jax.random.PRNGKey(0),
+            self.input_data[0].shape,
+            method=cell.initialize_carry,
+        )
+
+    # ------------------------------------------------------------------
+    # Forward pass smoke tests
+    # ------------------------------------------------------------------
+
+    def test_bptt_substep_forward(self):
+        """LIFCell with dt=0.5 runs forward pass without error."""
+        h = self._carry(self.cell, self.params)
+        new_h, spikes = self.cell.apply(self.params, h, self.input_data[0])
+        self.assertEqual(spikes.shape, (self.num_units,))
+
+    def test_eprop_substep_forward(self):
+        """OnlineLIFCell with dt=0.5 runs forward pass without error."""
+        h = self._carry(self.eprop_cell, self.params)
+        new_h, spikes = self.eprop_cell.apply(self.params, h, self.input_data[0])
+        self.assertEqual(spikes.shape, (self.num_units,))
+
+    # ------------------------------------------------------------------
+    # Sub-step dynamics differ from single-step dynamics
+    # ------------------------------------------------------------------
+
+    def test_substep_differs_from_single_step(self):
+        """BPTT gradients for dt=0.5 (2 sub-steps) differ from dt=1.0 (1 sub-step).
+
+        Note: in the linear (no-spike) regime, T/dt Euler sub-steps with alpha^dt
+        exactly reproduce the same final membrane potential as 1 full step with
+        alpha (property of the alpha^dt scaling with the Euler method).
+        The difference manifests in the gradients because BPTT has 2x the
+        intermediate gradient paths for dt=0.5.
+        """
+        h_sub = self._carry(self.cell, self.params)
+        grads_sub = jax.grad(
+            lambda p, carry: mse_loss(
+                self.cell.apply(p, carry, self.input_data[0])[1], self.target
+            )
+        )(self.params, h_sub)["params"]
+
+        h_one = self._carry(self.cell_dt1, self.params)
+        grads_one = jax.grad(
+            lambda p, carry: mse_loss(
+                self.cell_dt1.apply(p, carry, self.input_data[0])[1], self.target
+            )
+        )(self.params, h_one)["params"]
+
+        # With 2 sub-steps, BPTT traverses 2 gradient paths, so grads must differ
+        any_differs = any(
+            not jnp.allclose(grads_sub[k], grads_one[k], atol=A_TOL)
+            for k in grads_sub
+        )
+        self.assertTrue(
+            any_differs,
+            "dt=0.5 and dt=1.0 BPTT gradients are identical – "
+            "dt scaling may not be applied.",
+        )
+
+    # ------------------------------------------------------------------
+    # BPTT gradients are non-trivial
+    # ------------------------------------------------------------------
+
+    def test_bptt_substep_grads_nontrivial(self):
+        """BPTT with dt=0.5 computes non-trivial gradients."""
+        h = self._carry(self.cell, self.params)
+        grads = jax.grad(
+            lambda p, carry: mse_loss(
+                self.cell.apply(p, carry, self.input_data[0])[1], self.target
+            )
+        )(self.params, h)["params"]
+        any_nonzero = any(jnp.any(g != 0) for g in jax.tree.leaves(grads))
+        self.assertTrue(any_nonzero, "All sub-step BPTT gradients are zero")
+
+    # ------------------------------------------------------------------
+    # E-prop gradients differ from BPTT for multiple sub-steps
+    # (cross-sub-step gradient paths mean eprop is only an approximation)
+    # ------------------------------------------------------------------
+
+    def test_eprop_multi_substep_differs_from_bptt(self):
+        """E-prop grads differ from BPTT grads when T/dt > 1 (expected)."""
+        h_bptt = self._carry(self.cell, self.params)
+        bptt_grads = jax.grad(
+            lambda p, carry: mse_loss(
+                self.cell.apply(p, carry, self.input_data[0])[1], self.target
+            )
+        )(self.params, h_bptt)["params"]
+
+        h_eprop = self._carry(self.eprop_cell, self.params)
+        eprop_grads = jax.grad(
+            lambda p, carry: mse_loss(
+                self.eprop_cell.apply(p, carry, self.input_data[0])[1], self.target
+            )
+        )(self.params, h_eprop)["params"]
+
+        # With 2 sub-steps, cross-sub-step gradient paths mean eprop != BPTT
+        any_differs = any(
+            not jnp.allclose(eprop_grads[k], bptt_grads[k], atol=A_TOL)
+            for k in ("W_in", "W_rec")
+        )
+        self.assertTrue(
+            any_differs,
+            "E-prop and BPTT grads are identical for 2 sub-steps – "
+            "cross-step approximation seems exact (unexpected).",
+        )
+
+    # ------------------------------------------------------------------
+    # scan_rnn compatibility
+    # ------------------------------------------------------------------
+
+    def test_scan_rnn_substep_bptt(self):
+        """scan_rnn works for LIFCell with dt=0.5."""
+        h = self._carry(self.cell, self.params)
+        _, spikes = scan_rnn(self.cell, self.params, self.input_data, init_carry=h)
+        self.assertEqual(spikes.shape, (self.time_steps, self.num_units))
+
+    def test_scan_rnn_substep_eprop(self):
+        """scan_rnn works for OnlineLIFCell with dt=0.5."""
+        h = self._carry(self.eprop_cell, self.params)
+        _, spikes = scan_rnn(
+            self.eprop_cell, self.params, self.input_data, init_carry=h
+        )
+        self.assertEqual(spikes.shape, (self.time_steps, self.num_units))
+
+
 if __name__ == "__main__":
     unittest.main()
