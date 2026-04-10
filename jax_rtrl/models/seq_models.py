@@ -656,10 +656,10 @@ class RNNEnsemble(nn.RNNCellBase):
             ensemble_input_mask = jax.random.bernoulli(
                 self.ensemble_input_mask_rng,
                 self.config.ensemble_visible_obs_prob,
-                (self.config.num_modules,) + x.shape,
+                x_tiled.shape,
             )
             if self.config.ensemble_first_full_obs:
-                ensemble_input_mask.at[0].set(1.0)
+                ensemble_input_mask = ensemble_input_mask.at[0].set(True)
             x_tiled = x_tiled * ensemble_input_mask
         elif self.config.ensemble_visible_obs_prob < 1.0:
             print("WARNING: num_modules is 1 so ensemble_in_visible_prob is ignored.")

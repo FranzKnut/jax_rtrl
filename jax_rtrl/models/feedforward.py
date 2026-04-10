@@ -25,15 +25,15 @@ class FADense(nn.Dense):
         """Make use of randomly initialized Feedback Matrix B when f_align is True."""
         if not self.f_align:
             return nn.Dense.__call__(self, x)
-            
+
         B = self.variable(
-                "falign",
-                "B",
-                self.kernel_init,
-                self.make_rng() if self.has_rng("params") else None,
-                (x.shape[-1], self.features),
-                self.param_dtype,
-            ).value
+            "falign",
+            "B",
+            self.kernel_init,
+            self.make_rng() if self.has_rng("params") else None,
+            (x.shape[-1], self.features),
+            self.param_dtype,
+        ).value
 
         def f(mdl, x, _B):
             return nn.Dense.__call__(mdl, x)
@@ -141,7 +141,7 @@ class MLP(nn.Module):
 
 class MLPCell(nn.RNNCellBase):
     """Wrapper to use Single-Layer-Perceptron as RNN cell."""
-    
+
     num_units: int
 
     def setup(self):
@@ -153,7 +153,7 @@ class MLPCell(nn.RNNCellBase):
         """Call MLP cell."""
         out = self.mlp(x, training=training)
         return carry, out
-    
+
     def initialize_carry(self, rng, input_shape):
         return None
 
@@ -340,11 +340,6 @@ class DistributionLayer(nn.Module):
         if self.distribution is None:
             return x
 
-        if self.loc_bounds is not None:
-            bounds = jnp.array(self.loc_bounds)
-            if bounds.ndim < 2:
-                bounds = jnp.tile(bounds, (self.out_size, 1)).T
-
         if self.distribution.startswith("beta"):
             if self.loc_bounds is not None:
                 # If action limits are defined we sample from [0, 1] and transform the event.
@@ -364,8 +359,19 @@ class DistributionLayer(nn.Module):
 
         if dist_name in ["Normal", "LogStddevNormal", "NormalTanh"]:
             loc, scale = jnp.split(x, 2, axis=-1)
+            if isinstance(self.loc_bounds, tuple):
+                loc = sigmoid_between(loc, *self.loc_bounds)
+            elif isinstance(self.loc_bounds, Number):
+                loc = jax.nn.tanh(loc) * self.loc_bounds
+
             if isinstance(self.scale_bounds, tuple):
+                # scale -= 1  # Magic shift to make initial scale closer to 1 for sigmoid
                 scale = sigmoid_between(scale, *self.scale_bounds)
+                # Gaussian function
+                # scale = (
+                #     jnp.exp(-(scale * scale)) * self.scale_bounds[1]
+                #     + self.scale_bounds[0]
+                # )
             elif isinstance(self.scale_bounds, Number):
                 assert (
                     "LogStddevNormal" in self.distribution
@@ -373,7 +379,7 @@ class DistributionLayer(nn.Module):
                 ) or self.scale_bounds >= 0, (
                     "scale_bounds must be non-negative for Normal distributions"
                 )
-                scale = jax.nn.softplus(scale) + self.scale_bounds
+                scale = -jax.nn.softplus(scale)  # + self.scale_bounds
 
             dist = _dist(loc, scale)
             # if "Tanh" in self.distribution:
@@ -383,7 +389,14 @@ class DistributionLayer(nn.Module):
             #     # bij = distrax.Chain([scaling_transform, sigmoid_transform])
 
             if self.distribution.startswith("Scaled"):
+                if self.loc_bounds is not None:
+                    bounds = jnp.array(self.loc_bounds)
+                    if bounds.ndim < 2:
+                        bounds = jnp.tile(bounds, (self.out_size, 1)).T
                 if dist_name == "NormalTanh":
+                    assert self.loc_bounds is not None, (
+                        "loc_bounds must be defined for Scaled NormalTanh distribution"
+                    )
                     # Adjust bounds for symmetric Tanh
                     min_val = 0
                     assert (
