@@ -13,7 +13,28 @@ from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
 
-from jax_rl_util.util.logging_util import tree_stack
+
+def tree_stack(trees, axis=0, concatenate=False):
+    """Take a list of trees and stack every corresponding leaf.
+
+    For example, given two trees ((a, b), c) and ((a', b'), c'), returns
+    ((stack(a, a'), stack(b, b')), stack(c, c')).
+    Useful for turning a list of objects into something you can feed to a
+    vmapped function. Taken from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
+    """
+    leaves, treedef = jax.tree.flatten(trees[0])
+    leaves_list = [leaves]
+    for tree in trees[1:]:
+        leaves, _ = jax.tree.flatten(tree)
+        leaves_list.append(leaves)
+
+    result_leaves = []
+    leaves_list = list(zip(*leaves_list))
+    for leaf_id, leaf in enumerate(leaves_list):
+        _op = jnp.concatenate if concatenate else jnp.stack
+        leaf = [jnp.atleast_1d(l) for l in leaf]
+        result_leaves.append(_op(leaf, axis=axis))
+    return treedef.unflatten(result_leaves)
 
 
 def split_train_test(
