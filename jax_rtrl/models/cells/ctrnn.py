@@ -188,14 +188,14 @@ def rflo_murray(cell: CTRNNCell, carry, params, x):
     # Update W eligibility trace
     # Outer product the get Immediate Jacobian
     w_immediate = phi_prime[..., None] * xi[None]
-    jw += (cell.dt / tau)[:, None] * (w_immediate - jw)
+    jw = jw + (cell.dt / tau)[:, None] * (w_immediate - jw)
 
     # Update W eligibility trace
     dh_dtau = ((h - jnp.tanh(a)) / tau) - jtau
-    jtau += cell.dt * dh_dtau / tau
+    jtau = jtau + cell.dt * dh_dtau / tau
 
     df_dw = {"W": jw, "tau": jtau}
-    jx += (1 / tau)[:, None] * (jnp.diag(phi_prime) @ W[..., : x.shape[-1]] - jx)
+    jx = jx + (1 / tau)[:, None] * (jnp.diag(phi_prime) @ W[..., : x.shape[-1]] - jx)
     return df_dw, jx  # , hebb
 
 
@@ -220,13 +220,13 @@ def eprop_ctrnn(cell: CTRNNCell, carry, params, x):
 
     # Update W eligibility trace
     w_immediate = phi_prime[..., None] * xi[None]
-    jw += (cell.dt / tau)[:, None] * (w_immediate + (comm_local - 1)[:, None] * jw)
+    jw = jw + (cell.dt / tau)[:, None] * (w_immediate + (comm_local - 1)[:, None] * jw)
 
     # Update W eligibility trace
     tau_immediate = (h - jnp.tanh(a)) / tau
-    jtau += (cell.dt / tau) * (tau_immediate + (comm_local - 1) * jtau)
+    jtau = jtau + (cell.dt / tau) * (tau_immediate + (comm_local - 1) * jtau)
 
-    jx += (1 / tau)[:, None] * (jnp.diag(phi_prime) @ W[..., : x.shape[-1]] - jx)
+    jx = jx + (1 / tau)[:, None] * (jnp.diag(phi_prime) @ W[..., : x.shape[-1]] - jx)
     return {"W": jw, "tau": jtau}, jx
 
 
@@ -256,7 +256,7 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
     M_immediate = phi_prime[..., None] * v[None]
 
     # Update eligibility traces
-    jw += (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
+    jw = jw + (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
 
     dh_dtau = (
         ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau)
@@ -264,13 +264,13 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
         + jtau @ df_dh[:, x.shape[-1] : -1]
     )
 
-    jtau += dh_dtau / tau * cell.dt
+    jtau = jtau + dh_dtau / tau * cell.dt
 
     dh_dh0 = 1 - jh0  # + jh0 @ df_dh[:, x.shape[-1] : -1]
-    jh0 += cell.dt * dh_dh0 / tau
+    jh0 = jh0 + cell.dt * dh_dh0 / tau
 
     df_dw = {"W": jw, "tau": jtau, "h0": jh0}
-    jx += (1 / tau)[:, None] * (df_dh[..., : x.shape[-1]] - jx) * cell.dt
+    jx = jx + (1 / tau)[:, None] * (df_dh[..., : x.shape[-1]] - jx) * cell.dt
     return df_dw, jx  # , hebb
 
 
@@ -300,7 +300,7 @@ def eprop_ctrnn_tau_softplus(cell: CTRNNCell, carry, params, x):
     M_immediate = phi_prime[..., None] * v[None]
 
     # Update eligibility traces
-    jw += (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
+    jw = jw + (1 / tau)[:, None] * (M_immediate - jw) * cell.dt
 
     dh_dtau = (
         ((h - jnp.tanh(u)) * jax.nn.sigmoid(b_tau) / tau)
@@ -308,13 +308,13 @@ def eprop_ctrnn_tau_softplus(cell: CTRNNCell, carry, params, x):
         + jtau @ df_dh[:, x.shape[-1] : -1]
     )
 
-    jtau += dh_dtau / tau * cell.dt
+    jtau = jtau + dh_dtau / tau * cell.dt
 
     dh_dh0 = 1 - jh0  # + jh0 @ df_dh[:, x.shape[-1] : -1]
-    jh0 += cell.dt * dh_dh0 / tau
+    jh0 = jh0 + cell.dt * dh_dh0 / tau
 
     df_dw = {"W": jw, "tau": jtau, "h0": jh0}
-    jx += (1 / tau)[:, None] * (df_dh[..., : x.shape[-1]] - jx) * cell.dt
+    jx = jx + (1 / tau)[:, None] * (df_dh[..., : x.shape[-1]] - jx) * cell.dt
     return df_dw, jx  # , hebb
 
 
@@ -357,8 +357,11 @@ class OnlineCTRNNCell(OnlineODECell, CTRNNCell):
     plasticity: str = "rflo"
 
     def _trace_update(self, carry, _p, x):
-        if self.wiring is not None:
-            _p["W"] = jax.lax.stop_gradient(self.variables["wiring"]["mask"]) * _p["W"]
+        # Get mask from params instead of self.variables to avoid tracer leaks
+        mask = None
+        if self.wiring is not None and "wiring" in _p and "mask" in _p["wiring"]:
+            mask = _p["wiring"]["mask"]
+            _p["params"]["W"] = jax.lax.stop_gradient(mask) * _p["params"]["W"]
         # Select ODE function
         if self.ode_type == "murray":
             _ode = ctrnn_ode
@@ -370,29 +373,27 @@ class OnlineCTRNNCell(OnlineODECell, CTRNNCell):
             raise ValueError(f"ODE type {self.ode_type} not recognized.")
         # Compute trace update
         if self.plasticity == "rtrl":
-            traces = rtrl(self, carry, _p, x, ode=_ode)
+            traces = rtrl(self, carry, _p["params"], x, ode=_ode)
         elif self.plasticity == "snap0":
-            traces = snap0(self, carry, _p, x, ode=_ode)
+            traces = snap0(self, carry, _p["params"], x, ode=_ode)
         elif self.plasticity == "rflo":
             if self.ode_type == "murray":
-                traces = rflo_murray(self, carry, _p, x)
+                traces = rflo_murray(self, carry, _p["params"], x)
             elif self.ode_type == "tau_softplus":
-                traces = rflo_tau_softplus(self, carry, _p, x)
+                traces = rflo_tau_softplus(self, carry, _p["params"], x)
             else:
                 raise ValueError(f"ODE type {self.ode_type} not supported for rflo.")
         elif self.plasticity == "eprop":
             if self.ode_type == "murray":
-                traces = eprop_ctrnn(self, carry, _p, x)
+                traces = eprop_ctrnn(self, carry, _p["params"], x)
             elif self.ode_type == "tau_softplus":
-                traces = eprop_ctrnn_tau_softplus(self, carry, _p, x)
+                traces = eprop_ctrnn_tau_softplus(self, carry, _p["params"], x)
             else:
                 raise ValueError(f"ODE type {self.ode_type} not supported.")
         else:
             raise ValueError(f"Plasticity mode {self.plasticity} not supported.")
-        if self.wiring is not None:
-            traces[0]["W"] = (
-                jax.lax.stop_gradient(self.variables["wiring"]["mask"]) * traces[0]["W"]
-            )
+        if mask is not None:
+            traces[0]["W"] = jax.lax.stop_gradient(mask) * traces[0]["W"]
         return traces
 
 

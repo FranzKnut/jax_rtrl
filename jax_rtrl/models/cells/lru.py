@@ -158,7 +158,8 @@ class OnlineLRUCell(nn.RNNCellBase):
         if self.plasticity == "bptt" or force_bptt:
             return model_fn(carry, x_t, resets=resets)
 
-        def _trace_update(carry, _p, x_t):
+        def _trace_update(carry, params, x_t):
+            _p = params["params"]
             h, grad_memory = carry
             Lambda = get_lambda(_p["nu_log"], _p["theta_log"])
             B = _p["B_real"] + 1j * _p["B_img"]
@@ -185,13 +186,13 @@ class OnlineLRUCell(nn.RNNCellBase):
             else:
                 h_next, out = mdl(h, x_t, resets=resets)
             if force_trace_compute:
-                traces = _trace_update(carry, mdl.variables["params"], x_t)
+                traces = _trace_update(carry, mdl.variables, x_t)
             return (h_next, *traces), out
 
         def fwd(mdl: LRUCell, carry, x_t):
             f_out, vjp_func = nn.vjp(f, mdl, carry, x_t)
             _, vjp_to_lambda = nn.vjp(lambda m, x: m._to_lambda(x), mdl, x_t)
-            traces = _trace_update(carry, mdl.variables["params"], x_t)
+            traces = _trace_update(carry, mdl.variables, x_t)
             return f_out, (
                 vjp_func,
                 traces,
@@ -278,6 +279,9 @@ class OnlineLRULayer(nn.RNNCellBase):
         Returns:
             Tuple[Union[Array, Tuple[Array, ...]], Array]: The updated carry state and the output at the current time step.
         """
+        # Initialize hidden state
+        if carry is None:
+            carry = self.initialize_carry(self.make_rng(), x_t.shape[1:])
         h_tminus1 = carry if self.plasticity == "bptt" else carry[0]
         hidden_dim = h_tminus1.shape[-1]
 

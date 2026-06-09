@@ -75,7 +75,7 @@ class RNNEnsembleConfig(FrozenSerializable):
     # out_size: int | None = None
     out_dist: str | None = "Deterministic"
     dist_loc_bounds: tuple[float, float] | None = None
-    dist_scale_bounds: float | tuple[float, float] = 0
+    dist_scale_bounds: float | tuple[float, float] | None = 0
     dist_eps: float = 0.01  # Unimix epsilon for Categorical/Bernoulli
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None

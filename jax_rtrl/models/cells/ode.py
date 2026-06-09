@@ -96,36 +96,42 @@ class OnlineODECell(ODECell):
         outs = []
         if self.solver == "euler":
 
-            def f(mdl, _carry, _x):
+            @jax.custom_vjp
+            def f(_p, _carry, _x):
                 h = _carry[0]
-                h_dot = mdl._f(h, _x)
-                h_next = jax.tree.map(lambda a, b: a + b * mdl.dt, h, h_dot)
+                h_dot = self.apply(_p, h, _x, method=self._f)
+                h_next = jax.tree.map(lambda a, b: a + b * self.dt, h, h_dot)
                 if force_trace_compute:
-                    traces = mdl._trace_update(_carry, mdl.variables["params"], _x)
+                    traces = self._trace_update(_carry, _p, _x)
                 else:
                     traces = _carry[1:]
                 return (h_next, *traces), h_next
 
-            def fwd(mdl, _carry, _x):
+            def fwd(_p, _carry, _x):
                 """Forward pass with tmp for backward pass."""
                 h = _carry[0]
-                out = jax.tree.map(lambda a, b: a + b * mdl.dt, h, mdl._f(h, _x))
+                out = jax.tree.map(
+                    lambda a, b: a + b * self.dt,
+                    h,
+                    self.apply(_p, h, _x, method=self._f),
+                )
                 # during init, traces are None -> avoid computing them
                 if all([(_c is None) for _c in _carry[1:]]):
                     print("Skipping trace computation during init")
                     traces = _carry[1:]
                 else:
-                    traces = mdl._trace_update(_carry, mdl.variables["params"], _x)
-                return (
-                    (out, *traces),
-                    (out, *traces) if force_trace_compute else out,
-                ), (
-                    out,
-                    *traces,
-                )
+                    traces = self._trace_update(_carry, _p, _x)
+                # Primal output (same as f): ((h_next, *traces), h_next)
+                primal_out = ((out, *traces), out)
+                # Residuals: include params for bwd to access wiring structure
+                residuals = (out, *traces, _p)
+                return primal_out, residuals
 
-            def bwd(tmp, y_bar):
+            def bwd(residuals, y_bar):
                 """Backward pass using RTRL."""
+                # residuals = (out, *traces, _p)
+                _p = residuals[-1]
+                tmp = residuals[:-1]
                 # carry, jp, jx, hebb = tmp
                 df_dy = y_bar[-1]
                 df_dy += y_bar[-2][0]  # Also include carry grad
@@ -134,12 +140,19 @@ class OnlineODECell(ODECell):
                 )
                 # grads_p['W'] += hebb
                 carry = jax.tree.map(jnp.zeros_like, tmp)
-                return ({"params": grads_p}, carry, grads_x)
+                # Return gradients matching input structure: {'params': ..., 'wiring': ...}, carry, x
+                # Create zero gradients for wiring (including mask) only if wiring exists
+                if "wiring" in _p:
+                    grads_wiring = {"mask": jnp.zeros_like(_p["wiring"]["mask"])}
+                    return ({"params": grads_p, "wiring": grads_wiring}, carry, grads_x)
+                else:
+                    return ({"params": grads_p}, carry, grads_x)
 
             # Euler integration steps with dt
-            f_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
+            f.defvjp(fwd, bwd)
+            # f_grad = jax.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
             for _step in jnp.arange(0, self.T, self.dt):
-                carry, h = f_grad(self, carry, x)
+                carry, h = f(self.variables, carry, x)
                 if return_sequences:
                     outs.append((carry, h))
         else:

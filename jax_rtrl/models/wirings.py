@@ -3,7 +3,6 @@
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
-import numpy as np
 
 
 def fully_connected(output_size: int, input_size: int, **_):

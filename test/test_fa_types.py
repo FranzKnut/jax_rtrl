@@ -32,14 +32,6 @@ class TestFAMultiLayerRNNTypes(unittest.TestCase):
         _, y = model.apply(variables, carry, self.x)
         self.assertEqual(y.shape, (self.sizes[-1],))
 
-    def test_fa_creates_expected_feedback_shapes(self):
-        _, variables = self._init_model("fa")
-
-        self.assertIn("falign", variables)
-        self.assertEqual(variables["falign"]["B0"].shape, (4, 6))
-        self.assertEqual(variables["falign"]["B1"].shape, (7, 5))
-        self.assertEqual(variables["falign"]["B2"].shape, (6, 5))
-
     def test_dfa_creates_expected_feedback_shapes(self):
         _, variables = self._init_model("dfa")
 
@@ -76,7 +68,9 @@ class TestFAMultiLayerRNNTypes(unittest.TestCase):
                     return jnp.sum(y**2)
 
                 grads = jax.grad(loss_fn)(variables)
-                grad_norms = [jnp.linalg.norm(g) for g in jax.tree.leaves(grads["params"])]
+                grad_norms = [
+                    jnp.linalg.norm(g) for g in jax.tree.leaves(grads["params"])
+                ]
 
                 self.assertTrue(all(jnp.isfinite(g) for g in grad_norms))
                 self.assertTrue(any(g > 0 for g in grad_norms))

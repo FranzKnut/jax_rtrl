@@ -379,7 +379,7 @@ class DistributionLayer(nn.Module):
                 ) or self.scale_bounds >= 0, (
                     "scale_bounds must be non-negative for Normal distributions"
                 )
-                scale = -jax.nn.softplus(scale)  # + self.scale_bounds
+                scale = jax.nn.softplus(scale) + self.scale_bounds
 
             dist = _dist(loc, scale)
             # if "Tanh" in self.distribution:

@@ -160,12 +160,12 @@ class OnlineLRCCell(OnlineODECell, LRCCell):
             else:
                 raise ValueError(f"ODE type {self.ode_type} not recognized.")
             if self.plasticity == "rtrl":
-                traces = rtrl(self, carry, _p, x, ode=_ode_fn)
+                traces = rtrl(self, carry, _p["params"], x, ode=_ode_fn)
             else:
-                traces = snap0(self, carry, _p, x, ode=_ode_fn)
+                traces = snap0(self, carry, _p["params"], x, ode=_ode_fn)
 
         elif self.plasticity == "rflo":
-            traces = rflo_lrc(self, carry, _p, x)
+            traces = rflo_lrc(self, carry, _p["params"], x)
         else:
             raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
         return traces
