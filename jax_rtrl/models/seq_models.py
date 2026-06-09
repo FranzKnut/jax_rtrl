@@ -332,47 +332,56 @@ class FAMultiLayerRNN(MultiLayerRNN):
             # For feedback alignment, random weights inbetween layers handled by FADense
             return MultiLayerRNN.__call__(self, carries, x, training, *args, **kwargs)
         if self.fa_type == "dfa":
-            # Direct feedback alignment: random weights from output to each layer
+            # Direct feedback alignment: random weights from output to each layer.
+            # The B matrices are created here (so init registers them under
+            # `falign`) and then read back as values to pass into the custom_vjp
+            # wrapped function below. This mirrors the pattern in FADense and
+            # avoids a tracer leak that occurs when `mdl.variables["falign"]`
+            # is accessed inside the `fwd` residual function.
+            _Bs = []
             for i, size in enumerate((x.shape[-1],) + self.sizes[:-1]):
-                self.variable(
-                    "falign",
-                    f"B{i}",
-                    self.kernel_init,
-                    self.make_rng() if self.has_rng("params") else None,
-                    (size, self.sizes[-1]),
+                _Bs.append(
+                    self.variable(
+                        "falign",
+                        f"B{i}",
+                        self.kernel_init,
+                        self.make_rng() if self.has_rng("params") else None,
+                        (size, self.sizes[-1]),
+                    ).value
                 )
         else:
             raise ValueError("unknown fa_type: " + self.fa_type)
 
-        def f(mdl, _carries, x):
-            return MultiLayerRNN.__call__(mdl, _carries, x, *args, **kwargs)
+        @jax.custom_vjp
+        def f(_carries, x, _p, _Bs):
+            return MultiLayerRNN.__call__(self, _carries, x, *args, **kwargs)
 
-        def fwd(mdl: FAMultiLayerRNN, _carries, x):
+        def fwd(_carries, x, _p, _Bs):
             """Forward pass with tmp for backward pass.
 
             Args:
                 mdl: Module instance
                 _carries: Initial carries
                 x: Input
-                falign_vars: Feedback alignment variables (pre-extracted to avoid tracer leaks)
+                _p: Parameters (passed as argument to avoid tracer leak)
+                _Bs: Direct feedback alignment matrices (one per layer), passed
+                    through as residuals so they remain non-differentiable
+                    constants in the backward pass.
             """
             vjps = []
             _new_carries = []
-            for i, rnn in enumerate(mdl.layers):
+            for i, rnn in enumerate(self.layers):
                 _carry = (
                     tuple(c[i] for c in _carries)
                     if isinstance(_carries, tuple)
                     else _carries[i]
                 )
-                (_carry, x), vjp_func = nn.vjp(rnn.__call__, rnn, _carry, x)
+                __p = {"params": _p["params"][f"layer_{i}"]}
+                (_carry, x), vjp_func = jax.vjp(rnn.apply, __p, *_carry, x)
                 _new_carries.append(_carry)
                 vjps.append(vjp_func)
 
-            return (mdl._make_tuple_of_list_from_carries(_new_carries), x), (
-                # vjp_in,
-                vjps,
-                mdl.variables["falign"],
-            )
+            return (self._make_tuple_of_list_from_carries(_new_carries), x), (vjps, _Bs)
 
         def bwd(tmp, y_bar):
             """Backward pass that may use feedback alignment."""
@@ -382,23 +391,28 @@ class FAMultiLayerRNN(MultiLayerRNN):
             grads = {}
             grads_inputs = []
             last_idx = len(self.sizes) - 1
-            params_t, *inputs_t = vjps[last_idx]((c_bar[last_idx], y_t))
+            params_t, *inputs_t = vjps[last_idx]((*c_bar[last_idx], y_t))
             grads[f"layer_{last_idx}"] = params_t["params"]
             grads_inputs.append(inputs_t[0])
             for i in range(last_idx - 1, -1, -1):
-                params_t, *inputs_t = vjps[i]((c_bar[i], y_t))
+                params_t, *inputs_t = vjps[i]((*c_bar[i], y_t))
                 grads[f"layer_{i}"] = params_t["params"]
                 grads_inputs.append(inputs_t[0])
-                # Direct feedback alignment
-                y_t = _Bs[f"B{i}"] @ y_bar[1]
+                # Direct feedback alignment: propagate error via B_i.
+                y_t = _Bs[i] @ y_bar[1]
             x_grad = y_t
 
             grads_inputs = grads_inputs[::-1]
-            return ({"params": grads}, grads_inputs, x_grad, zeros_like_tree(_Bs))
+            grads_falign = {f"B{i}": jnp.zeros_like(_Bs[i]) for i in range(len(_Bs))}
+            return (
+                self._make_tuple_of_list_from_carries(grads_inputs),
+                x_grad,
+                {"params": grads, "falign": grads_falign},
+                [jnp.zeros_like(b) for b in _Bs],
+            )
 
-        fa_grad = nn.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-
-        return fa_grad(self, carries, x)
+        f.defvjp(fwd, bwd)
+        return f(carries, x, self.variables, _Bs)
 
 
 class BlockWrapper(nn.RNNCellBase):
