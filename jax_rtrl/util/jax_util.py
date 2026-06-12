@@ -34,9 +34,11 @@ class JaxRng:
         self._rng, rng = jax.jit(jrandom.split)(self._rng)
         return rng
 
+
 def index_tree(tree, index):
     """Index into every leaf of a pytree."""
     return jax.tree.map(lambda x: x[index], tree)
+
 
 def symlog(x):
     """Symmetric log."""
@@ -195,9 +197,15 @@ def get_normalization_fn(norm_type, training=True, **kwargs):
         raise ValueError(f"Unknown normalization type: {norm_type}")
 
 
-def majority_vote(outputs):
-    """Return the most popular discrete output."""
-    return jnp.argmax(jnp.bincount(outputs, length=outputs.shape[-1]), axis=-2)
+def majority_vote(actions, num_actions):
+    """Return the most popular discrete output.
+
+    Args:
+       actions: Array of shape (num_modules, batch_size) containing integer actions.
+       num_actions: The number of possible actions.
+    """
+    counts = jnp.bincount(actions, length=num_actions)
+    return jnp.argmax(counts)
 
 
 def tree_stack(trees, axis=0):
