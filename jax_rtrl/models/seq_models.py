@@ -113,21 +113,21 @@ class RNNEnsembleConfig(FrozenSerializable):
                 self.rnn_kwargs["ode_type"] = match.group(1)
 
             # Remove wiring if not compatible
-            if self.model_name not in ["bptt", "rtrl", "rflo"]:
+            if self.model_name not in [
+                "bptt",
+                "rtrl",
+                "rflo",
+                "eprop",
+                "lrc",
+                "ltc",
+                "ltc",
+            ]:
                 if "wiring" in self.rnn_kwargs or "wiring_kwargs" in self.rnn_kwargs:
                     print(
                         f"WARNING specifying wiring does not work with model {self.model_name}. Deleting from kwargs"
                     )
                 self.rnn_kwargs.pop("wiring", None)
                 self.rnn_kwargs.pop("wiring_kwargs", None)
-            else:
-                if self.rnn_kwargs.get("wiring") == "ncp":
-                    assert self.hidden_size is not None, (
-                        "NCP not supported when layers list is specified."
-                    )
-                    self.rnn_kwargs["interneurons"] = self.hidden_size - (
-                        self.out_size + 1
-                    )
         assert self.model_name is None or (
             self.hidden_size is not None or self.layers is not None
         ), (
@@ -376,26 +376,35 @@ class FAMultiLayerRNN(MultiLayerRNN):
                     if isinstance(_carries, tuple)
                     else _carries[i]
                 )
-                __p = {"params": _p["params"][f"layer_{i}"]}
-                (_carry, x), vjp_func = jax.vjp(rnn.apply, __p, *_carry, x)
+                if len(_carries) <= 1:
+                    _carry = _carry[0]
+                __p = {k: v[f"layer_{i}"] for k, v in _p.items() if f"layer_{i}" in v}
+                (_carry, x), vjp_func = jax.vjp(rnn.apply, __p, _carry, x)
                 _new_carries.append(_carry)
                 vjps.append(vjp_func)
 
-            return (self._make_tuple_of_list_from_carries(_new_carries), x), (vjps, _Bs)
+            fa_grads = jax.tree.map(lambda g: jnp.zeros_like(g), _p["falign"])
+            return (self._make_tuple_of_list_from_carries(_new_carries), x), (
+                vjps,
+                _Bs,
+                fa_grads,
+            )
 
         def bwd(tmp, y_bar):
             """Backward pass that may use feedback alignment."""
-            vjps, _Bs = tmp
-            c_bar, y_t = y_bar
-            c_bar = [tuple(c[i] for c in c_bar) for i in range(len(self.sizes))]
+            vjps, _Bs, fa_grads = tmp
+            c_bars, y_t = y_bar
+            c_bar = [tuple(c[i] for c in c_bars) for i in range(len(self.sizes))]
+            if len(c_bars) <= 1:
+                c_bar = [c[0] for c in c_bar]
             grads = {}
             grads_inputs = []
             last_idx = len(self.sizes) - 1
-            params_t, *inputs_t = vjps[last_idx]((*c_bar[last_idx], y_t))
+            params_t, *inputs_t = vjps[last_idx]((c_bar[last_idx], y_t))
             grads[f"layer_{last_idx}"] = params_t["params"]
             grads_inputs.append(inputs_t[0])
             for i in range(last_idx - 1, -1, -1):
-                params_t, *inputs_t = vjps[i]((*c_bar[i], y_t))
+                params_t, *inputs_t = vjps[i]((c_bar[i], y_t))
                 grads[f"layer_{i}"] = params_t["params"]
                 grads_inputs.append(inputs_t[0])
                 # Direct feedback alignment: propagate error via B_i.
@@ -403,11 +412,10 @@ class FAMultiLayerRNN(MultiLayerRNN):
             x_grad = y_t
 
             grads_inputs = grads_inputs[::-1]
-            grads_falign = {f"B{i}": jnp.zeros_like(_Bs[i]) for i in range(len(_Bs))}
             return (
                 self._make_tuple_of_list_from_carries(grads_inputs),
                 x_grad,
-                {"params": grads, "falign": grads_falign},
+                {"params": grads, "falign": fa_grads},
                 [jnp.zeros_like(b) for b in _Bs],
             )
 

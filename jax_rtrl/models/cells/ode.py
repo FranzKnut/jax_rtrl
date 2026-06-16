@@ -28,6 +28,10 @@ class ODECell(nn.RNNCellBase):
         # Define params
         w_shape = (self.num_units, x.shape[-1] + self.num_units + 1)
         if self.wiring is not None:
+            if self.wiring == "ncp":
+                self.wiring_kwargs["interneurons"] = self.num_units - (
+                    self.out_size + 1
+                )
             self.variable(
                 "wiring",
                 "mask",
@@ -35,7 +39,7 @@ class ODECell(nn.RNNCellBase):
                 self.make_rng() if self.has_rng("params") else None,
                 w_shape,
                 int,
-            ).value
+            )#.value
 
     def solve(self, h, x, return_sequences=False):
         """Solve ODE over time T with step dt."""

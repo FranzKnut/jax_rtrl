@@ -10,6 +10,26 @@ Reference: Benna & Fusi (2016); Kaplanis et al. (2018)
 import jax
 import jax.numpy as jnp
 from typing import Any
+from flax import struct
+
+
+@struct.dataclass
+class BennaFusiConfig:
+    """Configuration for Benna-Fusi model."""
+
+    n_vessels: int = 3  # Number of hidden state variables in the chain.
+    g_factor: float = 1e-5  # Scaling factor for the conductances.
+    dt: float = 1.0  # Time step for updates.
+    decay: bool = True  # Whether to let the last vessel decay to 0.
+    w_index: int = 0  # Index of the weight dimension in the parameter arrays.
+
+
+@struct.dataclass
+class BennaFusiState:
+    """State of the Benna-Fusi model for a single parameter."""
+
+    steps: int  # Number of updates applied to this parameter (for tracking time).
+    vessels: Any  # Pytree with leaves of shape (..., n_vessels)
 
 
 class BennaFusi:
@@ -19,25 +39,26 @@ class BennaFusi:
     - u_1 is the observable weight
     - u_2, ..., u_N are hidden states
     - Dynamics: C_k * du_k/dt = g_{k-1,k}(u_{k-1} - u_k) + g_{k,k+1}(u_{k+1} - u_k)
-
     Optimal parameters: C_k = 2^(k-1), g_{k,k+1} ∝ 2^(-(k+2))
     """
 
-    def __init__(self, n_vessels: int = 3, g_factor: float = 1e-5):
+    def __init__(
+        self,
+        config: BennaFusiConfig = BennaFusiConfig(),
+    ):
         """Initialize the Benna-Fusi model.
 
         Args:
-            n_vessels: Number of hidden state variables in the chain.
-            g_factor: Scaling factor for the conductances.
+            config: BennaFusiConfig object with model parameters.
         """
-        self.n_vessels = n_vessels
+        self.config = config
 
         # Capacitances: C_k = 2^(k-1)
-        self.C = jnp.array([2.0 ** (k - 1) for k in range(1, n_vessels + 1)])
+        self.C = jnp.array([2.0 ** (k - 1) for k in range(1, config.n_vessels + 1)])
 
-        # Conductances: g_{k,k+1} ∝ 2^(-(k+2))
+        # Conductances: g_{k,k+1} ∝ 2^(-k-2)
         self.g = jnp.array(
-            [g_factor * 2.0 ** (-(k + 2)) for k in range(1, n_vessels + 1)]
+            [config.g_factor * 2.0 ** (-k - 2) for k in range(1, config.n_vessels + 1)]
         )
 
     def init_state(self, weights: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -53,21 +74,24 @@ class BennaFusi:
 
         def init_weight_state(w):
             # Initialize all vessels to w for the first vessel u_1 = w
-            return jnp.tile(w[..., None], (1,) * len(w.shape) + (self.n_vessels,))
+            # return jnp.tile(w[..., None], (1,) * len(w.shape) + (self.config.n_vessels,))
 
-            # return jnp.concatenate(
-            #     [
-            #         w[..., None],
-            #         jnp.zeros((*w.shape, self.n_vessels - 1)),
-            #     ],
-            #     axis=-1,
-            # )
+            return jnp.concatenate(
+                [
+                    w[..., None],
+                    jnp.zeros((*w.shape, self.config.n_vessels - 1)),
+                ],
+                axis=-1,
+            )
 
-        return jax.tree.map(init_weight_state, weights)
+        return BennaFusiState(steps=0, vessels=jax.tree.map(init_weight_state, weights))
 
     def update(
-        self, state: dict[str, dict[str, Any]], dw: dict[str, Any], dt: float = 1.0
-    ) -> dict[str, dict[str, Any]]:
+        self,
+        state: BennaFusiState,
+        dw: dict[str, Any],
+        consolidation_factor: dict[str, Any] | None = None,
+    ) -> BennaFusiState:
         """Update hidden state given weight change.
 
         Solves: C_k * du_k/dt = g_{k-1,k}(u_{k-1} - u_k) + g_{k,k+1}(u_{k+1} - u_k)
@@ -78,12 +102,13 @@ class BennaFusi:
             state: Current hidden state (output from init_state or previous call).
             dw: Weight update for each parameter.
             dt: Time step.
-
+            consolidation_factor: Pytree with same prefix as dw of factors for consolidating updates.
+                If provided, dw is scaled by this factor to simulate consolidation effects.
         Returns:
             Updated state with same structure as input state.
         """
 
-        def update_weight_state(vessels, weight_update):
+        def update_weight_state(vessels, weight_update, cons_factor=None):
             # vessels shape: (..., n_vessels)
             # weight_update shape: (...)
 
@@ -92,30 +117,39 @@ class BennaFusi:
 
             derivatives = jnp.zeros_like(vessels)
 
-            for k in range(self.n_vessels):
+            for k in range(self.config.n_vessels):
                 # Left coupling: g_{k-1,k} * (u_{k-1} - u_k)
                 if k == 0:
                     left_term = weight_update
                 else:
                     left_term = self.g[k - 1] * (vessels[..., k - 1] - vessels[..., k])
+                    if cons_factor is not None:
+                        left_term *= cons_factor
 
                 # Right coupling: g_{k,k+1} * (u_{k+1} - u_k)
-                if k < self.n_vessels - 1:
+                if k < self.config.n_vessels - 1:
                     right_term = self.g[k] * (vessels[..., k + 1] - vessels[..., k])
-                else:
+                elif self.config.decay:
                     # Last vessel: u_{N+1} = 0 (leak)
                     right_term = self.g[k] * (0.0 - vessels[..., k])
+
+                # Right term only active after steps > 2^k / g_1 to allow initial consolidation
+                # right_term *= state.steps > ((2**k) / self.g[0])
 
                 derivatives = derivatives.at[..., k].set(
                     (left_term + right_term) / self.C[k]
                 )
 
             # Euler integration
-            return vessels + dt * derivatives
+            return vessels + self.config.dt * derivatives
 
-        return jax.tree.map(update_weight_state, state, dw)
+        _args = (consolidation_factor,) if consolidation_factor is not None else ()
+        return state.replace(
+            steps=state.steps + 1,
+            vessels=jax.tree.map(update_weight_state, state.vessels, dw, *_args),
+        )
 
-    def get_weights(self, state: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    def get_weights(self, state: BennaFusiState) -> dict[str, Any]:
         """Extract effective weights from hidden state (first vessel u_1).
 
         Args:
@@ -126,6 +160,6 @@ class BennaFusi:
         """
 
         def get_first_vessel(vessels):
-            return vessels[..., 0]
+            return vessels[..., self.config.w_index]
 
-        return jax.tree.map(get_first_vessel, state)
+        return jax.tree.map(get_first_vessel, state.vessels)

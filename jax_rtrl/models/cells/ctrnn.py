@@ -94,7 +94,13 @@ class CTRNNCell(ODECell):
 
         if self.ode_type in ["murray", "tau_softplus"]:
             tau = self.param(
-                "tau", partial(jrand.uniform, minval=1, maxval=8), (self.num_units,)
+                "tau",
+                partial(
+                    jrand.uniform,
+                    minval=0 if self.ode_type == "tau_softplus" else 1,
+                    maxval=2 if self.ode_type == "tau_softplus" else 8,
+                ),
+                (self.num_units,),
             )
         elif self.ode_type == "tg":
             tau = self.param(

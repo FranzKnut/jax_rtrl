@@ -5,9 +5,7 @@ import jax.numpy as jnp
 
 from jax_rtrl.models.feedforward import MLPCell
 from jax_rtrl.models.seq_models import FAMultiLayerRNN
-from jax_rtrl.models.cells.ctrnn import CTRNNCell
-
-rnn_types = [MLPCell, CTRNNCell]
+from jax_rtrl.models.cells.ctrnn import CTRNNCell, OnlineCTRNNCell
 
 
 class TestFAMultiLayerRNNTypes(unittest.TestCase):
@@ -48,9 +46,18 @@ class TestFAMultiLayerRNNTypes(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown fa_type: invalid"):
             model.init(jax.random.PRNGKey(0), None, self.x)
 
-    def test_gradients_compute_for_all_fa_types_mlp(self):
-        grad_sizes = [5, 5, 5]
+    def _check_grads(self, grads, fa_type):
+        grad_norms = [jnp.linalg.norm(g) for g in jax.tree.leaves(grads["params"])]
+        self.assertTrue(all(jnp.isfinite(g) for g in grad_norms))
+        self.assertTrue(any(g > 0 for g in grad_norms))
 
+        if fa_type == "dfa":
+            for g in jax.tree.leaves(grads["falign"]):
+                self.assertTrue(jnp.allclose(g, 0.0))
+
+    def test_gradients_compute_for_all_fa_types_offline(self):
+        grad_sizes = [5, 5, 5]
+        rnn_types = [MLPCell, CTRNNCell]
         for rnn_cls in rnn_types:
             for fa_type in ("bp", "fa", "dfa"):
                 with self.subTest(fa_type=fa_type, rnn_cls=rnn_cls.__name__):
@@ -72,16 +79,36 @@ class TestFAMultiLayerRNNTypes(unittest.TestCase):
                         return jnp.sum(y**2)
 
                     grads = jax.grad(loss_fn)(variables)
-                    grad_norms = [
-                        jnp.linalg.norm(g) for g in jax.tree.leaves(grads["params"])
-                    ]
+                    self._check_grads(grads, fa_type)
 
-                    self.assertTrue(all(jnp.isfinite(g) for g in grad_norms))
-                    self.assertTrue(any(g > 0 for g in grad_norms))
+    def test_gradients_compute_for_all_fa_types_online(self):
+        grad_sizes = [5, 5, 5]
+        rnn_types = [(OnlineCTRNNCell, {"plasticity": "rflo"})]
+        for rnn_cls, rnn_kwargs in rnn_types:
+            for fa_type in ("bp", "fa", "dfa"):
+                with self.subTest(
+                    fa_type=fa_type, rnn_cls=rnn_cls.__name__, rnn_kwargs=rnn_kwargs
+                ):
+                    model = FAMultiLayerRNN(
+                        sizes=grad_sizes,
+                        rnn_cls=rnn_cls,
+                        rnn_kwargs=rnn_kwargs,
+                        fa_type=fa_type,
+                    )
+                    variables = model.init(jax.random.PRNGKey(0), None, self.x)
+                    carry = model.apply(
+                        variables,
+                        jax.random.PRNGKey(1),
+                        self.x.shape,
+                        method=model.initialize_carry,
+                    )
 
-                    if fa_type == "dfa":
-                        for g in jax.tree.leaves(grads["falign"]):
-                            self.assertTrue(jnp.allclose(g, 0.0))
+                    def loss_fn(v):
+                        _, y = model.apply(v, carry, self.x)
+                        return jnp.sum(y**2)
+
+                    grads = jax.grad(loss_fn)(variables)
+                    self._check_grads(grads, fa_type)
 
 
 if __name__ == "__main__":
