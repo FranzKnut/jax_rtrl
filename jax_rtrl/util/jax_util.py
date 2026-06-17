@@ -234,3 +234,26 @@ def symmetric_uniform_init(lim, dtype=jnp.float32):
         return jrand.uniform(key, shape, dtype, minval=-lim, maxval=lim)
 
     return init
+
+
+def kalman_fusion(means, stds):
+    """Fuse Gaussian distributions sequentially using Kalman fusion.
+
+    Adapted from https://github.com/UoA-CARES/cares_reinforcement_learning/blob/1fce6fcde5183bafe4efce0aa30fc59f630a8429/cares_reinforcement_learning/algorithm/policy/CTD4.py"""
+
+    def fusion_kalman(std_1, mean_1, std_2, mean_2):
+        kalman_gain = (std_1**2) / (std_1**2 + std_2**2)
+        fusion_mean = mean_1 + kalman_gain * (mean_2 - mean_1)
+        fusion_variance = (1 - kalman_gain) * (std_1**2)
+        fusion_std = jnp.sqrt(fusion_variance)
+        return fusion_mean, fusion_std
+
+    x_1, std_1 = means[0], stds[0]
+    x_2, std_2 = means[1], stds[1]
+    fusion_u, fusion_std = fusion_kalman(std_1, x_1, std_2, x_2)
+
+    for i in range(1, len(means) - 2):
+        x_2, std_2 = means[i + 1], stds[i + 1]
+        fusion_u, fusion_std = fusion_kalman(fusion_std, fusion_u, std_2, x_2)
+
+    return fusion_u, fusion_std

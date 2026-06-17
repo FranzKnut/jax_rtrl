@@ -20,7 +20,7 @@ from flax import linen as nn
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.cells.lru import LRUCell, OnlineLRUCell
 from jax_rtrl.models.s5 import S5SSM, S5Config
-from jax_rtrl.util.jax_util import zeros_like_tree, get_normalization_fn
+from jax_rtrl.util.jax_util import kalman_fusion, zeros_like_tree, get_normalization_fn
 from jax_rtrl.models.feedforward import MLP, DistributionLayer, FADense
 
 
@@ -80,7 +80,7 @@ class RNNEnsembleConfig(FrozenSerializable):
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
-    ensemble_method: Literal["linear", "dist", "mean", None] = "mean"
+    ensemble_method: Literal["linear", "dist", "mean", "kalman", None] = "mean"
     ensemble_visible_obs_prob: float = 1.0
     ensemble_first_full_obs: bool = True
     static_rng_seed: int = 0  # Used for ensemble input mask
@@ -146,6 +146,12 @@ class RNNEnsembleConfig(FrozenSerializable):
         if self.layers is None and self.hidden_size is not None:
             object.__setattr__(self, "layers", (self.hidden_size,) * self.num_layers)
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
+
+        assert (
+            self.ensemble_method not in ["kalman"] or self.out_dist == "Normal"
+        ), (
+            "Kalman fusion is only supported for Normal output distribution."
+        )
 
 
 def not_(x):
@@ -629,6 +635,9 @@ class RNNEnsemble(nn.RNNCellBase):
                 combined_dist = distrax.MixtureSameFamily(
                     distrax.Categorical(logits=jnp.zeros(_dists.batch_shape)), _dists
                 )
+            elif self.config.ensemble_method == "kalman":
+                fused_loc, fused_scale = kalman_fusion(_dists.loc, _dists.scale)
+                combined_dist = distrax.Normal(fused_loc, fused_scale)
             else:
                 # Do not combine, return all distributions
                 return _dists
