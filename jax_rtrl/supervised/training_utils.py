@@ -12,10 +12,11 @@ from jax_rtrl.models.seq_models import (
     make_batched_model,
     scan_rnn,
 )
-from jax_rtrl.supervised import example_datasets
 
 
 def get_data(dataset):
+    from jax_rtrl.supervised import example_datasets
+
     x, y = getattr(example_datasets, dataset)()
 
     # add missing time and feature dims
