@@ -114,7 +114,7 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
         print("No checkpoint found")
     else:
         if fresh:
-            print("Overwriting existing checkpoint")
+            print("Overwriting existing local checkpoint")
         else:
             restored_params, restored_hparams = restore_params_and_config(path, tree)
             print("Restored checkpoint")
@@ -125,6 +125,6 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
             # Try to convert to dict
             hparams = asdict(hparams)
         with open(hparams_file_path, "w") as f:
-            json.dump(hparams, f)
+            json.dump(hparams, f, default=str)
 
     return (restored_params, restored_hparams), save_model

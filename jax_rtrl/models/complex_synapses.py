@@ -9,7 +9,7 @@ Reference: Benna & Fusi (2016); Kaplanis et al. (2018)
 
 import jax
 import jax.numpy as jnp
-from typing import Any
+from typing import Any, Literal
 from flax import struct
 
 
@@ -22,6 +22,9 @@ class BennaFusiConfig:
     dt: float = 1.0  # Time step for updates.
     decay: bool = True  # Whether to let the last vessel decay to 0.
     w_index: int = 0  # Index of the weight dimension in the parameter arrays.
+    initialization: Literal["all_w", "first_w", "zero"] = (
+        "all_w"  # How to initialize hidden vessels.
+    )
 
 
 @struct.dataclass
@@ -73,16 +76,28 @@ class BennaFusi:
         """
 
         def init_weight_state(w):
-            # Initialize all vessels to w for the first vessel u_1 = w
-            # return jnp.tile(w[..., None], (1,) * len(w.shape) + (self.config.n_vessels,))
-
-            return jnp.concatenate(
-                [
-                    w[..., None],
-                    jnp.zeros((*w.shape, self.config.n_vessels - 1)),
-                ],
-                axis=-1,
-            )
+            # Initialize all vessels to w
+            if self.config.initialization == "all_w":
+                return jnp.tile(
+                    w[..., None], (1,) * len(w.shape) + (self.config.n_vessels,)
+                )
+            elif self.config.initialization == "first_w":
+                # Only first vessel is w, others start at 0
+                return jnp.concatenate(
+                    [
+                        w[..., None],
+                        jnp.zeros((*w.shape, self.config.n_vessels - 1)),
+                    ],
+                    axis=-1,
+                )
+            elif self.config.initialization == "zero":
+                # All vessels start at 0
+                return jnp.zeros((*w.shape, self.config.n_vessels))
+            else:
+                raise ValueError(
+                    f"Unknown initialization method: {self.config.initialization}. "
+                    "Choose from 'all_w', 'first_w', or 'zero'."
+                )
 
         return BennaFusiState(steps=0, vessels=jax.tree.map(init_weight_state, weights))
 
