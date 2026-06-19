@@ -49,10 +49,7 @@ def restore_params(path, tree=None):
 
     checkpointer = checkpoint.StandardCheckpointer()
     try:
-        params = checkpointer.restore(
-            orbax_path,
-            jax.tree_util.tree_map(checkpoint.utils.to_shape_dtype_struct, tree),
-        )
+        params = checkpointer.restore(orbax_path, tree)
     except FileNotFoundError:
         print(f"Checkpoint not found at {orbax_path}. Returning None.")
         params = None
