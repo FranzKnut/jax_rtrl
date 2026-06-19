@@ -49,7 +49,7 @@ def restore_params(path, tree=None):
 
     checkpointer = checkpoint.StandardCheckpointer()
     try:
-        params = checkpointer.restore(orbax_path, tree)
+        params = checkpointer.restore(orbax_path, tree, strict=False)
     except FileNotFoundError:
         print(f"Checkpoint not found at {orbax_path}. Returning None.")
         params = None
