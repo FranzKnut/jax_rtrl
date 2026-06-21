@@ -63,7 +63,7 @@ def split_train_test(
         lambda x: jnp.take(x, jnp.arange(train_size), axis=axis), dataset
     )
     dataset_eval = jax.tree.map(
-        lambda x: jnp.take(x, jnp.arange(train_size, dataset_size - 1), axis=axis),
+        lambda x: jnp.take(x, jnp.arange(train_size, dataset_size), axis=axis),
         dataset,
     )
 
@@ -121,12 +121,20 @@ def cut_sequences(*data: Iterable[jax.Array] | jax.Array, seq_len: int, overlap=
     return sliced
 
 
-def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=False):
+def load_np_files_from_folder(
+    path,
+    is_npz=True,
+    num_files: int = None,
+    stack=False,
+    collapse_first_two_cols=False,
+):
     """Load a set of npz or npz files from a folder.
 
     :param name: Environment name
     :param is_npz: If True, the files in the folder are assumed to be .npz files containing multiple fields
     :param num_files: If not None, only loads the specified number of files
+    :param stack: If True, stacks the data along the first axis else concatenates it.
+    :param collapse_first_two_cols: If True, collapses the first two columns after joining.
     :return:
     """
     files = [
@@ -155,17 +163,14 @@ def load_np_files_from_folder(path, is_npz=True, num_files: int = None, stack=Fa
 
     print(f"Files contained {num_steps:d} steps total")
 
-    if stack:
-        return output
-    else:
-        file_starts = np.zeros(num_steps)
-        # An Array that is zero everywhere except at the start of each file
-        start_indices = np.concatenate(
-            [np.zeros(1, dtype=int), np.cumsum(np.array(num_steps_per_file[:-1]))]
-        ).astype(int)
-        file_starts[start_indices] = 1
+    file_starts = np.zeros(num_steps)
+    # An Array that is zero everywhere except at the start of each file
+    start_indices = np.concatenate(
+        [np.zeros(1, dtype=int), np.cumsum(np.array(num_steps_per_file[:-1]))]
+    ).astype(int)
+    file_starts[start_indices] = 1
 
-        return output, file_starts
+    return output, file_starts
 
 
 def read_array_header(fobj):
