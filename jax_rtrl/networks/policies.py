@@ -25,9 +25,9 @@ from jax_rtrl.util.jax_util import pprint_params
 @dataclass(unsafe_hash=True, frozen=True)
 class PolicyConfig(RNNEnsembleConfig):
     """RNNEnsembleConfig for Policies."""
-    
+
     agent_type: str | None = None  # HACK: overwrites model_name in RNNEnsembleConfig
-    
+
     # TODO: remove the mlp specific fields and use PolicyRNN only?
     # skip_connection: bool = False
     # norm: str | None = "layer"  # e.g. "layer", "batch", "group", None
@@ -36,7 +36,7 @@ class PolicyConfig(RNNEnsembleConfig):
     use_cnn: bool = False
     latent_size: int = 32
     cnn_config: ConvConfig = field(default_factory=ConvConfig)
-    
+
     def __post_init__(self):
         super().__post_init__()
         if self.agent_type is not None:
@@ -257,11 +257,13 @@ def restore_policy_from_ckpt(
         target = policy_params
 
     variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
-    policy = policy.bind(variables[0])
+
     if with_autoencoder:
+        policy = policy.bind(variables[0])
         autoencoder = autoencoder.bind(variables[1])
         return autoencoder, policy
     else:
+        policy = policy.bind(variables)
         return policy
 
 
@@ -280,3 +282,4 @@ def download_policy(ckpt_path: str, a_dim: int, **inputs):
         print("Also restored autoencoder.")
         pprint_params(autoencoder.variables)
     pprint_params(policy.variables)
+    return policy
