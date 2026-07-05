@@ -135,7 +135,7 @@ def load_np_files_from_folder(
     :param num_files: If not None, only loads the specified number of files
     :param stack: If True, stacks the data along the first axis else concatenates it.
     :param collapse_first_two_cols: If True, collapses the first two columns after joining.
-    :return:
+    :return: A tuple of (data, file_starts) where data is a pytree of arrays and file_starts is an array indicating the start of each file.
     """
     files = [
         os.path.join(path, d)

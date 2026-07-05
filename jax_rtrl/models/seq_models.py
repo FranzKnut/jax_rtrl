@@ -52,7 +52,8 @@ class RNNEnsembleConfig(FrozenSerializable):
         num_modules: Number of RNN modules in the ensemble.
         num_layers: Number of layers in the modules. Ignored if layers is specified.
         hidden_size: Size of the hidden state in each RNN module. Ignored if layers is specified.
-        layers: Tuple specifying the number of layers in each module. This can be use to have heterogeneous layer sizes.
+        _layers: Tuple specifying the number of layers in each module. This can be use to have heterogeneous layer sizes.
+                _layers overrides num_layers and hidden_size if specified.
         method: Method for combining the outputs of the RNN modules.
         num_blocks: Number of input chunks for parallel processing.
         glu: Whether to use Gated Linear Unit structure.
@@ -67,7 +68,16 @@ class RNNEnsembleConfig(FrozenSerializable):
     """
 
     model_name: str | None = None
-    layers: tuple[int, ...] | None = None
+
+    @property
+    def layers(self) -> tuple[int, ...] | None:
+        """Return the internal representation of layers."""
+        if self._layers is not None:
+            return self._layers
+        else:
+            return (self.hidden_size,) * self.num_layers if self.hidden_size is not None else None
+
+    _layers: tuple[int, ...] | None = None  # Internal representation of layers
     num_layers: tuple[int, ...] | None = 1
     hidden_size: int | None = None
     num_modules: int = 1
@@ -133,23 +143,21 @@ class RNNEnsembleConfig(FrozenSerializable):
         ), (
             f"Either hidden_size or layers must be specified for model {self.model_name}."
         )
-        if self.layers is not None:
-            if self.num_layers != len(self.layers) or (
+        if self._layers is not None:
+            if self.num_layers != len(self._layers) or (
                 self.hidden_size is not None
-                and (len(self.layers) != 1 or self.layers[0] != self.hidden_size)
+                and (len(self._layers) != 1 or self._layers[0] != self.hidden_size)
             ):
                 print(
                     "WARNING: layers is specified, ignoring num_layers and hidden_size."
                 )
-            object.__setattr__(self, "num_layers", len(self.layers))
+            object.__setattr__(self, "num_layers", len(self._layers))
             object.__setattr__(self, "hidden_size", None)
-        if self.layers is None and self.hidden_size is not None:
-            object.__setattr__(self, "layers", (self.hidden_size,) * self.num_layers)
+        # if self.layers is None and self.hidden_size is not None:
+        #     object.__setattr__(self, "layers", (self.hidden_size,) * self.num_layers)
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
-        assert (
-            self.ensemble_method not in ["kalman"] or self.out_dist == "Normal"
-        ), (
+        assert self.ensemble_method not in ["kalman"] or self.out_dist == "Normal", (
             "Kalman fusion is only supported for Normal output distribution."
         )
 
