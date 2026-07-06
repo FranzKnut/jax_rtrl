@@ -49,6 +49,9 @@ class Policy(nn.Module):
     a_dim: int
     config: PolicyConfig = field(default_factory=PolicyConfig)
     use_rnn: bool = False
+    deterministic: bool = (
+        False  # If True, use the mode of the distribution instead of sampling
+    )
 
     def __call__(self, x):
         """Compute action or action distribution for given observation."""
@@ -61,7 +64,10 @@ class Policy(nn.Module):
             *rest, out = out
         if isinstance(out, tuple):
             out = out[0]
-        action = out.sample(seed=rng)
+        if self.deterministic:
+            action = out.mode()
+        else:
+            action = out.sample(seed=rng)
         if self.use_rnn:
             return *rest, action
         else:
@@ -225,6 +231,12 @@ def restore_policy_from_ckpt(
             raise FileNotFoundError(f"Checkpoint path {ckpt_path} does not exist.")
         config_dict = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
         # Try to unpack nested config and make config object
+        policy_config_dict = config_dict.get("policy_config", config_dict)
+
+        # HACK: support legacy config before layers was renamed to _layers
+        if "layers" in policy_config_dict:
+            policy_config_dict["_layers"] = policy_config_dict.pop("layers")
+
         policy_config = PolicyConfig.from_dict(
             config_dict.get("policy_config", config_dict)
         )

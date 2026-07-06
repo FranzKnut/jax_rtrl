@@ -28,3 +28,7 @@ class NormalTanh(distrax.Transformed):
     def entropy(self) -> jax.Array:
         print("WARNING: Using base distribution's entropy in place of the true one!")
         return self.distribution.entropy()
+    
+    def variance(self) -> jax.Array:
+        print("WARNING: Using base distribution's variance in place of the true one!")
+        return self.distribution.variance()

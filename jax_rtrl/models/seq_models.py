@@ -75,7 +75,11 @@ class RNNEnsembleConfig(FrozenSerializable):
         if self._layers is not None:
             return self._layers
         else:
-            return (self.hidden_size,) * self.num_layers if self.hidden_size is not None else None
+            return (
+                (self.hidden_size,) * self.num_layers
+                if self.hidden_size is not None
+                else None
+            )
 
     _layers: tuple[int, ...] | None = None  # Internal representation of layers
     num_layers: tuple[int, ...] | None = 1
@@ -138,8 +142,10 @@ class RNNEnsembleConfig(FrozenSerializable):
                     )
                 self.rnn_kwargs.pop("wiring", None)
                 self.rnn_kwargs.pop("wiring_kwargs", None)
-        assert self.model_name is None or (
-            self.hidden_size is not None or self.layers is not None
+        assert (
+            self.model_name is None
+            or self.hidden_size is not None
+            or self.layers is not None
         ), (
             f"Either hidden_size or layers must be specified for model {self.model_name}."
         )
@@ -157,9 +163,10 @@ class RNNEnsembleConfig(FrozenSerializable):
         #     object.__setattr__(self, "layers", (self.hidden_size,) * self.num_layers)
         # self.rnn_kwargs = FrozenConfigDict(self.rnn_kwargs)
 
-        assert self.ensemble_method not in ["kalman"] or self.out_dist == "Normal", (
-            "Kalman fusion is only supported for Normal output distribution."
-        )
+        assert self.ensemble_method not in ["kalman"] or self.out_dist in [
+            "Normal",
+            "NormalTanh",
+        ], "Kalman fusion is only supported for Normal output distribution."
 
 
 def not_(x):
@@ -645,7 +652,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 )
             elif self.config.ensemble_method == "kalman":
                 fused_loc, fused_scale = kalman_fusion(_dists.loc, _dists.scale)
-                combined_dist = distrax.Normal(fused_loc, fused_scale)
+                combined_dist = type(_dists)(fused_loc, fused_scale)
             else:
                 # Do not combine, return all distributions
                 return _dists
