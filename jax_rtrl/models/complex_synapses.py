@@ -7,6 +7,8 @@ vessel, while hidden vessels regularize it with the history of modifications.
 Reference: Benna & Fusi (2016); Kaplanis et al. (2018)
 """
 
+import copy
+
 import jax
 import jax.numpy as jnp
 from typing import Any, Literal
@@ -21,6 +23,7 @@ class BennaFusiConfig:
     g_factor: float = 1e-5  # Scaling factor for the conductances.
     dt: float = 1.0  # Time step for updates.
     decay: bool = True  # Whether to let the last vessel decay to 0.
+    decay_to_initial: bool = False  # Whether to decay to initial value instead of 0.
     w_index: int = 0  # Index of the weight dimension in the parameter arrays.
     initialization: Literal["all_w", "first_w", "zero"] = (
         "all_w"  # How to initialize hidden vessels.
@@ -75,6 +78,10 @@ class BennaFusi:
             All vessels initialized to w (since u_1 = w and others start empty).
         """
 
+        if self.config.decay_to_initial:
+            # If decaying to initial value, we need to store the initial weights as well
+            self.initial_weights = copy.deepcopy(weights)
+
         def init_weight_state(w):
             # Initialize all vessels to w
             if self.config.initialization == "all_w":
@@ -123,7 +130,9 @@ class BennaFusi:
             Updated state with same structure as input state.
         """
 
-        def update_weight_state(vessels, weight_update, cons_factor=None):
+        def update_weight_state(
+            vessels, weight_update, initial_weight=None, cons_factor=None
+        ):
             # vessels shape: (..., n_vessels)
             # weight_update shape: (...)
 
@@ -146,7 +155,8 @@ class BennaFusi:
                     right_term = self.g[k] * (vessels[..., k + 1] - vessels[..., k])
                 elif self.config.decay:
                     # Last vessel: u_{N+1} = 0 (leak)
-                    right_term = self.g[k] * (0.0 - vessels[..., k])
+                    targ = initial_weight if self.config.decay_to_initial else 0.0
+                    right_term = self.g[k] * (targ - vessels[..., k])
 
                 # Right term only active after steps > 2^k / g_1 to allow initial consolidation
                 # right_term *= state.steps > ((2**k) / self.g[0])
@@ -158,7 +168,10 @@ class BennaFusi:
             # Euler integration
             return vessels + self.config.dt * derivatives
 
-        _args = (consolidation_factor,) if consolidation_factor is not None else ()
+        _iw = self.initial_weights if self.config.decay_to_initial else None
+        _args = (
+            (_iw, consolidation_factor) if consolidation_factor is not None else (_iw,)
+        )
         return state.replace(
             steps=state.steps + 1,
             vessels=jax.tree.map(update_weight_state, state.vessels, dw, *_args),
