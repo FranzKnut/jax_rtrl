@@ -161,8 +161,6 @@ def load_np_files_from_folder(
         num_steps_per_file = [len(d) for d in data]
         num_steps = len(output)
 
-    print(f"Files contained {num_steps:d} steps total")
-
     file_starts = np.zeros(num_steps)
     # An Array that is zero everywhere except at the start of each file
     start_indices = np.concatenate(

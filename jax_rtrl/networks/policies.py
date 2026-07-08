@@ -207,7 +207,7 @@ class PolicyRTRL(PolicyRNN):
 
 
 def restore_policy_from_ckpt(
-    ckpt_path: str, a_dim: int, config: PolicyConfig = None, **inputs
+    ckpt_path: str, a_dim: int, **inputs
 ) -> Policy | tuple[Autoencoder, Policy]:
     """Restore a policy from a checkpoint.
 
@@ -215,8 +215,8 @@ def restore_policy_from_ckpt(
     ----------
     ckpt_path : str
         Path to the checkpoint file.
-    restored_config : PolicyConfig
-        Configuration for the restored policy. If None, the configuration will be loaded from the checkpoint.
+    a_dim : int
+        Dimension of the action space.
     **inputs : dict
         Inputs required to initialize the policy module.
 
@@ -225,30 +225,28 @@ def restore_policy_from_ckpt(
     Policy
         The restored policy module.
     """
-    # FIXME: will fail if config is given!
-    if config is None:
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"Checkpoint path {ckpt_path} does not exist.")
-        config_dict = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
-        # Try to unpack nested config and make config object
-        policy_config_dict = config_dict.get("policy_config", config_dict)
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(f"Checkpoint path {ckpt_path} does not exist.")
+    config_dict = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
+    # Try to unpack nested config and make config object
+    policy_config_dict = config_dict.get("policy_config", config_dict)
 
-        # HACK: support legacy config before layers was renamed to _layers
-        if "layers" in policy_config_dict:
-            policy_config_dict["_layers"] = policy_config_dict.pop("layers")
+    # HACK: support legacy config before layers was renamed to _layers
+    if "layers" in policy_config_dict:
+        policy_config_dict["_layers"] = policy_config_dict.pop("layers")
 
-        policy_config = PolicyConfig.from_dict(
-            config_dict.get("policy_config", config_dict)
+    policy_config = PolicyConfig.from_dict(
+        config_dict.get("policy_config", config_dict)
+    )
+    with_autoencoder = config_dict.get("use_autoencoder", False)
+    if with_autoencoder:
+        autoencoder_config = AutoencoderConfig.from_dict(
+            config_dict.get("autoencoder_cfg")
         )
-        with_autoencoder = config_dict.get("use_autoencoder", False)
-        if with_autoencoder:
-            autoencoder_config = AutoencoderConfig.from_dict(
-                config_dict.get("autoencoder_cfg")
-            )
 
-            policy_config = replace(
-                policy_config, latent_size=autoencoder_config.latent_size
-            )
+        policy_config = replace(
+            policy_config, latent_size=autoencoder_config.latent_size
+        )
     # if config.model_name == "mlp":
     #     policy = PolicyMLP(config=config)
     # else:
