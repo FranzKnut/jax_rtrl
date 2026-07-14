@@ -1,13 +1,13 @@
 """Module for model definitions and utilities."""
 
-import re
+from typing_extensions import deprecated
 
 import flax
 import flax.linen
 import jax
 
 from jax_rtrl.models.cells import CELL_TYPES, ONLINE_CELL_TYPES  # noqa
-from jax_rtrl.models.feedforward import FADense, FAAffine
+from jax_rtrl.models.feedforward import FADense, FAAffine  # noqa
 
 from .seq_models import RNNEnsembleConfig, SequenceLayerConfig
 
@@ -31,6 +31,7 @@ def init_model(model: flax.linen.Module, sample_input, is_rnn: bool, rng_key=Non
     return model.init(rng_key, sample_input)
 
 
+@deprecated("Use `jax_rtrl.models.seq_models.RNNEnsembleConfig` instead.")
 def make_rnn_ensemble_config(
     model_name,
     hidden_size,

@@ -216,15 +216,7 @@ def tree_stack(trees, axis=0):
     Useful for turning a list of objects into something you can feed to a
     vmapped function. Taken from https://gist.github.com/willwhitney/dd89cac6a5b771ccff18b06b33372c75
     """
-    leaves, treedef = jax.tree.flatten(trees[0])
-    leaves_list = [leaves]
-    for tree in trees[1:]:
-        leaves, _ = jax.tree.flatten(tree)
-        leaves_list.append(leaves)
-
-    grouped_leaves = zip(*leaves_list)
-    result_leaves = [jnp.stack(leaf, axis=axis) for leaf in grouped_leaves]
-    return treedef.unflatten(result_leaves)
+    return jax.tree.map(lambda *leaves: jnp.stack(leaves, axis=axis), *trees)
 
 
 def symmetric_uniform_init(lim, dtype=jnp.float32):
