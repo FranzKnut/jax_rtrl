@@ -18,7 +18,7 @@ from jax_rtrl.util.jax_util import (
 
 
 def ctrnn_ode(params, h, x):
-    """Compute euler integration step or CTRNN ODE."""
+    """CTRNN ODE step."""
     # Concatenate input and hidden state and ones for bias
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
@@ -29,7 +29,7 @@ def ctrnn_ode(params, h, x):
 
 
 def ctrnn_ode_tau_softplus(params, h, x, min_tau=1.0):
-    """Compute euler integration step or CTRNN ODE."""
+    """CTRNN ODE with softplus activation for tau."""
     # Concatenate input and hidden state and ones for bias
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
@@ -40,15 +40,14 @@ def ctrnn_ode_tau_softplus(params, h, x, min_tau=1.0):
 
 
 def ctrnn_tg(params, h, x):
-    """Compute euler integration step or CTRNN ODE."""
-    W, W_tau = params
+    """CTRNN ODE with time constant gating."""
     # Concatenate input and hidden state
     y = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     # This way we only need one FC layer for recurrent and input connections
-    act = jnp.tanh(y @ W.T)
-    tau = jax.nn.softplus(y @ W_tau.T) + 1
-    # tau = jax.nn.softmax(y @ W_tau.T)
-    # tau = jax.nn.sigmoid(y @ W_tau.T)
+    act = jnp.tanh(y @ params["W"].T)
+    tau = jax.nn.softplus(y @ params["W_tau"].T) + 1
+    # tau = jax.nn.softmax(y @ params["W_tau"].T)
+    # tau = jax.nn.sigmoid(y @ params["W_tau"].T)
     # Subtract decay and divide by tau
     return (act - h) * tau
 
@@ -395,7 +394,7 @@ class OnlineCTRNNCell(OnlineODECell, CTRNNCell):
             elif self.ode_type == "tau_softplus":
                 traces = eprop_ctrnn_tau_softplus(self, carry, _p["params"], x)
             else:
-                raise ValueError(f"ODE type {self.ode_type} not supported.")
+                raise ValueError(f"ODE type {self.ode_type} not supported for eprop.")
         else:
             raise ValueError(f"Plasticity mode {self.plasticity} not supported.")
         if mask is not None:

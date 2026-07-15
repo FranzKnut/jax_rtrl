@@ -70,7 +70,7 @@ class HopfieldCell(ODECell):
     continuous-time ODEs compatible with the ODECell solver framework.
 
     In classical mode the cell uses a sign activation analogous to a CTRNN
-    with tanh replaced by sign.  In modern mode the cell uses a softmax-based
+    with tanh replaced by sign. In modern mode the cell uses a softmax-based
     update equivalent to single-head attention over a learned pattern matrix.
 
     The number of ODE integration steps is controlled by the inherited
@@ -105,9 +105,7 @@ class HopfieldCell(ODECell):
             return jnp.concatenate([_w_in, _w_rec, _bias], axis=-1)
 
         self.param("W", _initializer, w_shape)
-        self.param(
-            "tau", partial(jrand.uniform, minval=1, maxval=8), (self.num_units,)
-        )
+        self.param("tau", partial(jrand.uniform, minval=1, maxval=8), (self.num_units,))
         if self.ode_type == "modern":
             num_stored = self.num_stored_patterns or self.num_units
             self.param(

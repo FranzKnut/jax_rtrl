@@ -44,9 +44,10 @@ ONLINE_CELL_TYPES = {
     # TODO: add ODE types for LTC
     "ltc_rtrl": partial(OnlineLTCCell, plasticity="rtrl"),
     "ltc_rflo": partial(OnlineLTCCell, plasticity="rflo"),
-    "lrc_rtrl": partial(OnlineLRCCell, plasticity="rtrl"),
     "ltc_snap0": partial(OnlineLTCCell, plasticity="snap0"),
     # LRC
+    "lrc_rtrl": partial(OnlineLRCCell, plasticity="rtrl"),
+    "lrc_rflo": partial(OnlineLRCCell, plasticity="rflo"),
     "lrc_snap0": partial(OnlineLRCCell, plasticity="snap0"),
     
     # Hopfield
