@@ -18,9 +18,10 @@ from chex import PRNGKey
 from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
+from jax_rtrl.models.distributions import UniformMixture
 from jax_rtrl.models.cells.lru import LRUCell, OnlineLRUCell
 from jax_rtrl.models.s5 import S5SSM, S5Config
-from jax_rtrl.util.jax_util import kalman_fusion, zeros_like_tree, get_normalization_fn
+from jax_rtrl.util.jax_util import kalman_fusion, get_normalization_fn
 from jax_rtrl.models.feedforward import MLP, DistributionLayer, FADense
 
 
@@ -541,6 +542,10 @@ class RNNEnsemble(nn.RNNCellBase):
 
     Attributes:
         config: Configuration for the RNN ensemble.
+        out_size: Size of the output layer (if any).
+        loc_bounds: Bounds for the location parameter of the output distribution.
+        split_input: Whether to split input among ensemble modules.
+        num_submodule_extra_args: Number of additional arguments for submodules.
     """
 
     config: RNNEnsembleConfig
@@ -591,13 +596,6 @@ class RNNEnsemble(nn.RNNCellBase):
                 name="mlps_out",
             )
 
-        if self.config.ensemble_method == "linear":
-            self.combine_layer = FADense(
-                self.config.num_modules,
-                f_align=self.config.fa_type != "bp",
-                name="combine_layer",
-            )
-
         if self.out_size is not None:
             # Make distribution for each submodule
             self.dists = make_batched_model(
@@ -617,6 +615,13 @@ class RNNEnsemble(nn.RNNCellBase):
                 norm=self.config.layer_config.norm,
                 name="dists",
             )
+
+            if self.config.ensemble_method == "linear":
+                self.combine_layer = FADense(
+                    self.config.num_modules,
+                    f_align=self.config.fa_type != "bp",
+                    name="combine_layer",
+                )
 
     def _postprocessing(self, outs, x):
         # Output FF layers
@@ -645,11 +650,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 out_gates = jax.nn.softmax(out_gates, axis=-1)
                 combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), _dists)
             elif self.config.ensemble_method == "dist":
-                # HACK: Distrax MixtureSameFamily expects batch_dim in the last dimension? so we swap axes here.
-                _dists = jax.tree.map(lambda d: jnp.swapaxes(d, 0, -1), _dists)
-                combined_dist = distrax.MixtureSameFamily(
-                    distrax.Categorical(logits=jnp.zeros(_dists.batch_shape)), _dists
-                )
+                combined_dist = UniformMixture(_dists)
             elif self.config.ensemble_method == "kalman":
                 fused_loc, fused_scale = kalman_fusion(_dists.loc, _dists.scale)
                 combined_dist = type(_dists)(fused_loc, fused_scale)
@@ -671,24 +672,16 @@ class RNNEnsemble(nn.RNNCellBase):
 
         If out_dist is not None, the output will be distribution(s),
 
-        Parameters:
-        h : List
-            of rnn submodule states
-        x : Array
-            input with shape (input_size) or (time, input_size)
-            Can't handle batch dimension, make sure to vmap externally if needed.
-        reset: bool
-            whether to reset the hidden state
-        training : bool
-            whether the model is in training mode (affects dropout behavior)
-        call_args : tuple
-            additional arguments for the RNN submodules
-        call_kwargs : dict
-            additional keyword arguments for the RNN submodules
+        Args:
+            h: RNN submodule states.
+            x: Input with shape ``(input_size)`` or ``(time, input_size)``.
+                Can't handle batch dimension; make sure to vmap externally if needed.
+            training: Whether the model is in training mode (affects dropout behavior).
+            *call_args: Additional arguments for the RNN submodules.
+            **call_kwargs: Additional keyword arguments for the RNN submodules.
 
         Returns:
-        _type_
-            _description_
+            The model output, potentially together with the per-module distributions.
         """
         # Mask x for ensemble modules
         if self.split_input:

@@ -4,6 +4,22 @@ import distrax
 import jax
 
 
+class UniformMixture(distrax.MixtureSameFamily):
+    """A uniform mixture of distributions."""
+
+    def __init__(self, components):
+        # HACK: Distrax MixtureSameFamily expects batch_dim in the last dimension? so we swap axes here.
+        components = jax.tree.map(lambda d: jax.numpy.swapaxes(d, 0, -1), components)
+        super().__init__(
+            distrax.Categorical(logits=jax.numpy.zeros(components.batch_shape)),
+            components,
+        )
+
+    def mode(self):
+        """Return the mode of the mixture distribution."""
+        return self.mean()
+
+
 class NormalTanh(distrax.Transformed):
     """A Normal distribution followed by a Tanh transformation."""
 
@@ -28,7 +44,7 @@ class NormalTanh(distrax.Transformed):
     def entropy(self) -> jax.Array:
         print("WARNING: Using base distribution's entropy in place of the true one!")
         return self.distribution.entropy()
-    
+
     def variance(self) -> jax.Array:
         print("WARNING: Using base distribution's variance in place of the true one!")
         return self.distribution.variance()

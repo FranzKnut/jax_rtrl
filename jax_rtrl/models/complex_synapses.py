@@ -14,6 +14,8 @@ import jax.numpy as jnp
 from typing import Any, Literal
 from flax import struct
 
+from jax_rtrl.util.jax_util import zeros_like_tree
+
 
 @struct.dataclass
 class BennaFusiConfig:
@@ -168,10 +170,14 @@ class BennaFusi:
             # Euler integration
             return vessels + self.config.dt * derivatives
 
-        _iw = self.initial_weights if self.config.decay_to_initial else None
         _args = (
-            (_iw, consolidation_factor) if consolidation_factor is not None else (_iw,)
+            (self.initial_weights,)
+            if self.config.decay_to_initial
+            else (zeros_like_tree(dw),)
         )
+        if consolidation_factor is not None:
+            _args += (consolidation_factor,)
+
         return state.replace(
             steps=state.steps + 1,
             vessels=jax.tree.map(update_weight_state, state.vessels, dw, *_args),
