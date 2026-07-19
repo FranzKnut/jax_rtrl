@@ -17,7 +17,11 @@ class UniformMixture(distrax.MixtureSameFamily):
 
     def mode(self):
         """Return the mode of the mixture distribution."""
-        return self.mean()
+        try:
+            return self.mean()
+        except NotImplementedError:
+            print("WARNING: Mean is not implemented for this mixture distribution. Using mean of modes.")
+            return jax.numpy.mean(self.components_distribution.mode(), axis=-1)
 
 
 class NormalTanh(distrax.Transformed):
