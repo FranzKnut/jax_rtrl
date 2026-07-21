@@ -2,7 +2,7 @@
 
 from dataclasses import field
 from numbers import Number
-from typing import Callable
+from typing import Callable, Literal
 
 import distrax
 import flax.linen as nn
@@ -294,6 +294,7 @@ class DistributionLayer(nn.Module):
     out_size: int
     distribution: str = "LogStddevNormal"
     layers: tuple[int, ...] = ()
+    mapping: Literal["dense", "affine"] = "dense"
     eps_unimix: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
     loc_bounds: float | tuple[float, float] | None = None  # Needs to be
     scale_bounds: float | tuple[float, float] | None = 0
@@ -335,7 +336,15 @@ class DistributionLayer(nn.Module):
         #             min_std=jnp.exp(self.act_log_bounds),
         #         ).create_dist(model_out)
 
-        x = FADense(out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
+        if self.mapping == "dense":
+            x = FADense(out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
+        elif self.mapping == "affine":
+            assert x.shape[-1] >= out_size, (
+                f"Input dimension {x.shape[-1]} must be greater than or equal to output dimension {out_size} for affine mapping."
+            )
+            x = FAAffine(out_size, f_align=self.f_align)(x)
+        else:
+            raise ValueError(f"Invalid mapping type: {self.mapping}.")
 
         if self.distribution is None:
             return x

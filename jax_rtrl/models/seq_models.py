@@ -89,6 +89,7 @@ class RNNEnsembleConfig(FrozenSerializable):
     num_blocks: int = 1
     # out_size: int | None = None
     out_dist: str | None = "Deterministic"
+    out_mapping: Literal["dense", "affine"] = "dense"
     dist_loc_bounds: tuple[float, float] | None = None
     dist_scale_bounds: float | tuple[float, float] | None = 0
     dist_eps: float = 0.01  # Unimix epsilon for Categorical/Bernoulli
@@ -537,6 +538,26 @@ def make_rnn(
         return rnn_cls(size, name=name, **kwargs)
 
 
+def make_obs_visibility_mask(rng, shape, visible_prob=1.0, first_full=True):
+    """Make a mask for the input observations, with given visible probability.
+
+    Args:
+        rng: PRNGKey for random number generation.
+        shape: Shape of the input observations.
+        visible_prob: Probability of each observation being visible (not masked).
+        first_full: If True, the first module sees the full input.
+    Returns:
+        A boolean mask of the same shape as the input observations, where True indicates visible and False indicates masked.
+    """
+    if visible_prob >= 1.0:
+        return jnp.ones(shape, dtype=bool)
+    else:
+        mask = jrandom.bernoulli(rng, p=visible_prob, shape=shape)
+        if first_full:
+            mask = mask.at[0].set(True)
+        return mask
+
+
 class RNNEnsemble(nn.RNNCellBase):
     """Ensemble of RNN cells with optional output processing.
 
@@ -607,6 +628,7 @@ class RNNEnsemble(nn.RNNCellBase):
             )(
                 self.out_size,
                 distribution=self.config.out_dist,
+                mapping=self.config.out_mapping,
                 loc_bounds=self.loc_bounds
                 if self.loc_bounds is not None
                 else self.config.dist_loc_bounds,
@@ -692,13 +714,12 @@ class RNNEnsemble(nn.RNNCellBase):
         else:
             x_tiled = x[None] * jnp.ones((self.config.num_modules,) + (1,) * (x.ndim))
         if self.config.num_modules > 1:
-            ensemble_input_mask = jax.random.bernoulli(
+            ensemble_input_mask = make_obs_visibility_mask(
                 self.ensemble_input_mask_rng,
-                self.config.ensemble_visible_obs_prob,
                 x_tiled.shape,
+                self.config.ensemble_visible_obs_prob,
+                self.config.ensemble_first_full_obs,
             )
-            if self.config.ensemble_first_full_obs:
-                ensemble_input_mask = ensemble_input_mask.at[0].set(True)
             x_tiled = x_tiled * ensemble_input_mask
         elif self.config.ensemble_visible_obs_prob < 1.0:
             print("WARNING: num_modules is 1 so ensemble_in_visible_prob is ignored.")
