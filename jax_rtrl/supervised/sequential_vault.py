@@ -21,6 +21,7 @@ def make_vault(
     steps_per_batch: int | list[int],
     batch_generator: Iterable[Any],
     batch_size: int = 1,
+    base_path: str = "vaults",
     vault_uid: str | None = None,
     resume_load: bool = True,
 ) -> tuple[Vault, jax.Array | None]:
@@ -29,7 +30,7 @@ def make_vault(
     Parameters
     ----------
     vault_name : str
-        Name of the vault to be created. The vault will be created at the path `./vaults/{vault_name}/{vault_uid}`.
+        Name of the vault to be created. The vault will be created at the path `./{base_path}/{vault_name}/{vault_uid}`.
     max_length_time_axis : int
         The maximum length of the time axis for each batch of data to be written to the vault.
     total_num_steps : int
@@ -42,6 +43,8 @@ def make_vault(
         The batches should be pytrees whose leaves have shape (batch_size, time, ...).
     batch_size : int, optional
         by default 1
+    base_path : str, optional
+        by default "vaults"
     vault_uid : str | None, optional
         by default None
     resume_load : bool, optional
@@ -85,13 +88,12 @@ def make_vault(
         except StopIteration:
             raise ValueError("Batch generator is empty. Cannot write to vault.")
 
-        init_data = jax.tree_util.tree_map(lambda x: x[0][0], first_batch)
-
         # Create vault
         vault = Vault(
             vault_name=vault_name,
-            experience_structure=init_data,
+            experience_structure=first_batch,
             vault_uid=vault_uid,
+            rel_dir=base_path,
         )
         print(f"Vault: {vault._base_path}")
         print("Index is at:", vault.vault_index)
@@ -115,6 +117,7 @@ def make_vault(
 
         # Write batches to vault
         add_batch = jax.jit(buffer.add, donate_argnums=0)
+        init_data = jax.tree_util.tree_map(lambda x: x[0][0], first_batch)
         buffer_state = buffer.init(init_data)
 
         written_batches = 0
@@ -137,10 +140,25 @@ def make_vault(
 def read_vault_data(vault, start_id: int, num_steps: int = 1):
     """Read a chunk of data from the vault.
 
-    :param start_id: Which start_id to read from (0-indexed)
-    :param chunk_size: How much percent of the data should be read
-    :return: The data chunk
+    Parameters
+    ----------
+    vault : Vault
+        The vault to read data from.
+    start_id : int
+        The starting index of the data chunk to read.
+    num_steps : int, optional
+        The number of steps to read from the vault, by default 1.
+
+    Returns
+    -------
+    A flashbax BufferState object containing the requested data chunk.
+    The data is a pytree with the same structure as the experience stored in the vault, but with the time axis truncated to `num_steps`.
+    Returns None if the vault is empty.
     """
+
+    if vault.vault_index == 0:
+        print("Vault is empty. Cannot read data.")
+        return None
     start_percent = start_id * 100 / vault.vault_index
     end_percent = start_percent + num_steps * 100 / vault.vault_index
     assert start_percent >= 0, "Requested data chunk is negative."
@@ -166,6 +184,23 @@ def vault_generator(
     num_samples: int = 1,
     eval_size: int = 0,
 ):
+    """Generator that yields samples from the vault.
+
+    Parameters
+    ----------
+    key : PRNGKey
+        A JAX random key
+    vault : Vault
+        The vault to sample from.
+    batch_size : int
+        The number of samples to yield in each batch.
+    seq_len : int
+        The length of each sample sequence.
+    num_samples : int, optional
+        The number of batches to yield
+    eval_size : int, optional
+        The number of steps to reserve for evaluation. Samples will be drawn from the vault excluding these steps, by default 0.
+    """
     for i in range(num_samples):
         key_sample, key = jrandom.split(key)
         batch_ids = jrandom.randint(
@@ -178,7 +213,7 @@ def vault_generator(
         batch_ids = [max(b - 0.1, 0) for b in batch_ids]
         jit_tree_stack = jax.jit(tree_stack, static_argnames=["concatenate"])
         sample = jit_tree_stack(
-            [read_vault_data(vault, start_id=c, num_steps=seq_len) for c in batch_ids],
+            [read_vault_data(vault, start_id=c, num_steps=seq_len).experience for c in batch_ids],
             concatenate=True,
-        ).experience
+        )
         yield sample
