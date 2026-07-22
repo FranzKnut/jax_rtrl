@@ -32,7 +32,7 @@ def tree_stack(trees, axis=0, concatenate=False):
     leaves_list = list(zip(*leaves_list))
     for leaf_id, leaf in enumerate(leaves_list):
         _op = jnp.concatenate if concatenate else jnp.stack
-        leaf = [jnp.atleast_1d(l) for l in leaf]
+        leaf = [jnp.atleast_1d(leaf_item) for leaf_item in leaf]
         result_leaves.append(_op(leaf, axis=axis))
     return treedef.unflatten(result_leaves)
 
@@ -211,7 +211,8 @@ def load_into_vault(
     :return: (Vault, file_starts)
     """
     import flashbax as fbx
-    from flashbax.vault import Vault
+
+    from jax_rtrl.supervised.sequential_vault import SequentialVault
 
     files = [
         os.path.join(path, d)
@@ -238,7 +239,7 @@ def load_into_vault(
     print(f"Files contain {total_num_steps:d} steps total")
     # add_batch_size = np.gcd.reduce(num_steps_per_file)
 
-    def _make_vault() -> tuple[Vault, jax.Array]:
+    def _make_vault() -> tuple[SequentialVault, jax.Array | None]:
         with jax.default_device(jax.devices("cpu")[0]):
             buffer = fbx.make_trajectory_buffer(
                 add_batch_size=1,
@@ -249,16 +250,14 @@ def load_into_vault(
                 period=1,
             )
 
-            add_batch = jax.jit(buffer.add, donate_argnums=0)
-
-            d = jnp.load(files[0], allow_pickle=True)
+            first_batch = np.load(files[0], allow_pickle=True)
             if data_transform_fn is not None:
-                d = data_transform_fn(d)
-            init_data = jax.tree_util.tree_map(lambda x: x[0][0], d)
+                first_batch = data_transform_fn(first_batch)
+            init_data = jax.tree_util.tree_map(lambda x: x[0][0], first_batch)
             buffer_state = buffer.init(init_data)
 
             # Create vault
-            vault = Vault(
+            vault = SequentialVault(
                 vault_name=vault_name,
                 experience_structure=buffer_state.experience,
                 vault_uid=vault_uid,
@@ -274,18 +273,22 @@ def load_into_vault(
                 if num_files is None or start_file < num_files:
                     print(f"Resuming from file {start_file}")
 
-            for f in tqdm(files[start_file:num_files]):
-                data = np.load(f, allow_pickle=True, mmap_mode="r")
-                if data_transform_fn is not None:
-                    data = data_transform_fn(data)
-                buffer_state = add_batch(buffer_state, data)
-                vault.write(buffer_state)
+            def batch_generator():
+                for f in tqdm(files[start_file:num_files]):
+                    yield np.load(f, allow_pickle=True, mmap_mode="r")
+
+            vault.write_numpy_batches(
+                batch_generator(),
+                buffer=buffer,
+                data_transform_fn=data_transform_fn,
+            )
 
             # An Array that is zero everywhere except at the start of each file
             start_indices = np.concatenate(
-                [np.zeros(1), np.cumsum(np.array(num_steps_per_file[:-1]))]
+                [np.zeros(1, dtype=int), np.cumsum(np.array(num_steps_per_file[:-1]))]
             ).astype(int)
-            file_starts = np.zeros(total_num_steps)[start_indices] = 1
+            file_starts = np.zeros(total_num_steps, dtype=int)
+            file_starts[start_indices] = 1
 
             print(f"Vault contains {vault.vault_index} samples.")
             return vault, file_starts

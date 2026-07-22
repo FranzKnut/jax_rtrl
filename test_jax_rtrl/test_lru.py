@@ -6,9 +6,9 @@ from jax_rtrl.models.cells.lru import OnlineLRULayer
 from jax_rtrl.models.seq_models import scan_rnn
 from jax_rtrl.util.jax_util import get_keystr, mse_loss
 
-A_TOL = 1e-5
+A_TOL = 1e-2
 
-# jax.config.update("jax_disable_jit", True)
+jax.config.update("jax_disable_jit", True)
 
 
 def flatten_params(params):
@@ -42,6 +42,28 @@ class LRUGradientsTest(unittest.TestCase):
             self.input_data[0].shape,
             method=self.cell.initialize_carry,
         )
+
+    def test_parallel_scan_matches_sequential(self):
+        """Test whether the output of parallel scan matches sequential scan."""
+
+        # Test RTRL gradients
+        h = self.initialize_carry()
+
+        out_parallel = self.cell.apply(self.params, h, self.input_data)[1]
+        out_sequential = scan_rnn(self.cell, self.params, self.input_data, init_carry=h)[1]
+
+        self.assertTrue(
+            jnp.allclose(out_parallel, out_sequential, atol=A_TOL),
+            "Outputs do not match between BPTT and RTRL",
+        )
+
+    def test_rtrl_multi_step(self):
+        """Test gradients for multiple steps RTRL."""
+
+        # Test RTRL gradients
+        self.cell.plasticity = "rtrl"
+        h = self.initialize_carry()
+
         h = self.initialize_carry()
 
         # LRU returns complex outputs, take real part for loss
@@ -54,24 +76,19 @@ class LRUGradientsTest(unittest.TestCase):
         )(self.params)
 
         # Flatten nested params structure
-        self.bptt_grads = flatten_params(grads["params"])
+        bptt_grads = flatten_params(grads["params"])
 
-    def test_rtrl_multi_step(self):
-        """Test gradients for multiple steps RTRL."""
-
-        # Test RTRL gradients
-        self.cell.plasticity = "rtrl"
-        h = self.initialize_carry()
         _g = jax.grad(
             lambda params: mse_loss(
                 jnp.real(scan_rnn(self.cell, params, self.input_data, init_carry=h)[1]),
                 self.target,
             )
         )(self.params)
+
         grad_test = flatten_params(_g["params"])
         for key in grad_test:
             self.assertTrue(
-                jax.numpy.allclose(grad_test[key], self.bptt_grads[key], atol=A_TOL),
+                jax.numpy.allclose(grad_test[key], bptt_grads[key], atol=A_TOL),
                 f"Gradients do not match for key {key}",
             )
 

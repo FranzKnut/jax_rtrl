@@ -26,7 +26,9 @@ ONLINE_CELL_TYPES = {
     "ctrnn_tg_rtrl": partial(OnlineCTRNNCell, plasticity="rtrl", ode_type="tg"),
     ## CTRNN Tau Sofplus
     "tau_sofplus_eprop": partial(
-        OnlineCTRNNCell, plasticity="eprop", ode_type="tau_sofplus",
+        OnlineCTRNNCell,
+        plasticity="eprop",
+        ode_type="tau_sofplus",
     ),
     "tau_sofplus_rflo": partial(
         OnlineCTRNNCell, plasticity="rflo", ode_type="tau_sofplus"
@@ -49,22 +51,24 @@ ONLINE_CELL_TYPES = {
     "lrc_rtrl": partial(OnlineLRCCell, plasticity="rtrl"),
     "lrc_rflo": partial(OnlineLRCCell, plasticity="rflo"),
     "lrc_snap0": partial(OnlineLRCCell, plasticity="snap0"),
-    
     # Hopfield
     "hopfield": partial(HopfieldCell, ode_type="classical"),
     "modern_hopfield": partial(HopfieldCell, ode_type="modern"),
 }
 
-
-CELL_TYPES = {
+BASE_CELL_TYPES = {
     "bptt": CTRNNCell,
     "lru": OnlineLRULayer,
-    "s5": StackedEncoderModel,
+    "s5": StackedEncoderModel,  # TODO: homogenize StackedEncoderModel
     "ltc": LTCCell,
     "lrc": LRCCell,
     "mlp": MLPCell,
-    # "linear": StackedEncoderModel, # TODO: homogenize StackedEncoderModel and MultiLayerRNN
-    # "gru": StackedEncoderModel,
+    "hopfield": HopfieldCell,
+    # "gru": "GRUCell",  # TODO: fix GRU Implementation
+}
+
+CELL_TYPES = {
+    **BASE_CELL_TYPES,
     **ONLINE_CELL_TYPES,
 }
 

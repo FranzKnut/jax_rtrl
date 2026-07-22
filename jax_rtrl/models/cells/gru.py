@@ -6,7 +6,9 @@ from flax import linen as nn
 from flax.core.frozen_dict import unfreeze
 
 
-class GRUOnlineCell(nn.recurrent.RNNCellBase, metaclass=nn.recurrent.RNNCellCompatibilityMeta):
+class GRUOnlineCell(
+    nn.recurrent.RNNCellBase, metaclass=nn.recurrent.RNNCellCompatibilityMeta
+):
     """
     GRU layer that updates internal elegibility traces to allow online learning.
     """
@@ -67,9 +69,16 @@ class GRUOnlineCell(nn.recurrent.RNNCellBase, metaclass=nn.recurrent.RNNCellComp
         new_h = (1.0 - z) * h + z * n
 
         if self.training_mode in ["online_snap1"]:
-            diag_dr_dh = sig_prime(R) * jnp.diag(self.dense_hr.variables["params"]["kernel"])
-            diag_dz_dh = sig_prime(Z) * jnp.diag(self.dense_hz.variables["params"]["kernel"])
-            diag_dn_dh = tanh_prime(N) * (diag_dr_dh * hn + r * jnp.diag(self.dense_hr.variables["params"]["kernel"]))
+            diag_dr_dh = sig_prime(R) * jnp.diag(
+                self.dense_hr.variables["params"]["kernel"]
+            )
+            diag_dz_dh = sig_prime(Z) * jnp.diag(
+                self.dense_hz.variables["params"]["kernel"]
+            )
+            diag_dn_dh = tanh_prime(N) * (
+                diag_dr_dh * hn
+                + r * jnp.diag(self.dense_hr.variables["params"]["kernel"])
+            )
             diag_dh_dh = diag_dz_dh * (n - h) + diag_dn_dh * z + (1.0 - z)
 
             # Even though vscode tells you these are not used, they are.
@@ -118,7 +127,11 @@ class GRU(nn.Module):
             return cell.apply({"params": cell.variables["params"]}, carry, inputs)
 
         def update_tbptt_and_spatial(cell, carry, inputs):
-            return cell.apply({"params": cell.variables["params"]}, jax.lax.stop_gradient(carry), inputs)
+            return cell.apply(
+                {"params": cell.variables["params"]},
+                jax.lax.stop_gradient(carry),
+                inputs,
+            )
 
         def update_snap(cell, carry, inputs):
             hiddens, jac, t = carry
@@ -160,7 +173,9 @@ class GRU(nn.Module):
         if self.training_mode == "online_snap1":
             # initialize all the traces
             traces_attr = []
-            for e in jax.tree_util.tree_flatten_with_path(self.cell.variables["params"])[0]:
+            for e in jax.tree_util.tree_flatten_with_path(
+                self.cell.variables["params"]
+            )[0]:
                 path, val = e
                 name_attr = "_".join([p.key for p in path])
                 traces_attr += [name_attr]
@@ -228,7 +243,9 @@ class GRU(nn.Module):
             "online_spatial",
             "online_reservoir",
         ]:
-            raise ValueError("Upgrade gradient should not be called for this training mode")
+            raise ValueError(
+                "Upgrade gradient should not be called for this training mode"
+            )
 
         delta = self.pert_hidden_states.value
 

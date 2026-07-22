@@ -477,13 +477,18 @@ class BlockWrapper(nn.RNNCellBase):
         assert input_shape[-1] % self.num_blocks == 0, (
             "input dimension must be divisible by num_blocks."
         )
-        block_shape = (*input_shape[:-1], input_shape[-1] // self.num_blocks)
+        block_shape = (
+            *input_shape[:-1],
+            self.num_blocks,
+            input_shape[-1] // self.num_blocks,
+        )
         rng = jax.random.split(rng, self.num_blocks)
         # Block shape is the same for all blocks
-        return jax.vmap(
-            partial(self.block_rnns.initialize_carry, input_shape=(block_shape)),
-            out_axes=-2,
-        )(rng)
+        return self.block_rnns.initialize_carry(rng[0], input_shape=(block_shape))
+        # return jax.vmap(
+        #     partial(self.block_rnns.initialize_carry, input_shape=(block_shape)),
+        #     out_axes=-2,
+        # )(rng)
 
     @nn.compact
     def __call__(self, carry, x, *args, **kwargs):
@@ -503,7 +508,7 @@ class BlockWrapper(nn.RNNCellBase):
         carry, y = self.block_rnns(carry, x_split, *args, **kwargs)
 
         # Combine output chunks
-        y_combined = y.reshape(x.shape)
+        y_combined = y.reshape(x.shape[:-1] + (self.size,))
         return carry, y_combined
 
 
@@ -725,7 +730,7 @@ class RNNEnsemble(nn.RNNCellBase):
             print("WARNING: num_modules is 1 so ensemble_in_visible_prob is ignored.")
 
         if h is None:
-            init_shape = x.shape[-1:]  # shape without time axis
+            init_shape = x.shape[-1:]  # only hidden size, not batch or time
             h = self.initialize_carry(jax.random.key(0), init_shape)
 
         if self.config.model_name in CELL_TYPES:
@@ -787,6 +792,13 @@ class RNNEnsemble(nn.RNNCellBase):
         """Initialize neuron states."""
         if self.config.model_name not in CELL_TYPES:
             return None
+
+        if self.split_input and len(input_shape) > 1:
+            assert input_shape[0] == self.config.num_modules, (
+                "Input batch size must be equal to num_modules when split_input is True."
+            )
+            input_shape = input_shape[1:]
+
         input_shape = input_shape[:-1] + (self.config.num_modules, input_shape[-1])
         return self.ensembles.initialize_carry(rng, input_shape)
         # return jax.vmap(

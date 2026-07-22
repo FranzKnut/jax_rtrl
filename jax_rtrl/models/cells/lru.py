@@ -113,14 +113,18 @@ class LRUCell(nn.Module):
         Lambda_elements = jnp.repeat(Lambda[None, ...], inputs.shape[0], axis=0)
         Bu_elements = jax.vmap(lambda u: B_norm @ u)(inputs)
         if resets is None:
-            _, hidden_states = jax.lax.associative_scan(
+            Lambda_prefix, hidden_states = jax.lax.associative_scan(
                 binary_operator, (Lambda_elements, Bu_elements)
             )
         else:
-            _, hidden_states, _ = jax.lax.associative_scan(
+            Lambda_prefix, hidden_states, _ = jax.lax.associative_scan(
                 binary_operator_reset,
                 (Lambda_elements, Bu_elements, resets.astype(jnp.int32)),
             )
+
+        # The associative scan returns the contribution from the input sequence.
+        # Add the incoming carry so sequence and stepwise execution match.
+        hidden_states = hidden_states + Lambda_prefix * h_tminus1
         return hidden_states[-1], hidden_states if _is_sequence else hidden_states[-1]
 
     def _to_lambda(self, x):
@@ -300,9 +304,26 @@ class OnlineLRULayer(nn.RNNCellBase):
         D = self.param("D", matrix_init, (self.d_output, x_t.shape[-1]))
 
         online_lru = OnlineLRUCell(self.d_hidden or self.d_output, self.plasticity)
-        carry, h_t = online_lru(carry, x_t, *args, **kwargs)
+        if self.plasticity == "bptt" or len(x_t.shape) <= 1:
+            carry, h_t = online_lru(carry, x_t, *args, **kwargs)
+        else:
+            carry, h_t = jax.lax.scan(
+                lambda c, x_i: online_lru(c, x_i, *args, **kwargs),
+                carry,
+                x_t,
+            )
+
         C = C_real + 1j * C_img
-        y_t = (h_t @ C.transpose()).real + x_t @ D.transpose()
+        is_sequence = len(h_t.shape) > 1
+        if not is_sequence:
+            h_t = jnp.reshape(h_t, (-1, hidden_dim))
+            x_t = jnp.reshape(x_t, (-1, x_t.shape[-1]))
+
+        y_t = jax.vmap(lambda h, x: (C @ h).real + D @ x)(h_t, x_t)
+        # y_t = (h_t @ C.transpose()).real + x_t @ D.transpose()
+
+        if not is_sequence:
+            y_t = y_t.squeeze(0)  # Remove the sequence dimension for single-step inputs
         y_t = getattr(jax.nn, self.activation)(y_t) if self.activation else y_t
         return carry, y_t
 
