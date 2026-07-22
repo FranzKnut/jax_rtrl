@@ -349,13 +349,13 @@ def vault_generator(
 # Toy datasets -----------------------------------------------------------------
 
 
-def spirals(dataset_size=100, key=jrandom.PRNGKey(0)):
+def spirals(dataset_size=100, time=16, key=jrandom.PRNGKey(0)):
     """Create a dataset of two spirals.
 
-    Creates x: [dataset_size, time=16, 2] and y: [dataset_size, 1]
+    Creates x: [dataset_size, time, 2] and y: [dataset_size, 1]
     where the two classes in y are spirals that wind in opposite directions.
     """
-    t = jnp.linspace(0, 2 * jnp.pi, 16)
+    t = jnp.linspace(0, 2 * jnp.pi, time)
     offset = jrandom.uniform(key, (dataset_size, 1), minval=0, maxval=2 * jnp.pi)
     x1 = jnp.sin(t + offset) / (1 + t)
     x2 = jnp.cos(t + offset) / (1 + t)

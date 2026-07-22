@@ -501,7 +501,6 @@ class TestRNNEnsembleSequenceProcessing(unittest.TestCase):
         rng = jrandom.PRNGKey(0)
         # Input size must be divisible by num_blocks
         input_shape = (8,)
-        example_input = jrandom.normal(jrandom.PRNGKey(1), input_shape)
 
         # These implementations currently share the block-wrapper shape contract.
         for model_name in BASE_CELL_TYPES:
