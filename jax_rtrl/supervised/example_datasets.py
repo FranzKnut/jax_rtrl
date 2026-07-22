@@ -4,14 +4,14 @@ import os
 import re
 import zipfile
 from collections.abc import Iterable
-from chex import PRNGKey
 import jax
 
-from typing import Any
 import numpy as np
 from jax import numpy as jnp
 from jax import random as jrandom
 from tqdm import tqdm
+
+from jax_rtrl.supervised.sequential_vault import make_vault
 
 
 def tree_stack(trees, axis=0, concatenate=False):
@@ -202,17 +202,34 @@ def load_into_vault(
     data_transform_fn=None,
     resume_load=False,
 ):
-    """Load npz files from a folder and store them in a flashbax Vault.
+    """Load NPZ files from a folder and store them in a flashbax Vault.
 
-    :param name: Path of rollout files
-    :param is_npz: If True, the files in the folder are assumed to be .npz files containing multiple fields
-    :param num_files: If not None, only loads the specified number of files
-    :param resume_load:  If true, will resume filling a partially created vault.
-    :return: (Vault, file_starts)
+    Parameters
+    ----------
+    path : str
+        Path to the directory containing rollout files.
+    vault_name : str
+        Name of the vault to create.
+    is_npz : bool, default=True
+        If True, the files in the folder are assumed to be ``.npz`` files
+        containing multiple fields.
+    num_files : int, optional
+        If not None, only the specified number of files is loaded.
+    vault_uid : str or None, optional
+        Optional unique identifier for the vault. If None, a random UID is used.
+    data_transform_fn : callable, optional
+        A function to transform the loaded data. After transformation, the data
+        should be a pytree of arrays with shape (batch_size, num_steps, *).
+    resume_load : bool, default=False
+        If True, resume filling a partially created vault.
+
+    Returns
+    -------
+    tuple
+        A tuple of ``(Vault, file_starts)``.
     """
     import flashbax as fbx
-
-    from jax_rtrl.supervised.sequential_vault import SequentialVault
+    from flashbax.vault import Vault
 
     files = [
         os.path.join(path, d)
@@ -229,7 +246,7 @@ def load_into_vault(
     for f in tqdm(files[:num_files]):
         if is_npz:
             # Best effort assuming all contained have the same leading dimension
-            num_steps_per_file.append(list(npz_headers(f))[0][1][0])
+            num_steps_per_file.append(list(npz_headers(f))[0][1][1])
         else:
             # TODO: Test this
             with open(f, "rb") as _file:
@@ -239,111 +256,27 @@ def load_into_vault(
     print(f"Files contain {total_num_steps:d} steps total")
     # add_batch_size = np.gcd.reduce(num_steps_per_file)
 
-    def _make_vault() -> tuple[SequentialVault, jax.Array | None]:
-        with jax.default_device(jax.devices("cpu")[0]):
-            buffer = fbx.make_trajectory_buffer(
-                add_batch_size=1,
-                max_length_time_axis=max(num_steps_per_file) + 1,
-                sample_batch_size=1,
-                sample_sequence_length=1,
-                min_length_time_axis=1,
-                period=1,
-            )
+    first_batch = dict(np.load(files[0], allow_pickle=True))
+    if data_transform_fn is not None:
+        first_batch = data_transform_fn(first_batch)
 
-            first_batch = np.load(files[0], allow_pickle=True)
+    def batch_generator(start_index):
+        for f in tqdm(files[start_index:num_files]):
+            _data = dict(np.load(f, allow_pickle=True))
             if data_transform_fn is not None:
-                first_batch = data_transform_fn(first_batch)
-            init_data = jax.tree_util.tree_map(lambda x: x[0][0], first_batch)
-            buffer_state = buffer.init(init_data)
+                _data = data_transform_fn(_data)
+            yield _data
 
-            # Create vault
-            vault = SequentialVault(
-                vault_name=vault_name,
-                experience_structure=buffer_state.experience,
-                vault_uid=vault_uid,
-            )
-            print(f"Vault: {vault._base_path}")
-            print("Index is at:", vault.vault_index)
-            if (vault.vault_index > 0 and not resume_load) or (
-                vault.vault_index > total_num_steps
-            ):
-                return vault, None  # Already (partially) exists
-            else:
-                start_file = vault.vault_index // num_steps_per_file[0]
-                if num_files is None or start_file < num_files:
-                    print(f"Resuming from file {start_file}")
-
-            def batch_generator():
-                for f in tqdm(files[start_file:num_files]):
-                    yield np.load(f, allow_pickle=True, mmap_mode="r")
-
-            vault.write_numpy_batches(
-                batch_generator(),
-                buffer=buffer,
-                data_transform_fn=data_transform_fn,
-            )
-
-            # An Array that is zero everywhere except at the start of each file
-            start_indices = np.concatenate(
-                [np.zeros(1, dtype=int), np.cumsum(np.array(num_steps_per_file[:-1]))]
-            ).astype(int)
-            file_starts = np.zeros(total_num_steps, dtype=int)
-            file_starts[start_indices] = 1
-
-            print(f"Vault contains {vault.vault_index} samples.")
-            return vault, file_starts
-
-    return _make_vault()
-
-
-def read_vault_data(vault, start_id: int, num_steps: int = 1):
-    """Read a chunk of data from the vault.
-
-    :param start_id: Which start_id to read from (0-indexed)
-    :param chunk_size: How much percent of the data should be read
-    :return: The data chunk
-    """
-    start_percent = start_id * 100 / vault.vault_index
-    end_percent = start_percent + num_steps * 100 / vault.vault_index
-    assert start_percent >= 0, "Requested data chunk is negative."
-    assert start_percent < end_percent, "start_percent must be < end_percent."
-
-    # Making sure to do all adjustments of the data in CPU or else we risk out of memory Errors!
-    with jax.default_device(jax.devices("cpu")[0]):
-        _buff_state = vault.read(percentiles=(start_percent, end_percent))
-        data = _buff_state.experience
-        data = jax.tree.map(jnp.nan_to_num, data)
-        data = jax.tree.map(lambda d: d[:, :num_steps], data)
-        # data = jax.tree.map(partial(jnp.swapaxes, axis1=0, axis2=1), data)
-        # Discard speed control from action
-
-    return _buff_state.replace(experience=data)
-
-
-def vault_generator(
-    key: PRNGKey,
-    vault: Any,
-    batch_size: int,
-    seq_len: int,
-    num_samples: int = 1,
-    eval_size: int = 0,
-):
-    for i in range(num_samples):
-        key_sample, key = jrandom.split(key)
-        batch_ids = jrandom.randint(
-            key_sample,
-            batch_size,
-            0,
-            vault.vault_index - seq_len - eval_size,
-        )
-        # HACK: Read a bit too much to avoid too small sequences
-        batch_ids = [max(b - 0.1, 0) for b in batch_ids]
-        jit_tree_stack = jax.jit(tree_stack, static_argnames=["concatenate"])
-        sample = jit_tree_stack(
-            [read_vault_data(vault, start_id=c, num_steps=seq_len) for c in batch_ids],
-            concatenate=True,
-        ).experience
-        yield sample
+    return make_vault(
+        vault_name=vault_name,
+        total_num_steps=total_num_steps,
+        batch_generator=batch_generator,
+        vault_uid=vault_uid,
+        resume_load=resume_load,
+        batch_size=first_batch["obs"].shape[0],
+        steps_per_batch=num_steps_per_file[0],
+        max_length_time_axis=max(num_steps_per_file) + 1,
+    )
 
 
 # Toy datasets -----------------------------------------------------------------
@@ -435,4 +368,4 @@ def rollouts(data_folder="data/cheetah", with_time=False):
 
 
 if __name__ == "__main__":
-    load_into_vault("data/dvs_only_256p_100hz", vault_name="MMDVS")
+    load_into_vault("data", vault_name="test", vault_uid="test")
