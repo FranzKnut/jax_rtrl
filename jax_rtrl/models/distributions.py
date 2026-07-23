@@ -1,7 +1,11 @@
 """Distributions implemented with distrax."""
 
+from typing import Any
+
+from chex import PRNGKey
 import distrax
 import jax
+import jax.numpy as jnp
 
 
 class UniformMixture(distrax.MixtureSameFamily):
@@ -20,7 +24,9 @@ class UniformMixture(distrax.MixtureSameFamily):
         try:
             return self.mean()
         except NotImplementedError:
-            print("WARNING: Mean is not implemented for this mixture distribution. Using mean of modes.")
+            print(
+                "WARNING: Mean is not implemented for this mixture distribution. Using mean of modes."
+            )
             return jax.numpy.mean(self.components_distribution.mode(), axis=-1)
 
 
@@ -52,3 +58,36 @@ class NormalTanh(distrax.Transformed):
     def variance(self) -> jax.Array:
         print("WARNING: Using base distribution's variance in place of the true one!")
         return self.distribution.variance()
+
+
+class JointVectorDist(distrax.Joint):
+    """A joint distribution where events are concatenated to be vectors."""
+
+    def log_prob(self, value):
+        """Compute joint log probability."""
+        return super().log_prob(jnp.split(value, value.shape[-1], axis=-1))
+
+    def variance(self) -> Any:
+        """Compute joint variance."""
+        def _variance(leaf):
+            if hasattr(leaf, "variance"):
+                try:
+                    return leaf.variance()
+                except NotImplementedError:
+                    pass
+            if hasattr(leaf, "distribution") and hasattr(leaf.distribution, "variance"):
+                try:
+                    return leaf.distribution.variance()
+                except NotImplementedError:
+                    pass
+            else:
+                raise NotImplementedError(
+                    f"Variance not implemented for distribution {type(leaf)}"
+                )
+        return jnp.stack([_variance(leaf) for leaf in self._distributions], axis=-1)
+
+    def sample(self, seed: PRNGKey, sample_shape: tuple[int, ...] = ()):
+        """Sample from the joint distribution."""
+        return jnp.stack(
+            distrax.Joint.sample(self, seed=seed, sample_shape=sample_shape), axis=-1
+        )

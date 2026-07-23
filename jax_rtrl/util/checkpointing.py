@@ -5,6 +5,7 @@ from dataclasses import asdict
 import os
 import jax
 from orbax import checkpoint
+from simple_parsing import Serializable
 
 
 def restore_remote(artifact_id: str, force_download=False) -> str:
@@ -63,7 +64,22 @@ def restore_params_and_config(path, tree=None):
     return params, config
 
 
-def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
+def save_config(path, hparams: dict | Serializable):
+    """Save config to checkpoint."""
+    path = os.path.abspath(path)
+    hparams_file_path = os.path.join(path, "hparams.json")
+    os.makedirs(path, exist_ok=True)
+    if not isinstance(hparams, dict):
+        # Try to convert to dict
+        if hasattr(hparams, "to_dict"):
+            hparams = hparams.to_dict()
+        else:
+            hparams = asdict(hparams)
+    with open(hparams_file_path, "w") as f:
+        json.dump(hparams, f, default=str)
+
+
+def checkpointing(path, fresh=False, hparams: dict | Serializable = None, tree=None):
     """Set up checkpointing at given path.
 
     Parameters
@@ -117,11 +133,6 @@ def checkpointing(path, fresh=False, hparams: dict = None, tree=None):
             print("Restored checkpoint")
 
     if (not exists or fresh) and hparams is not None:
-        os.makedirs(path, exist_ok=True)
-        if not isinstance(hparams, dict):
-            # Try to convert to dict
-            hparams = asdict(hparams)
-        with open(hparams_file_path, "w") as f:
-            json.dump(hparams, f, default=str)
+        save_config(path, hparams)
 
     return (restored_params, restored_hparams), save_model

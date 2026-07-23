@@ -1,16 +1,14 @@
 """Sequence models implemented with Flax."""
 
 # Import necessary modules and libraries
-from dataclasses import dataclass, field
-from functools import partial
+from dataclasses import dataclass
 import re
 from typing import Literal
-from simple_parsing import mutable_field
-from simple_parsing.helpers import FrozenSerializable
+from simple_parsing import mutable_field, field
+from simple_parsing.helpers import Callable, FrozenSerializable
 from ml_collections import FrozenConfigDict
 
 
-import distrax
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
@@ -88,7 +86,10 @@ class RNNEnsembleConfig(FrozenSerializable):
     num_modules: int = 1
     num_blocks: int = 1
     # out_size: int | None = None
-    out_dist: str | None = "Deterministic"
+    out_dist: str | Callable | None = field(
+        default="Deterministic",
+        encoding_fn=lambda x: x.__name__ if isinstance(x, Callable) else str(x),
+    )
     out_mapping: Literal["dense", "affine"] = "dense"
     dist_loc_bounds: tuple[float, float] | None = None
     dist_scale_bounds: float | tuple[float, float] | None = 0

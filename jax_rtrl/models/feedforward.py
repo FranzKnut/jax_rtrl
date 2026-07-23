@@ -292,7 +292,7 @@ class DistributionLayer(nn.Module):
     """Parameterized distribution output layer."""
 
     out_size: int
-    distribution: str = "LogStddevNormal"
+    distribution: str | Callable = "LogStddevNormal"
     layers: tuple[int, ...] = ()
     mapping: Literal["dense", "affine"] = "dense"
     eps_unimix: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
@@ -313,6 +313,10 @@ class DistributionLayer(nn.Module):
                 kernel_init=self.kernel_init,
                 norm=self.norm,
             )(x, training=training)
+            
+        if isinstance(self.distribution, Callable):
+            dist = self.distribution(x)
+            return dist
 
         out_size = self.out_size
         # x = get_normalization_fn(self.norm, training=training)(x)
