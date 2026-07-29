@@ -434,7 +434,7 @@ class DistributionLayer(nn.Module):
                     shift = min_val
                     factor = max_val - min_val
                 # shift = jnp.tile(shift, loc.shape)
-                # factor = jnp.tile(factor, shift.shape)
+                factor = jnp.tile(factor, shift.shape)
                 bij = distrax.ScalarAffine(shift, factor)
                 # dist = distrax.Transformed(dist, distrax.Block(bij, 1))
                 dist = distrax.Transformed(dist, bij)
