@@ -89,6 +89,9 @@ class RNNEnsembleConfig(FrozenSerializable):
     out_dist: str | Callable | None = field(
         default="Deterministic",
         encoding_fn=lambda x: x.__name__ if isinstance(x, Callable) else str(x),
+        decoding_fn=lambda x: (
+            globals()[x] if isinstance(x, str) and x in globals() else x
+        ),
     )
     out_mapping: Literal["dense", "affine"] = "dense"
     dist_loc_bounds: tuple[float, float] | None = None
@@ -740,7 +743,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 # Add reset argument for SSMs
                 # The ensembles always need the same number of arguments.
                 # If no reset flag is given, we set it to False by default.
-                call_args = (jnp.zeros(()),)
+                call_args = (jnp.zeros(x_tiled.shape[:-1]),)
 
             h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
         else:
@@ -894,7 +897,8 @@ def scan_rnn(
         obs_time_major = xs
 
     if (
-        isinstance(model, RNNEnsemble) and model.config.model_name in ["s5", "lru"]
+        isinstance(getattr(model, "config", None), RNNEnsembleConfig)
+        and model.config.model_name in ["s5", "lru"]
     ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell)):
         outputs, y_hats = model.apply(params, init_carry, *xs)
 

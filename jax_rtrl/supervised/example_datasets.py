@@ -130,7 +130,17 @@ def load_np_files_from_folder(
         data.append(d)
 
     _op = np.stack if stack else np.concatenate
-    output = jax.tree.map(lambda *x: _op(x, axis=0), *data)
+    try:
+        output = jax.tree.map(lambda *x: _op(x, axis=0), *data)
+    except ValueError as e:
+        if stack:
+            # FIXME: stack fails if the first two dimensions are not the same across files!
+            print(f"Error while loading data from {path}: {e}")
+            print("Attempting to load data with concatenate stacking...")
+            _op = np.concatenate
+            output = jax.tree.map(lambda *x: _op(x, axis=0), *data)
+        else:
+            raise e
     if is_npz:
         num_steps = len(output[list(output.keys())[0]])
         num_steps_per_file = [len(d[list(d.keys())[0]]) for d in data]
