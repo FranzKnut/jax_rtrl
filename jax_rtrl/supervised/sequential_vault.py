@@ -2,6 +2,8 @@
 
 import itertools
 from collections.abc import Iterable
+import os
+import re
 from typing import Any
 
 from chex import PRNGKey
@@ -10,7 +12,9 @@ from jax import numpy as jnp, random as jrandom
 import numpy as np
 from flashbax.vault import Vault
 from flashbax.buffers.trajectory_buffer import make_trajectory_buffer
+from tqdm import tqdm
 
+from jax_rtrl.supervised.example_datasets import npz_headers, read_array_header
 from jax_rtrl.util.jax_util import tree_stack
 
 
@@ -213,7 +217,98 @@ def vault_generator(
         batch_ids = [max(b - 0.1, 0) for b in batch_ids]
         jit_tree_stack = jax.jit(tree_stack, static_argnames=["concatenate"])
         sample = jit_tree_stack(
-            [read_vault_data(vault, start_id=c, num_steps=seq_len).experience for c in batch_ids],
+            [
+                read_vault_data(vault, start_id=c, num_steps=seq_len).experience
+                for c in batch_ids
+            ],
             concatenate=True,
         )
         yield sample
+
+
+def load_into_vault(
+    path,
+    vault_name,
+    is_npz=True,
+    num_files: int = None,
+    vault_uid=None,
+    data_transform_fn=None,
+    resume_load=False,
+):
+    """Load NPZ files from a folder and store them in a flashbax Vault.
+
+    Parameters
+    ----------
+    path : str
+        Path to the directory containing rollout files.
+    vault_name : str
+        Name of the vault to create.
+    is_npz : bool, default=True
+        If True, the files in the folder are assumed to be ``.npz`` files
+        containing multiple fields.
+    num_files : int, optional
+        If not None, only the specified number of files is loaded.
+    vault_uid : str or None, optional
+        Optional unique identifier for the vault. If None, a random UID is used.
+    data_transform_fn : callable, optional
+        A function to transform the loaded data. After transformation, the data
+        should be a pytree of arrays with shape (batch_size, num_steps, *).
+    resume_load : bool, default=False
+        If True, resume filling a partially created vault.
+
+    Returns
+    -------
+    tuple
+        A tuple of ``(Vault, file_starts)``.
+    """
+
+    files = [
+        os.path.join(path, d)
+        for d in os.listdir(path)
+        if d.endswith(".npz" if is_npz else ".npy")
+    ]
+
+    # Sort numbered files
+    files.sort(key=lambda f: int(re.sub(r"\D", "", f)))
+    print(f"Loading {len(files[:num_files])} files from {path}")
+    num_steps_per_file = []
+    print("Determining total length of files...")
+
+    for f in tqdm(files[:num_files]):
+        if is_npz:
+            # Best effort assuming all contained have the same leading dimension
+            num_steps_per_file.append(list(npz_headers(f))[0][1][1])
+        else:
+            # TODO: Test this
+            with open(f, "rb") as _file:
+                num_steps_per_file.append(read_array_header(_file)[0][0])
+
+    total_num_steps = sum(num_steps_per_file)
+    print(f"Files contain {total_num_steps:d} steps total")
+    # add_batch_size = np.gcd.reduce(num_steps_per_file)
+
+    first_batch = dict(np.load(files[0], allow_pickle=True))
+    if data_transform_fn is not None:
+        first_batch = data_transform_fn(first_batch)
+
+    def batch_generator(start_index):
+        for f in tqdm(files[start_index:num_files]):
+            _data = dict(np.load(f, allow_pickle=True))
+            if data_transform_fn is not None:
+                _data = data_transform_fn(_data)
+            yield _data
+
+    return make_vault(
+        vault_name=vault_name,
+        total_num_steps=total_num_steps,
+        batch_generator=batch_generator,
+        vault_uid=vault_uid,
+        resume_load=resume_load,
+        batch_size=first_batch["obs"].shape[0],
+        steps_per_batch=num_steps_per_file[0],
+        max_length_time_axis=max(num_steps_per_file) + 1,
+    )
+
+
+if __name__ == "__main__":
+    load_into_vault("data", vault_name="test", vault_uid="test")
