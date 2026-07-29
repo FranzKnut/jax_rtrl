@@ -297,6 +297,8 @@ def load_into_vault(
             if data_transform_fn is not None:
                 _data = data_transform_fn(_data)
             yield _data
+            
+    batch_size = first_batch[list(first_batch.keys())[0]].shape[0]
 
     return make_vault(
         vault_name=vault_name,
@@ -304,7 +306,7 @@ def load_into_vault(
         batch_generator=batch_generator,
         vault_uid=vault_uid,
         resume_load=resume_load,
-        batch_size=first_batch["obs"].shape[0],
+        batch_size=batch_size,
         steps_per_batch=num_steps_per_file[0],
         max_length_time_axis=max(num_steps_per_file) + 1,
     )
