@@ -419,7 +419,7 @@ class DistributionLayer(nn.Module):
                         "For Scaled distribution with asymmetric bounds, please use ScaledNormal with a Sigmoid transform."
                     )
                     shift = jnp.zeros_like(loc)
-                    scale = bounds if isinstance(self.loc_bounds, Number) else bounds[1]
+                    factor = bounds if isinstance(self.loc_bounds, Number) else bounds[1]
                 else:
                     # Define limits and scale for bounded distributions
                     if self.loc_bounds is not None:
@@ -432,8 +432,10 @@ class DistributionLayer(nn.Module):
                             "max_val", nn.initializers.constant(1.0), self.out_size
                         )
                     shift = min_val
-                    scale = max_val - min_val
-                bij = distrax.ScalarAffine(shift, scale)
+                    factor = max_val - min_val
+                # shift = jnp.tile(shift, loc.shape)
+                # factor = jnp.tile(factor, shift.shape)
+                bij = distrax.ScalarAffine(shift, factor)
                 # dist = distrax.Transformed(dist, distrax.Block(bij, 1))
                 dist = distrax.Transformed(dist, bij)
 
