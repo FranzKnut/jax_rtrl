@@ -434,8 +434,8 @@ class DistributionLayer(nn.Module):
                     shift = min_val
                     scale = max_val - min_val
                 bij = distrax.ScalarAffine(shift, scale)
-                dist = distrax.Transformed(dist, distrax.Block(bij, 1))
-                # dist = distrax.Transformed(dist, bij)
+                # dist = distrax.Transformed(dist, distrax.Block(bij, 1))
+                dist = distrax.Transformed(dist, bij)
 
         elif self.distribution in ["Categorical", "Bernoulli"]:
             if isinstance(self.out_size, tuple):
