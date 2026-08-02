@@ -24,6 +24,15 @@ def split_train_test(
     :param axis: Axis along which to split the dataset
     :return: train and eval tuples of (inputs, target)
     """
+    leaves = jax.tree.leaves(dataset)
+    sizes = {leaf.shape[axis] for leaf in leaves}
+    if len(sizes) > 1:
+        raise ValueError(
+            f"All leaves of dataset must have the same size along axis {axis}, got sizes {sizes}. "
+            "This usually means the raw data arrays are misaligned (e.g. one field has fewer "
+            "timesteps than another) and must be fixed at the loading step."
+        )
+
     if shuffle:
         key = jrandom.PRNGKey(0)
         perm = jrandom.permutation(
@@ -125,6 +134,14 @@ def load_np_files_from_folder(
         d = np.load(f, allow_pickle=True, mmap_mode="r")
         if is_npz:
             d = dict(d)
+            lengths = {k: len(v) for k, v in d.items()}
+            if len(set(lengths.values())) > 1:
+                min_len = min(lengths.values())
+                print(
+                    f"WARNING: mismatched field lengths in {f}: {lengths}; "
+                    f"truncating all fields to {min_len} steps."
+                )
+                d = {k: v[:min_len] for k, v in d.items()}
         data.append(d)
 
     _op = np.stack if stack else np.concatenate
