@@ -372,10 +372,11 @@ class DistributionLayer(nn.Module):
 
         if dist_name in ["Normal", "LogStddevNormal", "NormalTanh"]:
             loc, scale = jnp.split(x, 2, axis=-1)
-            if isinstance(self.loc_bounds, tuple):
-                loc = sigmoid_between(loc, *self.loc_bounds)
-            elif isinstance(self.loc_bounds, Number):
-                loc = jax.nn.tanh(loc) * self.loc_bounds
+            if dist_name != "NormalTanh":
+                if isinstance(self.loc_bounds, tuple):
+                    loc = sigmoid_between(loc, *self.loc_bounds)
+                elif isinstance(self.loc_bounds, Number):
+                    loc = jax.nn.tanh(loc) * self.loc_bounds
 
             if isinstance(self.scale_bounds, tuple):
                 # scale -= 1  # Magic shift to make initial scale closer to 1 for sigmoid
@@ -418,7 +419,7 @@ class DistributionLayer(nn.Module):
                     ), (
                         "For Scaled distribution with asymmetric bounds, please use ScaledNormal with a Sigmoid transform."
                     )
-                    shift = jnp.zeros_like(loc)
+                    shift = jnp.zeros(loc.shape[-1:])
                     factor = bounds if isinstance(self.loc_bounds, Number) else bounds[1]
                 else:
                     # Define limits and scale for bounded distributions
@@ -433,8 +434,12 @@ class DistributionLayer(nn.Module):
                         )
                     shift = min_val
                     factor = max_val - min_val
-                # shift = jnp.tile(shift, loc.shape)
-                factor = jnp.tile(factor, shift.shape)
+                # Broadcast to loc's full shape (e.g. including a leading time axis for
+                # models that process a whole sequence in one call, like lru/s5) so that
+                # generic pytree ops downstream (e.g. the ensemble output axis swap for
+                # SSMs in seq_models.py) see consistent shapes across all distribution leaves.
+                shift = jnp.broadcast_to(shift, loc.shape)
+                factor = jnp.broadcast_to(factor, loc.shape)
                 bij = distrax.ScalarAffine(shift, factor)
                 # dist = distrax.Transformed(dist, distrax.Block(bij, 1))
                 dist = distrax.Transformed(dist, bij)

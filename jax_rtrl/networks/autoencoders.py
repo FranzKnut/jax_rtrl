@@ -15,6 +15,9 @@ from jax_rtrl.util.checkpointing import restore_config, restore_params
 
 conv_presets = {
     "linear": [],
+    "tiny": [
+        (4, (3, 3)),
+    ],
     "legacy_small": [
         (16, (3, 3)),
         (16, (3, 3)),

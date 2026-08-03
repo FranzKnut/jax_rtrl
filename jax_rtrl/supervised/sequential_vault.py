@@ -234,6 +234,7 @@ def load_into_vault(
     vault_uid=None,
     data_transform_fn=None,
     resume_load=False,
+    files_have_batch_dim=True,
 ):
     """Load NPZ files from a folder and store them in a flashbax Vault.
 
@@ -255,6 +256,9 @@ def load_into_vault(
         should be a pytree of arrays with shape (batch_size, num_steps, *).
     resume_load : bool, default=False
         If True, resume filling a partially created vault.
+    files_have_batch_dim : bool, default=True
+        If True, the loaded data is assumed to have a batch dimension. If False,
+        the data is assumed to have shape (num_steps, *).
 
     Returns
     -------
@@ -277,7 +281,7 @@ def load_into_vault(
     for f in tqdm(files[:num_files]):
         if is_npz:
             # Best effort assuming all contained have the same leading dimension
-            num_steps_per_file.append(list(npz_headers(f))[0][1][1])
+            num_steps_per_file.append(list(npz_headers(f))[0][1][files_have_batch_dim])
         else:
             # TODO: Test this
             with open(f, "rb") as _file:
@@ -313,4 +317,4 @@ def load_into_vault(
 
 
 if __name__ == "__main__":
-    load_into_vault("data", vault_name="test", vault_uid="test")
+    load_into_vault("data/carla_data", vault_name="test", vault_uid="test")
