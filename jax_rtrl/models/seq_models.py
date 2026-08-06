@@ -701,7 +701,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 combined_dist = combine_ensemble_outputs(
                     outs,
                     method=self.config.ensemble_method,
-                    combine_layer=self.combine_layer,
+                    combine_layer=self.combine_layer if self.config.ensemble_method == "linear" else None,
                     x=jnp.concatenate([outs.flatten(), x.flatten()], axis=-1),
                 )
             else:
