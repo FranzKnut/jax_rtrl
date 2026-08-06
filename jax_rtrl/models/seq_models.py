@@ -567,6 +567,36 @@ def make_obs_visibility_mask(rng, shape, visible_prob=1.0, first_full=True):
         return mask
 
 
+def combine_ensemble_outputs(outs, method="mean", combine_layer=None, x=None):
+    """Combine outputs from ensemble modules using the specified method.
+
+    Args:
+        outs: Outputs from the ensemble modules.
+        method: Method for combining outputs ('mean', 'median', 'linear', 'dist', 'kalman').
+        combine_layer: Layer for linear combination (if method is 'linear').
+        x: Input to the ensemble (used for linear combination).
+
+    """
+    # Combine them using ensemble method
+    if method == "mean":
+        # Compute mean of outputs
+        combined_dist = jax.tree.map(lambda d: d.mean(axis=0), outs)
+    elif method == "median":
+        # Compute median of outputs
+        combined_dist = jax.tree.map(lambda d: d.median(axis=0), outs)
+    elif method == "linear":
+        # Compute linear combination of outputs
+        out_gates = combine_layer(x)
+        out_gates = jax.nn.softmax(out_gates, axis=-1)
+        combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), outs)
+    elif method == "dist":
+        combined_dist = UniformMixture(outs)
+    elif method == "kalman":
+        fused_loc, fused_scale = kalman_fusion(outs.loc, outs.scale)
+        combined_dist = type(outs)(fused_loc, fused_scale)
+    return combined_dist
+
+
 class RNNEnsemble(nn.RNNCellBase):
     """Ensemble of RNN cells with optional output processing.
 
@@ -667,24 +697,13 @@ class RNNEnsemble(nn.RNNCellBase):
             # Compute output distributions
             _dists = self.dists(outs)
             # Combine them using ensemble method
-            if self.config.ensemble_method == "mean":
-                # Compute mean of outputs
-                combined_dist = jax.tree.map(lambda d: d.mean(axis=0), _dists)
-            elif self.config.ensemble_method == "median":
-                # Compute median of outputs
-                combined_dist = jax.tree.map(lambda d: d.median(axis=0), _dists)
-            elif self.config.ensemble_method == "linear":
-                # Compute linear combination of outputs
-                out_gates = self.combine_layer(
-                    jnp.concatenate([outs.flatten(), x.flatten()], axis=-1)
+            if self.config.ensemble_method is not None:
+                combined_dist = combine_ensemble_outputs(
+                    outs,
+                    method=self.config.ensemble_method,
+                    combine_layer=self.combine_layer,
+                    x=jnp.concatenate([outs.flatten(), x.flatten()], axis=-1),
                 )
-                out_gates = jax.nn.softmax(out_gates, axis=-1)
-                combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), _dists)
-            elif self.config.ensemble_method == "dist":
-                combined_dist = UniformMixture(_dists)
-            elif self.config.ensemble_method == "kalman":
-                fused_loc, fused_scale = kalman_fusion(_dists.loc, _dists.scale)
-                combined_dist = type(_dists)(fused_loc, fused_scale)
             else:
                 # Do not combine, return all distributions
                 return _dists
