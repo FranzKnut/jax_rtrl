@@ -81,7 +81,7 @@ class RNNEnsembleConfig(FrozenSerializable):
             )
 
     _layers: tuple[int, ...] | None = None  # Internal representation of layers
-    num_layers: tuple[int, ...] | None = 1
+    num_layers: int | None = 1
     hidden_size: int | None = None
     num_modules: int = 1
     num_blocks: int = 1
