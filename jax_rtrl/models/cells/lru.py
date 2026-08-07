@@ -25,17 +25,17 @@ def get_lambda(nu_log, theta_log):
 
 def get_B_norm(B_real, B_img, gamma_log):
     """Get modulated input to hidden matrix gamma B."""
-    return (B_real + 1j * B_img) * jnp.exp(jnp.expand_dims(gamma_log, axis=-1))
+    return (B_real + 1j * B_img) * jnp.expand_dims(jnp.exp(gamma_log), axis=-1)
 
 
-def nu_log_init(key, shape, r_max=1, r_min=0):
+def nu_log_init(key, shape, r_max, r_min):
     """Initialize nu log as log(-0.5 log(x (r_max^2 - r_min^2) + r_min^2), x ~ U[0, 1]."""
     u1 = jax.random.uniform(key, shape=shape)
     nu_log = jnp.log(-0.5 * jnp.log(u1 * (r_max**2 - r_min**2) + r_min**2))
     return nu_log
 
 
-def theta_log_init(key, shape, max_phase=6.28):
+def theta_log_init(key, shape, max_phase):
     """Initialize theta log as log(max_phase * x), x ~ U[0, 1]."""
     u2 = jax.random.uniform(key, shape=shape)
     theta_log = jnp.log(max_phase * u2)
@@ -44,9 +44,7 @@ def theta_log_init(key, shape, max_phase=6.28):
 
 def gamma_log_init(key, shape, nu_log, theta_log):
     """Initialize gamma log from nu and theta."""
-    nu = jnp.exp(nu_log)
-    theta = jnp.exp(theta_log)
-    diag_lambda = jnp.exp(-nu + 1j * theta)
+    diag_lambda = get_lambda(nu_log, theta_log)
     return jnp.log(jnp.sqrt(1 - jnp.abs(diag_lambda) ** 2))
 
 
@@ -59,8 +57,8 @@ class LRUCell(nn.Module):
     """Linear Recurrent Unit Cell."""
 
     d_hidden: int
-    r_max: float = 1.0
-    r_min: float = 0.0
+    r_max: float = 0.999
+    r_min: float = 0.9
     max_phase: float = 6.28
     """
     grad memory: dh_{t-1}/d lambda, dh_{t-1}/d gamma #1,

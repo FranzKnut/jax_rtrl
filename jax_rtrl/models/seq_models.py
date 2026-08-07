@@ -699,7 +699,7 @@ class RNNEnsemble(nn.RNNCellBase):
             # Combine them using ensemble method
             if self.config.ensemble_method is not None:
                 combined_dist = combine_ensemble_outputs(
-                    outs,
+                    _dists,
                     method=self.config.ensemble_method,
                     combine_layer=self.combine_layer if self.config.ensemble_method == "linear" else None,
                     x=jnp.concatenate([outs.flatten(), x.flatten()], axis=-1),
@@ -762,7 +762,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 # Add reset argument for SSMs
                 # The ensembles always need the same number of arguments.
                 # If no reset flag is given, we set it to False by default.
-                call_args = (jnp.zeros(x_tiled.shape[:-1]),)
+                call_args = (jnp.zeros(x_tiled.shape[:-2]),)
 
             h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
         else:

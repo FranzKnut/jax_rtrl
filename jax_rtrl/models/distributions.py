@@ -32,6 +32,8 @@ class UniformMixture(distrax.MixtureSameFamily):
 
 class NormalTanh(distrax.Transformed):
     """A Normal distribution followed by a Tanh transformation."""
+    
+    eps: float = 1e-6  # Small constant to avoid numerical issues
 
     def __getattr__(self, name):
         if name == "__setstate__":
@@ -58,6 +60,11 @@ class NormalTanh(distrax.Transformed):
     def variance(self) -> jax.Array:
         print("WARNING: Using base distribution's variance in place of the true one!")
         return self.distribution.variance()
+    
+    def log_prob(self, value: jax.Array) -> jax.Array:
+        """Compute log probability of a value under the distribution."""
+        value = jnp.clip(value, -1 + self.eps, 1 - self.eps)  # Clip to avoid numerical issues
+        return super().log_prob(value)
 
 
 class JointVectorDist(distrax.Joint):
