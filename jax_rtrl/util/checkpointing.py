@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict
 import os
 import jax
+from jaxtyping import PyTree
 from orbax import checkpoint
 from simple_parsing import Serializable
 
@@ -30,8 +31,8 @@ def restore_remote(artifact_id: str, force_download=False) -> str:
     return restore_path
 
 
-def restore_config(path):
-    """Restore config from checkpoint."""
+def restore_config(path: str) -> dict:
+    """Restore config from checkpoint path."""
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
 
@@ -43,8 +44,22 @@ def restore_config(path):
     return restored_hparams
 
 
-def restore_params(path, tree=None):
-    """Restore parameters from orbax checkpoint."""
+def restore_params(path: str, tree: PyTree = None) -> PyTree | None:
+    """Restore parameters from orbax checkpoint.
+
+    Parameters
+    ----------
+    path : str
+        Path to the checkpoint directory.
+    tree : PyTree, optional
+        A PyTree structure that matches the parameters to be restored.
+        See `orbax.checkpoint.PyTreeCheckpointer.restore` for details.
+
+    Returns
+    -------
+    PyTree or None
+        Restored parameters, or None if no checkpoint found.
+    """
     path = os.path.abspath(path)
     orbax_path = os.path.join(path, "ckpt")
 
@@ -57,7 +72,7 @@ def restore_params(path, tree=None):
     return params
 
 
-def restore_params_and_config(path, tree=None):
+def restore_params_and_config(path: str, tree: PyTree = None) -> tuple[PyTree | None, dict]:
     """Restore params and config from checkpoint."""
     params = restore_params(path, tree)
     config = restore_config(path)
@@ -79,7 +94,9 @@ def save_config(path, hparams: dict | Serializable):
         json.dump(hparams, f, default=str)
 
 
-def checkpointing(path, fresh=False, hparams: dict | Serializable = None, tree=None):
+def checkpointing(
+    path: str, fresh=False, hparams: dict | Serializable = None, tree: PyTree = None
+) -> tuple[tuple[PyTree | None, dict], callable]:
     """Set up checkpointing at given path.
 
     Parameters
