@@ -701,7 +701,9 @@ class RNNEnsemble(nn.RNNCellBase):
                 combined_dist = combine_ensemble_outputs(
                     _dists,
                     method=self.config.ensemble_method,
-                    combine_layer=self.combine_layer if self.config.ensemble_method == "linear" else None,
+                    combine_layer=self.combine_layer
+                    if self.config.ensemble_method == "linear"
+                    else None,
                     x=jnp.concatenate([outs.flatten(), x.flatten()], axis=-1),
                 )
             else:
@@ -762,7 +764,9 @@ class RNNEnsemble(nn.RNNCellBase):
                 # Add reset argument for SSMs
                 # The ensembles always need the same number of arguments.
                 # If no reset flag is given, we set it to False by default.
-                call_args = (jnp.zeros(x_tiled.shape[:-2]),)
+                # The reset argument has shape (time,)
+                time_steps = x_tiled.shape[-2] if x_tiled.ndim >= 3 else ()
+                call_args = (jnp.zeros(time_steps),)
 
             h, outs = self.ensembles(h, x_tiled, training, *call_args, **call_kwargs)
         else:
@@ -894,6 +898,7 @@ def scan_rnn(
     *xs,
     init_carry: jnp.ndarray = None,
     batched: bool = False,
+    training: bool = True,
 ):
     """Scan RNN over time dimension. Makes sure to use parallel scan if possible.
 
@@ -904,6 +909,7 @@ def scan_rnn(
         xs: Input sequences to the model. Should be time-major if not batched.
         init_carry: Initial carry (hidden state) of the model.
         batched: Whether the input is batched (batch, time, features).
+        training: Whether the model is in training mode (affects dropout behavior).
     Returns:
         outputs: Final carry (hidden state) of the model.
         y_hats: Output sequences of the model.
@@ -919,7 +925,7 @@ def scan_rnn(
         isinstance(getattr(model, "config", None), RNNEnsembleConfig)
         and model.config.model_name in ["s5", "lru"]
     ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell)):
-        outputs, y_hats = model.apply(params, init_carry, *xs)
+        return model.apply(params, init_carry, *xs, training)
 
     else:
         if init_carry is None:
@@ -933,7 +939,7 @@ def scan_rnn(
 
         def _step(_c, _b):
             p, h = _c
-            h, y_hat = model.apply(p, h, *_b)
+            h, y_hat = model.apply(p, h, *_b, training)
             return (p, h), y_hat
 
         outputs, y_hats = jax.lax.scan(_step, (params, init_carry), obs_time_major)
