@@ -17,6 +17,7 @@ tqdm           = "^4.67.0"
 poethepoet     = "*"
 jaxtyping      = "*"
 jax            = "0.6.2"
+tfp-nightly    = "*"
 
 [tool.poetry.group.torch_ds.dependencies]
 chex   = "*"
