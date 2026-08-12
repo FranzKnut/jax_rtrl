@@ -914,18 +914,27 @@ def scan_rnn(
         outputs: Final carry (hidden state) of the model.
         y_hats: Output sequences of the model.
     """
+    extra_args = xs[1:] if len(xs) > 1 else ()
+    xs = xs[:1]
+    if isinstance(model, RNNEnsemble):
+        extra_args = (training,) + extra_args
+    else:
+        print("WARNING: model is not an RNNEnsemble, training flag is ignored.")
+
+
     if batched:
         obs_time_major = jax.tree.map(
             lambda a: a.transpose(1, 0, *range(2, len(a.shape))), xs
         )
     else:
         obs_time_major = xs
+        
 
     if (
         isinstance(getattr(model, "config", None), RNNEnsembleConfig)
         and model.config.model_name in ["s5", "lru"]
     ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell)):
-        return model.apply(params, init_carry, *xs, training)
+        return model.apply(params, init_carry, *xs, *extra_args)
 
     else:
         if init_carry is None:
@@ -939,7 +948,7 @@ def scan_rnn(
 
         def _step(_c, _b):
             p, h = _c
-            h, y_hat = model.apply(p, h, *_b, training)
+            h, y_hat = model.apply(p, h, *_b, *extra_args)
             return (p, h), y_hat
 
         outputs, y_hats = jax.lax.scan(_step, (params, init_carry), obs_time_major)

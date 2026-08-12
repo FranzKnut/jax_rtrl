@@ -143,6 +143,8 @@ def load_np_files_from_folder(
                 )
                 d = {k: v[:min_len] for k, v in d.items()}
         data.append(d)
+        
+    assert len(data) > 0, f"No files found in {path}"
 
     _op = np.stack if stack else np.concatenate
     try:
