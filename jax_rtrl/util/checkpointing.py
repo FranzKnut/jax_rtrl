@@ -3,6 +3,7 @@
 import json
 from dataclasses import asdict
 import os
+from typing import Callable
 import jax
 from jaxtyping import PyTree
 from orbax import checkpoint
@@ -96,7 +97,7 @@ def save_config(path, hparams: dict | Serializable):
 
 def checkpointing(
     path: str, fresh=False, hparams: dict | Serializable = None, tree: PyTree = None
-) -> tuple[tuple[PyTree | None, dict], callable]:
+) -> tuple[tuple[PyTree | None, dict], Callable[[PyTree], str]]:
     """Set up checkpointing at given path.
 
     Parameters
@@ -113,14 +114,11 @@ def checkpointing(
 
     Returns
     -------
-    tuple
-        A tuple containing:
-            - params : PyTree or None
-                Restored parameters, or None if no checkpoint found or fresh is True.
-            - hparams : dict
-                Restored or provided hyper-parameters.
-        save_model : Callable
-            Function (PyTree -> None) for saving given PyTree.
+    tuple[PyTree | None, dict]
+        - Restored parameters, or None if no checkpoint found or fresh is True.
+        - Restored or provided hyper-parameters.
+    save_model : Callable[[PyTree], str]
+        function (PyTree -> str) for saving given PyTree that returns the path to the saved model.
     """
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
@@ -132,9 +130,9 @@ def checkpointing(
         _params = jax.tree.map(
             lambda x: jax.device_put(x, jax.devices("cpu")[0]), _params
         )
-        out = checkpointer.save(orbax_path, _params, force=True)
+        checkpointer.save(orbax_path, _params, force=True)
         checkpointer.wait_until_finished()
-        return out
+        return orbax_path
 
     restored_params = None
     restored_hparams = {}
