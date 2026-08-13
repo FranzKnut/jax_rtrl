@@ -118,7 +118,7 @@ def checkpointing(
         - Restored parameters, or None if no checkpoint found or fresh is True.
         - Restored or provided hyper-parameters.
     save_model : Callable[[PyTree], str]
-        function (PyTree -> str) for saving given PyTree that returns the path to the saved model.
+        function (PyTree -> str) for saving given PyTree that returns the path to the checkpoint (for logging).
     """
     path = os.path.abspath(path)
     hparams_file_path = os.path.join(path, "hparams.json")
@@ -132,7 +132,7 @@ def checkpointing(
         )
         checkpointer.save(orbax_path, _params, force=True)
         checkpointer.wait_until_finished()
-        return orbax_path
+        return path
 
     restored_params = None
     restored_hparams = {}
