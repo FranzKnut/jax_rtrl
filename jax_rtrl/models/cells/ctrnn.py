@@ -109,10 +109,8 @@ class CTRNNCell(ODECell):
             )
 
         if self.ode_type in ["tau_softplus"]:
-            h0 = self.param(
-                "h0", nn.initializers.zeros, x.shape[:-1] + (self.num_units,)
-            )
-            params = (h0, W, tau)
+            h0 = self.param("h0", nn.initializers.zeros, (self.num_units,))
+            params = (W, h0, tau)
         else:
             params = (W, tau)
         return params
@@ -157,8 +155,9 @@ def _rflo_murray(cell: CTRNNCell, carry, params, x, ode=ctrnn_ode):
     df_dw, df_dh, df_dx = jax.jacrev(ode, argnums=[0, 1, 2])(params, h, x)
     jp = {
         "W": jax.tree.map(
-            lambda p, d: p * (1 - cell.dt / params["tau"])[:, None]
-            + d.sum(axis=0) * cell.dt,
+            lambda p, d: (
+                p * (1 - cell.dt / params["tau"])[:, None] + d.sum(axis=0) * cell.dt
+            ),
             jp["W"],
             df_dw["W"],
         ),
@@ -169,8 +168,9 @@ def _rflo_murray(cell: CTRNNCell, carry, params, x, ode=ctrnn_ode):
         ),
     }
     jx = jax.tree.map(
-        lambda p, d: p * (1 - cell.dt / params["tau"])[:, None]
-        + d.sum(axis=0) * cell.dt,
+        lambda p, d: (
+            p * (1 - cell.dt / params["tau"])[:, None] + d.sum(axis=0) * cell.dt
+        ),
         jx,
         df_dx,
     )
@@ -248,6 +248,7 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     u = v @ W.T
+    print("u shape:", u.shape)
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
     phi_prime = 1 - jnp.tanh(u) ** 2

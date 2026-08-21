@@ -23,6 +23,11 @@ def get_data(dataset):
     if x.ndim <= 2:
         # Assume single batch
         y = y * jnp.ones((1, 1, 1))
+    elif y.ndim == 1:
+        assert y.shape[0] == x.shape[0]
+        # Assume one scalar label per sequence
+        # Repeat along batch and time dimension
+        y = y[:, None, None] * jnp.ones((x.shape[0], t, 1))
     elif y.ndim == 2:
         assert y.shape[0] == x.shape[0]
         # Assume one label per sequence
@@ -39,7 +44,7 @@ def get_data(dataset):
             (x_test, y_test),
         ) = example_datasets.split_train_test(
             (x, y),
-            percent_eval=0.05,
+            fraction_eval=0.05,
             shuffle=True,
         )
     else:
@@ -55,8 +60,10 @@ def train_rnn_online(
     data,
     key,
     h0,
+    dones=None,
     num_steps=10_000,
     param_post_update_fn=None,
+    batched=True,
 ):
     """Train RNN using Stochastic Gradient Descent with a constant learning rate."""
     _x, _y = data
@@ -70,9 +77,19 @@ def train_rnn_online(
 
         def step(carry, _data):
             _params, _opt_state, _key, h = carry
-            __x, __y = _data
-            # _key, key_batch = jrand.split(_key)
-            (current_loss, h), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+            __x, __y, __done = _data
+            if dones is not None:
+                h = jax.tree.map(lambda _h0, _h: jnp.where(__done, _h0, _h), h0, h)
+            _loss_fn = loss_fn
+            if batched:
+                __unbatched_loss_fn = _loss_fn
+
+                def _loss_fn(*args):
+                    return jax.vmap(__unbatched_loss_fn, in_axes=(None, 0, 0, 0))(
+                        *args
+                    ).mean()
+
+            (current_loss, h), grads = jax.value_and_grad(_loss_fn, has_aux=True)(
                 _params, __x, __y, h
             )
             updates, _opt_state = optimizer.update(grads, _opt_state, _params)
@@ -90,7 +107,7 @@ def train_rnn_online(
         # step_carry = (*ep_carry[:-1], (h0[0], *ep_carry[-1][1:]))
         step_carry = (*ep_carry, h0)
 
-        step_carry, __losses = jax.lax.scan(step, step_carry, (_x, _y))
+        step_carry, __losses = jax.lax.scan(step, step_carry, (_x, _y, dones))
         current_loss = __losses.mean()
 
         def print_progress(i, loss):
@@ -153,9 +170,9 @@ def train_rnn_offline(
     return _params, _losses
 
 
-def predict(model: nn.RNNCellBase, params, init_carry=None, *inputs):
+def predict(model: nn.RNNCellBase, params, init_carry=None, *inputs, batched=False):
     """Predict a sequence of outputs given an input sequence."""
-    _, y_hat = scan_rnn(model, params, *inputs, init_carry=init_carry)
+    _, y_hat = scan_rnn(model, params, *inputs, init_carry=init_carry, batched=batched)
     return y_hat
 
 

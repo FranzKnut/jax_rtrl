@@ -216,7 +216,7 @@ def spirals(dataset_size=100, time=16, key=jrandom.PRNGKey(0)):
     x1 = x1.at[:half_dataset_size].multiply(-1)
     y = y.at[:half_dataset_size].set(0)
     x = jnp.stack([x1, x2], axis=-1)
-    return x, jax.nn.one_hot(y, num_classes=2, axis=-1).squeeze()
+    return x, y.squeeze().astype(jnp.int32)
 
 
 def sine(length=100, offset=2, num_periods=3):

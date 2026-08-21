@@ -916,11 +916,13 @@ def scan_rnn(
     """
     extra_args = xs[1:] if len(xs) > 1 else ()
     xs = xs[:1]
+    training_kwargs = {}
     if isinstance(model, RNNEnsemble):
-        extra_args = (training,) + extra_args
+        # Passed as a kwarg (not positional) so vmap over the batched model
+        # doesn't try to map the batch axis over this scalar flag.
+        training_kwargs = {"training": training}
     else:
         print("WARNING: model is not an RNNEnsemble, training flag is ignored.")
-
 
     if batched:
         obs_time_major = jax.tree.map(
@@ -928,13 +930,12 @@ def scan_rnn(
         )
     else:
         obs_time_major = xs
-        
 
     if (
         isinstance(getattr(model, "config", None), RNNEnsembleConfig)
         and model.config.model_name in ["s5", "lru"]
     ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell)):
-        return model.apply(params, init_carry, *xs, *extra_args)
+        return model.apply(params, init_carry, *xs, *extra_args, **training_kwargs)
 
     else:
         if init_carry is None:
@@ -948,7 +949,7 @@ def scan_rnn(
 
         def _step(_c, _b):
             p, h = _c
-            h, y_hat = model.apply(p, h, *_b, *extra_args)
+            h, y_hat = model.apply(p, h, *_b, *extra_args, **training_kwargs)
             return (p, h), y_hat
 
         outputs, y_hats = jax.lax.scan(_step, (params, init_carry), obs_time_major)

@@ -8,6 +8,8 @@ from jax_rtrl.supervised.sequential_vault import (
     vault_generator,
     read_vault_data,
 )
+from jax_rtrl.models.seq_models import RNNEnsembleConfig, SequenceLayerConfig
+from jax_rtrl.supervised import supervised_offline, supervised_online
 
 import shutil
 from jax import random as jrandom
@@ -201,6 +203,62 @@ class TestSequentialVault(unittest.TestCase):
         )
 
         self.assertEqual(vault2.vault_index, first_index + 6)
+
+
+def _make_online_config(
+    dataset: str, model_name: str = "bptt"
+) -> supervised_online.TrainingConfig:
+    """A tiny, fast-to-train config for smoke-testing the online training script."""
+    rnn_config = RNNEnsembleConfig(
+        model_name=model_name,
+        _layers=(4,),
+        num_modules=1,
+        num_blocks=1,
+        layer_config=SequenceLayerConfig(norm=None, glu=False, skip_connection=False),
+        out_dist="Deterministic",
+        rnn_kwargs={"dt": 1.0},
+        output_layers=None,
+        fa_type="bp",
+    )
+    return supervised_online.TrainingConfig(
+        dataset=dataset, num_steps=2, rnn_config=rnn_config
+    )
+
+
+class TestSupervisedOnline(unittest.TestCase):
+    """Minimal smoke tests for the online training script."""
+
+    def test_main_runs_on_sine(self):
+        cfg = _make_online_config("sine")
+        params, losses, test_loss = supervised_online.main(cfg, plot=False)
+        self.assertIsNotNone(params)
+        self.assertEqual(losses.shape, (cfg.num_steps,))
+
+    def test_main_runs_on_spirals(self):
+        cfg = _make_online_config("spirals")
+        params, losses, test_loss = supervised_online.main(cfg, plot=False)
+        self.assertIsNotNone(params)
+        self.assertEqual(losses.shape, (cfg.num_steps,))
+
+
+class TestSupervisedOffline(unittest.TestCase):
+    """Minimal smoke tests for the offline training script."""
+
+    def _make_config(self, dataset: str) -> supervised_offline.TrainingConfig:
+        return supervised_offline.TrainingConfig(dataset=dataset, num_steps=2)
+
+    def test_main_runs_on_sine(self):
+        cfg = self._make_config("sine")
+        params, losses, test_loss = supervised_offline.main(cfg, plot=False)
+        self.assertIsNotNone(params)
+        self.assertEqual(losses.shape, (cfg.num_steps,))
+
+    def test_main_runs_on_spirals(self):
+        cfg = self._make_config("spirals")
+        params, losses, test_loss = supervised_offline.main(cfg, plot=False)
+        self.assertIsNotNone(params)
+        self.assertEqual(losses.shape, (cfg.num_steps,))
+
 
 if __name__ == "__main__":
     unittest.main()

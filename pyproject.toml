@@ -18,6 +18,7 @@ poethepoet     = "*"
 jaxtyping      = "*"
 jax            = "0.6.2"
 tfp-nightly    = "*"
+jupyter-ruff = "^0.3.1"
 
 [tool.poetry.group.torch_ds.dependencies]
 chex   = "*"
