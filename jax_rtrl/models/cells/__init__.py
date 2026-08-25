@@ -1,5 +1,6 @@
 from functools import partial
 
+from jax_rtrl.models.cells.attention import AttentionCell, CausalAttentionCell
 from jax_rtrl.models.cells.ctrnn import CTRNNCell, OnlineCTRNNCell
 from jax_rtrl.models.cells.hopfield import HopfieldCell
 from jax_rtrl.models.cells.lrc import LRCCell, OnlineLRCCell
@@ -64,6 +65,8 @@ BASE_CELL_TYPES = {
     "lrc": LRCCell,
     "mlp": MLPCell,
     "hopfield": HopfieldCell,
+    "attention": AttentionCell,
+    "causal_attention": CausalAttentionCell,
     # "gru": "GRUCell",  # TODO: fix GRU Implementation
 }
 

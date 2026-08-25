@@ -35,8 +35,17 @@ class TrainingConfig:
         default_factory=lambda: RNNEnsembleConfig(
             # model_name="bptt",
             # model_name="ltc",
-            model_name="lrc",
+            # model_name="lrc",
+            model_name="causal_attention",
             _layers=(32, 4),
+            out_dist="Deterministic",
+            # rnn_kwargs={
+            #     "dt": 1.0,
+            #     # "ode_type": "murray",
+            # },
+            output_layers=None,
+            fa_type="bp",
+            # method="linear",
             num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
@@ -44,14 +53,6 @@ class TrainingConfig:
                 glu=False,
                 skip_connection=False,
             ),
-            out_dist="Deterministic",
-            rnn_kwargs={
-                "dt": 1.0,
-                # "ode_type": "murray",
-            },
-            output_layers=None,
-            fa_type="bp",
-            # method="linear",
         )
     )
 

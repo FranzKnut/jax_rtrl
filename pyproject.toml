@@ -42,6 +42,10 @@ datasets    = "*"
 ml_collections = "*"
 
 
+
+[tool.poetry.group.training.dependencies]
+flashbax = "^0.1.3"
+
 [build-system]
 requires      = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

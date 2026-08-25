@@ -17,6 +17,7 @@ from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
 from jax_rtrl.models.distributions import UniformMixture
+from jax_rtrl.models.cells.attention import AttentionCell
 from jax_rtrl.models.cells.lru import LRUCell, OnlineLRUCell
 from jax_rtrl.models.s5 import S5SSM, S5Config
 from jax_rtrl.util.jax_util import kalman_fusion, get_normalization_fn
@@ -121,7 +122,11 @@ class RNNEnsembleConfig(FrozenSerializable):
             # if match_plasticity:
             #     self.rnn_kwargs["plasticity"] = match_plasticity.group(1)
             # el
-            if self.model_name in ["s5", "s5_rtrl"]:
+            if self.model_name in ["s5", "s5_rtrl"] and not isinstance(
+                self.rnn_kwargs.get("config"), S5Config
+            ):
+                # Guard against re-wrapping: __post_init__ can run again on an
+                # already-resolved config, e.g. via dataclasses.replace(...).
                 object.__setattr__(
                     self, "rnn_kwargs", {"config": S5Config(**self.rnn_kwargs)}
                 )
@@ -777,7 +782,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
         if (
             self.out_size is not None
-            and self.config.model_name in ["lru"]
+            and self.config.model_name in ["lru", "attention", "causal_attention"]
             and x_tiled.ndim >= 3
         ):
             # HACK: SSMs compute output sequence which messes with the ordering of dimensions
@@ -933,8 +938,8 @@ def scan_rnn(
 
     if (
         isinstance(getattr(model, "config", None), RNNEnsembleConfig)
-        and model.config.model_name in ["s5", "lru"]
-    ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell)):
+        and model.config.model_name in ["s5", "lru", "attention", "causal_attention"]
+    ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell, AttentionCell)):
         return model.apply(params, init_carry, *xs, *extra_args, **training_kwargs)
 
     else:

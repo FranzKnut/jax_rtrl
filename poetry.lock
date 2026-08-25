@@ -6,7 +6,7 @@ version = "2.3.1"
 description = "Abseil Python Common Libraries, see https://github.com/abseil/abseil-py."
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "absl_py-2.3.1-py3-none-any.whl", hash = "sha256:eeecf07f0c2a93ace0772c92e596ace6d3d3996c042b2128459aaae2a76de11d"},
     {file = "absl_py-2.3.1.tar.gz", hash = "sha256:a97820526f7fbfd2ec1bce83f3f25e3a14840dac0d8e02a0b71cd75db3f77fc9"},
@@ -18,7 +18,7 @@ version = "25.1.0"
 description = "File support for asyncio."
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "aiofiles-25.1.0-py3-none-any.whl", hash = "sha256:abe311e527c862958650f9438e859c1fa7568a141b22abcd015e120e86a85695"},
     {file = "aiofiles-25.1.0.tar.gz", hash = "sha256:a8d728f0a29de45dc521f18f07297428d56992a742f0cd2701ba86e44d23d5b2"},
@@ -398,7 +398,7 @@ version = "0.1.90"
 description = "Chex: Testing made fun, in JAX!"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "chex-0.1.90-py3-none-any.whl", hash = "sha256:fce3de82588f72d4796e545e574a433aa29229cbdcf792555e41bead24b704ae"},
     {file = "chex-0.1.90.tar.gz", hash = "sha256:d3c375aeb6154b08f1cccd2bee4ed83659ee2198a6acf1160d2fe2e4a6c87b5c"},
@@ -636,7 +636,7 @@ version = "1.13.0"
 description = "Collection of common python utils"
 optional = false
 python-versions = ">=3.10"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "etils-1.13.0-py3-none-any.whl", hash = "sha256:d9cd4f40fbe77ad6613b7348a18132cc511237b6c076dbb89105c0b520a4c6bb"},
     {file = "etils-1.13.0.tar.gz", hash = "sha256:a5b60c71f95bcd2d43d4e9fb3dc3879120c1f60472bb5ce19f7a860b1d44f607"},
@@ -685,12 +685,37 @@ files = [
 ]
 
 [[package]]
+name = "flashbax"
+version = "0.1.3"
+description = "Flashbax is an experience replay library oriented around JAX. Tailored to integrate seamlessly with JAX's Just-In-Time (JIT) compilation."
+optional = false
+python-versions = ">=3.9"
+groups = ["training"]
+files = [
+    {file = "flashbax-0.1.3-py3-none-any.whl", hash = "sha256:798b0056dd0f525269ad9689a402dd0a515db7cb6976c761aa95004ff37e9697"},
+    {file = "flashbax-0.1.3.tar.gz", hash = "sha256:3792972973169d455188451dd3f93a0ab37004bb122bb256a323927daaca9a3e"},
+]
+
+[package.dependencies]
+chex = ">=0.1.8"
+flax = ">=0.6.11"
+jax = ">=0.4.25"
+jaxlib = ">=0.4.20"
+numpy = ">=1.19.5"
+tensorstore = ">=0.1.51"
+typing-extensions = ">=4.6.0"
+
+[package.extras]
+dev = ["black (>=23.7.0)", "coverage (>=6.5.0)", "flake8 (>=6.0.0)", "isort (>=5.12.0)", "mkdocs (==1.5.3)", "mkdocs-git-revision-date-plugin (==0.3.2)", "mkdocs-include-markdown-plugin (==6.0.1)", "mkdocs-material (==9.4.2)", "mkdocs-mermaid2-plugin (==1.1.1)", "mkdocstrings[python] (==0.23.0)", "mknotebooks (==0.8.0)", "mypy (>=1.8.0)", "pre-commit (>=2.20.0)", "pytest (>=7.4.2)", "pytest-cov (>=4.00)", "pytest-xdist (>=3.0.2)"]
+examples = ["distrax", "dm-haiku", "gymnasium", "jumanji", "jupyterlab", "matplotlib", "optax", "rlax", "seaborn"]
+
+[[package]]
 name = "flax"
 version = "0.11.2"
 description = "Flax: A neural network library for JAX designed for flexibility"
 optional = false
 python-versions = ">=3.11"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "flax-0.11.2-py3-none-any.whl", hash = "sha256:61a5f60c27ab4e6420fda7f593f93b5ec1adba629fd33b2f0e52740ab7c04da9"},
     {file = "flax-0.11.2.tar.gz", hash = "sha256:55452529b70c704128075a17f7a54d94f1f90b0f2d9498bdc9578cae3646e460"},
@@ -862,7 +887,7 @@ version = "2025.10.0"
 description = "File-system specification"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "fsspec-2025.10.0-py3-none-any.whl", hash = "sha256:7c7712353ae7d875407f97715f0e1ffcc21e33d5b24556cb1e090ae9409ec61d"},
     {file = "fsspec-2025.10.0.tar.gz", hash = "sha256:b6789427626f068f9a83ca4e8a3cc050850b6c0f71f99ddb4f542b8266a26a59"},
@@ -1066,7 +1091,7 @@ version = "4.14.0"
 description = "Python humanize utilities"
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "humanize-4.14.0-py3-none-any.whl", hash = "sha256:d57701248d040ad456092820e6fde56c930f17749956ac47f4f655c0c547bfff"},
     {file = "humanize-4.14.0.tar.gz", hash = "sha256:2fa092705ea640d605c435b1ca82b2866a1b601cdf96f076d70b79a855eba90d"},
@@ -1108,7 +1133,7 @@ version = "6.5.2"
 description = "Read resources from Python packages"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "importlib_resources-6.5.2-py3-none-any.whl", hash = "sha256:789cfdc3ed28c78b67a06acb8126751ced69a3d5f79c095a98298cd8a760ccec"},
     {file = "importlib_resources-6.5.2.tar.gz", hash = "sha256:185f87adef5bcc288449d98fb4fba07cea78bc036455dd44c5fc4a2fe78fed2c"},
@@ -1144,7 +1169,7 @@ version = "0.6.2"
 description = "Differentiate, compile, and transform Numpy code."
 optional = false
 python-versions = ">=3.10"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "jax-0.6.2-py3-none-any.whl", hash = "sha256:bb24a82dc60ccf704dcaf6dbd07d04957f68a6c686db19630dd75260d1fb788c"},
     {file = "jax-0.6.2.tar.gz", hash = "sha256:a437d29038cbc8300334119692744704ca7941490867b9665406b7f90665cd96"},
@@ -1174,7 +1199,7 @@ version = "0.6.2"
 description = "XLA library for JAX"
 optional = false
 python-versions = ">=3.10"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "jaxlib-0.6.2-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:da4601b2b5dc8c23d6afb293eacfb9aec4e1d1871cb2f29c5a151d103e73b0f8"},
     {file = "jaxlib-0.6.2-cp310-cp310-manylinux2014_aarch64.whl", hash = "sha256:4205d098ce8efb5f7fe2fe5098bae6036094dc8d8829f5e0e0d7a9b155326336"},
@@ -1257,7 +1282,7 @@ version = "4.0.0"
 description = "Python port of markdown-it. Markdown parsing, done right!"
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "markdown_it_py-4.0.0-py3-none-any.whl", hash = "sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147"},
     {file = "markdown_it_py-4.0.0.tar.gz", hash = "sha256:cb0a2b4aa34f932c007117b194e945bd74e0ec24133ceb5bac59009cda1cb9f3"},
@@ -1380,7 +1405,7 @@ version = "0.1.2"
 description = "Markdown URL utilities"
 optional = false
 python-versions = ">=3.7"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8"},
     {file = "mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba"},
@@ -1431,7 +1456,7 @@ version = "0.5.4"
 description = "ml_dtypes is a stand-alone implementation of several NumPy dtype extensions used in machine learning."
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "ml_dtypes-0.5.4-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:b95e97e470fe60ed493fd9ae3911d8da4ebac16bd21f87ffa2b7c588bf22ea2c"},
     {file = "ml_dtypes-0.5.4-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b4b801ebe0b477be666696bda493a9be8356f1f0057a57f1e35cd26928823e5a"},
@@ -1508,7 +1533,7 @@ version = "1.1.2"
 description = "MessagePack serializer"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "msgpack-1.1.2-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:0051fffef5a37ca2cd16978ae4f0aef92f164df86823871b5162812bebecd8e2"},
     {file = "msgpack-1.1.2-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:a605409040f2da88676e9c9e5853b3449ba8011973616189ea5ee55ddbc5bc87"},
@@ -1768,7 +1793,7 @@ version = "1.6.0"
 description = "Patch asyncio to allow nested event loops"
 optional = false
 python-versions = ">=3.5"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "nest_asyncio-1.6.0-py3-none-any.whl", hash = "sha256:87af6efd6b5e897c81050477ef65c62e2b2f35d51703cae01aff2905b1852e1c"},
     {file = "nest_asyncio-1.6.0.tar.gz", hash = "sha256:6f172d5449aca15afd6c646851f4e31e02c598d553a667e38cafa997cfec55fe"},
@@ -1801,7 +1826,7 @@ version = "2.3.5"
 description = "Fundamental package for array computing in Python"
 optional = false
 python-versions = ">=3.11"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "numpy-2.3.5-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:de5672f4a7b200c15a4127042170a694d4df43c992948f5e1af57f0174beed10"},
     {file = "numpy-2.3.5-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:acfd89508504a19ed06ef963ad544ec6664518c863436306153e13e94605c218"},
@@ -2052,7 +2077,7 @@ version = "3.4.0"
 description = "Path optimization of einsum functions."
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "opt_einsum-3.4.0-py3-none-any.whl", hash = "sha256:69bb92469f86a1565195ece4ac0323943e83477171b91d24c35afe028a90d7cd"},
     {file = "opt_einsum-3.4.0.tar.gz", hash = "sha256:96ca72f1b886d148241348783498194c577fa30a8faac108586b14f1ba4473ac"},
@@ -2064,7 +2089,7 @@ version = "0.2.6"
 description = "A gradient processing and optimization library in JAX."
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "optax-0.2.6-py3-none-any.whl", hash = "sha256:f875251a5ab20f179d4be57478354e8e21963373b10f9c3b762b94dcb8c36d91"},
     {file = "optax-0.2.6.tar.gz", hash = "sha256:ba8d1e12678eba2657484d6feeca4fb281b8066bdfd5efbfc0f41b87663109c0"},
@@ -2087,7 +2112,7 @@ version = "0.11.28"
 description = "Orbax Checkpoint"
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "orbax_checkpoint-0.11.28-py3-none-any.whl", hash = "sha256:094273495fca331da88ec845053a96a7f0152b0223c6b51b82a6c1b32f373c3b"},
     {file = "orbax_checkpoint-0.11.28.tar.gz", hash = "sha256:a72075411c8aa4b48ddd9f2b247348bdfcf7b72f633b4d9c99541648089e90e9"},
@@ -2535,7 +2560,7 @@ version = "6.33.1"
 description = ""
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "protobuf-6.33.1-cp310-abi3-win32.whl", hash = "sha256:f8d3fdbc966aaab1d05046d0240dd94d40f2a8c62856d41eaa141ff64a79de6b"},
     {file = "protobuf-6.33.1-cp310-abi3-win_amd64.whl", hash = "sha256:923aa6d27a92bf44394f6abf7ea0500f38769d4b07f4be41cb52bd8b1123b9ed"},
@@ -2555,7 +2580,7 @@ version = "7.1.3"
 description = "Cross-platform lib for process and system monitoring."
 optional = false
 python-versions = ">=3.6"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "psutil-7.1.3-cp313-cp313t-macosx_10_13_x86_64.whl", hash = "sha256:0005da714eee687b4b8decd3d6cc7c6db36215c9e74e5ad2264b90c3df7d92dc"},
     {file = "psutil-7.1.3-cp313-cp313t-macosx_11_0_arm64.whl", hash = "sha256:19644c85dcb987e35eeeaefdc3915d059dac7bd1167cdcdbf27e0ce2df0c08c0"},
@@ -2660,7 +2685,7 @@ version = "2.19.2"
 description = "Pygments is a syntax highlighting package written in Python."
 optional = false
 python-versions = ">=3.8"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b"},
     {file = "pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887"},
@@ -2702,7 +2727,7 @@ version = "6.0.3"
 description = "YAML parser and emitter for Python"
 optional = false
 python-versions = ">=3.8"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "PyYAML-6.0.3-cp38-cp38-macosx_10_13_x86_64.whl", hash = "sha256:c2514fceb77bc5e7a2f7adfaa1feb2fb311607c9cb518dbc378688ec73d8292f"},
     {file = "PyYAML-6.0.3-cp38-cp38-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9c57bb8c96f6d1808c030b1687b9b5fb476abaa47f0db9c0101f5e9f394e97f4"},
@@ -2807,7 +2832,7 @@ version = "14.2.0"
 description = "Render rich text, tables, progress bars, syntax highlighting, markdown and more to the terminal"
 optional = false
 python-versions = ">=3.8.0"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "rich-14.2.0-py3-none-any.whl", hash = "sha256:76bc51fe2e57d2b1be1f96c524b890b816e334ab4c1e45888799bfaab0021edd"},
     {file = "rich-14.2.0.tar.gz", hash = "sha256:73ff50c7c0c1c77c8243079283f4edb376f0f6442433aecb8ce7e6d0b92d1fe4"},
@@ -2826,7 +2851,7 @@ version = "1.16.3"
 description = "Fundamental algorithms for scientific computing in Python"
 optional = false
 python-versions = ">=3.11"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "scipy-1.16.3-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:40be6cf99e68b6c4321e9f8782e7d5ff8265af28ef2cd56e9c9b2638fa08ad97"},
     {file = "scipy-1.16.3-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:8be1ca9170fcb6223cc7c27f4305d680ded114a1567c0bd2bfcbf947d1b17511"},
@@ -2905,7 +2930,7 @@ version = "80.9.0"
 description = "Easily download, build, install, upgrade, and uninstall Python packages"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 markers = "python_version >= \"3.12\""
 files = [
     {file = "setuptools-80.9.0-py3-none-any.whl", hash = "sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922"},
@@ -2959,7 +2984,7 @@ version = "3.20.2"
 description = "Simple, fast, extensible JSON encoder/decoder for Python"
 optional = false
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.5"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "simplejson-3.20.2-cp27-cp27m-manylinux1_i686.whl", hash = "sha256:11847093fd36e3f5a4f595ff0506286c54885f8ad2d921dfb64a85bce67f72c4"},
     {file = "simplejson-3.20.2-cp27-cp27m-manylinux1_x86_64.whl", hash = "sha256:4d291911d23b1ab8eb3241204dd54e3ec60ddcd74dfcb576939d3df327205865"},
@@ -3265,7 +3290,7 @@ version = "0.1.79"
 description = "Read and write large, multi-dimensional arrays"
 optional = false
 python-versions = ">=3.11"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "tensorstore-0.1.79-cp311-cp311-macosx_10_14_x86_64.whl", hash = "sha256:11a2c62694ea9c21770bc5a09938d3d15c4b9662b738ae6e1e513c26ed96251a"},
     {file = "tensorstore-0.1.79-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:5e152d334bf34fbabdfe8e5bc35b87d1f9947065924ff83c29e659308b36e948"},
@@ -3352,7 +3377,7 @@ version = "1.1.0"
 description = "List processing tools and functional utilities"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "toolz-1.1.0-py3-none-any.whl", hash = "sha256:15ccc861ac51c53696de0a5d6d4607f99c210739caf987b5d2054f3efed429d8"},
     {file = "toolz-1.1.0.tar.gz", hash = "sha256:27a5c770d068c110d9ed9323f24f1543e83b2f300a687b7891c1a6d56b697b5b"},
@@ -3543,7 +3568,7 @@ version = "0.1.10"
 description = "Treescope: An interactive HTML pretty-printer for ML research in IPython notebooks."
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["main", "training"]
 files = [
     {file = "treescope-0.1.10-py3-none-any.whl", hash = "sha256:dde52f5314f4c29d22157a6fe4d3bd103f9cae02791c9e672eefa32c9aa1da51"},
     {file = "treescope-0.1.10.tar.gz", hash = "sha256:20f74656f34ab2d8716715013e8163a0da79bdc2554c16d5023172c50d27ea95"},
@@ -3608,7 +3633,7 @@ version = "4.15.0"
 description = "Backported and Experimental Type Hints for Python 3.9+"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "typing_extensions-4.15.0-py3-none-any.whl", hash = "sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548"},
     {file = "typing_extensions-4.15.0.tar.gz", hash = "sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466"},
@@ -4081,7 +4106,7 @@ version = "3.23.0"
 description = "Backport of pathlib-compatible object wrapper for zip files"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "torch-ds"]
+groups = ["main", "torch-ds", "training"]
 files = [
     {file = "zipp-3.23.0-py3-none-any.whl", hash = "sha256:071652d6115ed432f5ce1d34c336c0adfd6a884660d1e9712a256d3d3bd4b14e"},
     {file = "zipp-3.23.0.tar.gz", hash = "sha256:a07157588a12518c9d4034df3fbbee09c814741a33ff63c05fa29d26a2404166"},
@@ -4098,4 +4123,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">3.11, <4.0"
-content-hash = "eab71ba34bb762df576ac18bfe46ea276424a09e8e9fd27c1c6889bd7bc6e9c9"
+content-hash = "8a2d63e39b4611774716b680edf85ead13087991d11bf856c578dc215ab05f8b"
