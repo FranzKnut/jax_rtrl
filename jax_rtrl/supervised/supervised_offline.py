@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
 import os
 import sys
+from dataclasses import dataclass, field
 
 import jax.random as jrand
 import matplotlib.pyplot as plt
@@ -9,15 +9,16 @@ import simple_parsing
 
 from jax_rtrl.models.seq_models import RNNEnsembleConfig, SequenceLayerConfig, scan_rnn
 
-
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from jax_rtrl.util.jax_util import mse_loss
 from jax_rtrl.supervised.training_utils import (
     get_data,
     make_model,
     predict,
+)
+from jax_rtrl.supervised.training_utils import (
     train_rnn_offline as train,
 )
+from jax_rtrl.util.jax_util import mse_loss
 
 # jax.config.update("jax_disable_jit", True)
 
@@ -62,11 +63,8 @@ def main(cfg: TrainingConfig, plot: bool = True):
     key, key_data, key_train = jrand.split(key, 3)
 
     x_train, y_train, x_test, y_test = get_data(cfg.dataset)
-    # Transpose to time dim first
-    # x_train = x_train.transpose(1, 0, 2)
-    # y_train = y_train.transpose(1, 0, 2)
 
-    model, params, h0 = make_model(
+    model, params, _ = make_model(
         x_train[:, 0], key, y_train.shape[-1], cfg.rnn_config
     )
 

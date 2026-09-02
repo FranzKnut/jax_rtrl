@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
 import os
 import sys
+from dataclasses import dataclass, field
 
 import jax
 import jax.numpy as jnp
@@ -8,16 +8,17 @@ import jax.random as jrand
 import matplotlib.pyplot as plt
 import optax
 import simple_parsing
+
 from jax_rtrl.models.cells.ctrnn import clip_tau
-from jax_rtrl.util.jax_util import mse_loss
 from jax_rtrl.models.seq_models import RNNEnsembleConfig
+from jax_rtrl.util.jax_util import mse_loss
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from jax_rtrl.supervised.training_utils import make_model
-from models.seq_models import SequenceLayerConfig
+from models.seq_models import SequenceLayerConfig, call_model
 from supervised.training_utils import get_data, predict
 from supervised.training_utils import train_rnn_online as train
 
+from jax_rtrl.supervised.training_utils import make_model
 
 jax.config.update("jax_platforms", "cpu")
 # jax.config.update("jax_disable_jit", True)
@@ -64,7 +65,7 @@ class TrainingConfig:
 
 def main(cfg: TrainingConfig, plot: bool = True):
     key = jrand.PRNGKey(0)
-    key, key_data, key_train = jrand.split(key, 3)
+    key, key_train = jrand.split(key)
 
     x_train, y_train, x_test, y_test = get_data(cfg.dataset)
 
@@ -87,7 +88,7 @@ def main(cfg: TrainingConfig, plot: bool = True):
     # @jax.vmap
     def loss(p, __x, __y, rnn_state=None):
         # MSE loss
-        rnn_state, y_hat = model.apply(p, rnn_state, __x)
+        rnn_state, y_hat = call_model(model, p, rnn_state, __x, training=True)
         if cfg.rnn_config.ensemble_method is not None:
             y_hat = y_hat[0]
         if cfg.rnn_config.out_dist == "Deterministic":

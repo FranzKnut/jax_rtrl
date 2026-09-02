@@ -2,8 +2,8 @@
 
 import jax
 import optax
-from jax import numpy as jnp
 from flax import linen as nn
+from jax import numpy as jnp
 from tqdm import trange
 
 from jax_rtrl.models.seq_models import (
@@ -178,7 +178,7 @@ def predict(model: nn.RNNCellBase, params, init_carry=None, *inputs, batched=Fal
 
 def make_model(initial_input, key, out_size: int, kwargs: RNNEnsembleConfig):
     # key_model = jrand.split(key, initial_input.shape[0])
-    model = make_batched_model(RNNEnsemble)(kwargs, out_size)
-    params = model.init(key, None, initial_input)
+    model = make_batched_model(RNNEnsemble, in_axes=(0, 0, None))(kwargs, out_size)
+    params = model.init(key, None, initial_input, False)
     h0 = model.apply(params, key, initial_input.shape, method=model.initialize_carry)
     return model, params, h0

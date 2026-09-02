@@ -724,7 +724,7 @@ class RNNEnsemble(nn.RNNCellBase):
         training: bool = True,
         *call_args,
         **call_kwargs,
-    ):  # noqa
+    ):
         """Call submodules and concatenate output.
 
         If out_dist is not None, the output will be distribution(s),
@@ -852,13 +852,17 @@ def make_batched_model(
     in_axes: int | tuple[int, ...] = 0,
     out_axes: int | tuple[int, ...] = 0,
     axis_size=None,
-    methods: list[str] = None,
+    methods: list[str] | None = None,
 ):
     """Parallelize model across a batch of input sequences using vmap.
 
     Parameters:
         model: Model to parallelize.
-        batch_size: Size of the batch.
+        split_rngs: Whether to split the random number generator across the batch.
+        in_axes: The axis along which the input is batched.
+        out_axes: The axis along which the output is batched.
+        axis_size: The size of the batch axis.
+        methods: The methods to parallelize.
 
     Returns:
         A batched version of the model.
@@ -897,6 +901,24 @@ def make_batched_model(
     )
 
 
+def call_model(model, params, carry, x, training=True):
+    """Call model with given parameters and inputs.
+
+    This function is a workaround for the fact that flax vmapped modules don't allow kwargs.
+
+    Parameters:
+        model: Model to call.
+        params: Parameters of the model.
+        carry: Initial carry (hidden state) of the model.
+        x: Input sequence to the model. Should be time-major if not batched.
+        training: Whether the model is in training mode (affects dropout behavior).
+    Returns:
+        outputs: Final carry (hidden state) of the model.
+        y_hats: Output sequences of the model.
+    """
+    return model.apply(params, carry, x, training)
+
+
 def scan_rnn(
     model: RNNEnsemble,
     params,
@@ -921,11 +943,13 @@ def scan_rnn(
     """
     extra_args = xs[1:] if len(xs) > 1 else ()
     xs = xs[:1]
-    training_kwargs = {}
+    # training_kwargs = {}
+    training_arg = ()
     if isinstance(model, RNNEnsemble):
         # Passed as a kwarg (not positional) so vmap over the batched model
         # doesn't try to map the batch axis over this scalar flag.
-        training_kwargs = {"training": training}
+        # training_kwargs = {"training": training}
+        training_arg = (training,)
     else:
         print("WARNING: model is not an RNNEnsemble, training flag is ignored.")
 
@@ -940,7 +964,7 @@ def scan_rnn(
         isinstance(getattr(model, "config", None), RNNEnsembleConfig)
         and model.config.model_name in ["s5", "lru", "attention", "causal_attention"]
     ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell, AttentionCell)):
-        return model.apply(params, init_carry, *xs, *extra_args, **training_kwargs)
+        return model.apply(params, init_carry, *xs, *extra_args, *training_arg)
 
     else:
         if init_carry is None:
@@ -954,7 +978,7 @@ def scan_rnn(
 
         def _step(_c, _b):
             p, h = _c
-            h, y_hat = model.apply(p, h, *_b, *extra_args, **training_kwargs)
+            h, y_hat = model.apply(p, h, *_b, *extra_args, *training_arg)
             return (p, h), y_hat
 
         outputs, y_hats = jax.lax.scan(_step, (params, init_carry), obs_time_major)
