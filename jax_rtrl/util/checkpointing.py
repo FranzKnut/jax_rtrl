@@ -73,11 +73,24 @@ def restore_params(path: str, tree: PyTree = None) -> PyTree | None:
     return params
 
 
-def restore_params_and_config(path: str, tree: PyTree = None) -> tuple[PyTree | None, dict]:
+def restore_params_and_config(
+    path: str, tree: PyTree = None
+) -> tuple[PyTree | None, dict]:
     """Restore params and config from checkpoint."""
     params = restore_params(path, tree)
     config = restore_config(path)
     return params, config
+
+
+def config_diff(cfg1: dict, cfg2: dict) -> dict:
+    """Return a dict of differences between two configs."""
+    diff = {}
+    for k in cfg1.keys() | cfg2.keys():
+        v1 = cfg1.get(k, None)
+        v2 = cfg2.get(k, None)
+        if v1 != v2:
+            diff[k] = (v1, v2)
+    return diff
 
 
 def save_config(path, hparams: dict | Serializable):
@@ -146,6 +159,11 @@ def checkpointing(
         else:
             restored_params, restored_hparams = restore_params_and_config(path, tree)
             print("Restored checkpoint")
+            diffs = config_diff(restored_hparams, hparams) if hparams else {}
+            if diffs:
+                print("Config differences between restored and current:")
+                for k, (v1, v2) in diffs.items():
+                    print(f"  {k}: restored={v1}, current={v2}")
 
     if (not exists or fresh) and hparams is not None:
         save_config(path, hparams)
