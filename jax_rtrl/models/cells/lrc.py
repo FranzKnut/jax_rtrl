@@ -111,14 +111,13 @@ class LRCCell(ODECell):
 def rflo_lrc(cell: LRCCell, carry, params, x):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
-    W, tau = params.values()
 
     jw = jp["W"]
     jtau = jp["tau"]
 
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
-    u = v @ W.T
+    u = v @ params["W"].T
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
     df_dh = 1 - jnp.tanh(u) ** 2
@@ -131,9 +130,9 @@ def rflo_lrc(cell: LRCCell, carry, params, x):
     M_immediate = df_dh[..., None] * v[None]
 
     # Update eligibility traces
-    jw += (1 / tau)[:, None] * (M_immediate - jw)
-    dh_dtau = ((h - jnp.tanh(u)) / tau) - jtau
-    jtau += dh_dtau / tau
+    jw += (1 / params["tau"])[:, None] * (M_immediate - jw)
+    dh_dtau = ((h - jnp.tanh(u)) / params["tau"]) - jtau
+    jtau += dh_dtau / params["tau"]
 
     df_dw = {"W": jw, "tau": jtau}
     dh_dx = jnp.outer(
@@ -143,7 +142,7 @@ def rflo_lrc(cell: LRCCell, carry, params, x):
                 [jnp.ones_like(x), jnp.zeros_like(h), jnp.zeros(x.shape[:-1] + (1,))],
                 axis=-1,
             )
-            @ W.T
+            @ params["W"].T
         )[..., : x.shape[-1]],
     )
     # dh_dh = df_dh @ W.T[x.shape[-1]:x.shape[-1]+h.shape[-1]]

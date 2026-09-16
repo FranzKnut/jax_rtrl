@@ -113,7 +113,7 @@ def train_rnn_online(
         def print_progress(i, loss):
             if i % 10 == 0:
                 pbar.set_description(
-                    f"Iteration {i} | Loss: {loss.mean():.3f}", refresh=False
+                    f"Iteration {i} | Loss: {loss.mean():.3e}", refresh=False
                 )
                 pbar.update(10)
 

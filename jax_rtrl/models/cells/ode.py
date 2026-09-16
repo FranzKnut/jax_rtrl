@@ -39,7 +39,7 @@ class ODECell(nn.RNNCellBase):
                 self.make_rng() if self.has_rng("params") else None,
                 w_shape,
                 int,
-            )#.value
+            )  # .value
 
     def solve(self, h, x, return_sequences=False):
         """Solve ODE over time T with step dt."""
@@ -80,6 +80,7 @@ class OnlineODECell(ODECell):
     """Online CTRNN module."""
 
     plasticity: str = "rtrl"
+    non_rtrl_params: list[str] = field(default_factory=list)
 
     @nn.compact
     def __call__(self, carry, x, return_sequences=False):  # noqa
@@ -139,8 +140,18 @@ class OnlineODECell(ODECell):
                 # carry, jp, jx, hebb = tmp
                 df_dy = y_bar[-1]
                 df_dy += y_bar[-2][0]  # Also include carry grad
+                h, jp, jx = tmp
+                # Split into RTRL and non-RTRL params (e.g. for infomax)
+                _rtrl_grads = {
+                    k: v for k, v in jp.items() if k not in self.non_rtrl_params
+                }
+                # Compute RTRL gradients
                 grads_p, grads_x = self.online_gradient(
-                    tmp, df_dy, plasticity=self.plasticity
+                    _rtrl_grads, jx, df_dy, plasticity=self.plasticity
+                )
+                # Merge with non-RTRL params
+                grads_p.update(
+                    {k: v for k, v in jp.items() if k in self.non_rtrl_params}
                 )
                 # grads_p['W'] += hebb
                 carry = jax.tree.map(jnp.zeros_like, tmp)
@@ -170,10 +181,9 @@ class OnlineODECell(ODECell):
         raise NotImplementedError("_trace_update must be implemented in subclasses.")
 
     @staticmethod
-    def online_gradient(carry, df_dy, plasticity="rflo"):
+    def online_gradient(jp, jx, df_dy, plasticity="rflo"):
         """Compute RTRL gradient."""
-        h, jp, jx = carry
-        if plasticity == "rtrl":
+        if plasticity in ["rtrl", "snap0"]:
             grads_p = jax.tree.map(lambda t: df_dy @ t, jp)
         else:
             grads_p = jax.tree.map(lambda t: (df_dy.T * t.T).T, jp)

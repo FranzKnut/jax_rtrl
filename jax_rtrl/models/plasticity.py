@@ -22,18 +22,25 @@ class Plasticity:
         @param traces:
         @return: traces so calls can be chained
         """
-        batched_units = (batch_size, self.cell.units) if batch_size else (self.cell.units,)
+        batched_units = (
+            (batch_size, self.cell.units) if batch_size else (self.cell.units,)
+        )
         # batched_out = (batch_size, self.cell.out_size) if batch_size else (
         #     self.cell.out_size,)
         # P = dh/dw
-        traces["P"] = jax.tree.map(lambda x: jnp.zeros(batched_units + x.shape), eqx.filter(self.cell, eqx.is_array))
+        traces["P"] = jax.tree.map(
+            lambda x: jnp.zeros(batched_units + x.shape),
+            eqx.filter(self.cell, eqx.is_array),
+        )
         # if self.cell.output_mapping:
         #     # P_out = (dy/dw_out, dy/db_out)
         #     traces['P_out'] = (jnp.zeros(batched_out + self.cell.w_out.shape),
         #                        jnp.zeros(batched_out + self.cell.b_out.shape))
         if self.cell.with_dh_h:
             # Q = dh/dh
-            traces["Q"] = jnp.zeros(batched_units + (self.cell.input_size + self.cell.units,))
+            traces["Q"] = jnp.zeros(
+                batched_units + (self.cell.input_size + self.cell.units,)
+            )
         return traces
 
     @staticmethod
@@ -73,7 +80,9 @@ class Plasticity:
         @param dout:
         @return: Dictionary where key is the name of the weight and value is the update
         """
-        gradients = jax.tree.map(lambda t: jnp.einsum("H,H...->...", dout, t), traces["P"])
+        gradients = jax.tree.map(
+            lambda t: jnp.einsum("H,H...->...", dout, t), traces["P"]
+        )
 
         if with_dy_dx:
             dy_dx = jnp.einsum("H,H...->...", dout, traces["Q"])[..., : cell.input_size]
@@ -120,7 +129,9 @@ class LocalMSE(Plasticity):
             out["P_out"] = (jac_out.w_out, jac_out.b_out)
 
         if cell.with_dh_h:
-            jac_cell, jac_pre = jax.jacrev(cell.f, argnums=[0, 2], has_aux=True)(cell, [0], pre)[0]
+            jac_cell, jac_pre = jax.jacrev(cell.f, argnums=[0, 2], has_aux=True)(
+                cell, [0], pre
+            )[0]
             out["Q"] = jac_pre[-cell.units :, -cell.units :]
         else:
             jac_cell = jax.jacrev(cell.f, argnums=0, has_aux=True)(cell, [0], pre)[0]
@@ -161,15 +172,25 @@ class RTRL(Plasticity):
             return p + (rec + dh[-cell.units :]) * cell.dt
 
         # immediate jacobian (this step)
-        df_dw, df_dh = jax.jacrev(cell.f, argnums=[0, 2], has_aux=True)(cell, [0], pre)[0]
+        df_dw, df_dh = jax.jacrev(cell.f, argnums=[0, 2], has_aux=True)(cell, [0], pre)[
+            0
+        ]
 
         # dh/dh = d(h + f(h) * dt)/dh = I + df/dh * dt
-        identitiy = jnp.concatenate([jnp.zeros((cell.units, cell.input_size)), jnp.identity(cell.units)], axis=-1)
+        identitiy = jnp.concatenate(
+            [jnp.zeros((cell.units, cell.input_size)), jnp.identity(cell.units)],
+            axis=-1,
+        )
         dh_dh = identitiy + df_dh[-cell.units :]
         # / cell.dt
 
         # jacobian trace (previous step * dh_h)
-        comm = jax.tree.map(lambda p: jnp.tensordot(df_dh[..., -cell.units :, -cell.units :], p, axes=1), P)
+        comm = jax.tree.map(
+            lambda p: jnp.tensordot(
+                df_dh[..., -cell.units :, -cell.units :], p, axes=1
+            ),
+            P,
+        )
 
         # Update dh_dw approximation
         dh_dw = jax.tree.map(rtrl_step, P, comm, df_dw)
@@ -212,7 +233,9 @@ class RFLO(Plasticity):
         df_dh = jax.jacrev(cell.activation)(u)
 
         # Outer product the get Immediate Jacobian
-        M_immediate = jnp.einsum("ij,k", df_dh, jnp.concatenate([pre, jnp.ones(1)]))  # Add one for bias
+        M_immediate = jnp.einsum(
+            "ij,k", df_dh, jnp.concatenate([pre, jnp.ones(1)])
+        )  # Add one for bias
 
         # Update eligibility traces
         P = P + jnp.einsum("i,ijk->ijk", 1 / cell.tau, M_immediate - P)
@@ -241,6 +264,7 @@ class UORO(Plasticity):
         return traces
 
 
+
 class Infomax(Plasticity):
     """Information theoretic plasticity rule that maximizes the mutual information between the input and the output."""
 
@@ -259,6 +283,8 @@ class Infomax(Plasticity):
         @param ctx:
         @return:
         """
+        x = ctx["pre"][:, -1]
+        y = ctx["h_new"][0, -1]
         if self.type == "ax+b":
             if self.activation == "sigm":
                 da = x * (1 - 2 * y) + 1 / (self.a + 1e-8)

@@ -572,7 +572,7 @@ def make_obs_visibility_mask(rng, shape, visible_prob=1.0, first_full=True):
         return mask
 
 
-def combine_ensemble_outputs(outs, method="mean", combine_layer=None, x=None):
+def combine_ensemble_outputs(outs, method="mean", combine_layer=None, x=None, axis=-2):
     """Combine outputs from ensemble modules using the specified method.
 
     Args:
@@ -585,15 +585,15 @@ def combine_ensemble_outputs(outs, method="mean", combine_layer=None, x=None):
     # Combine them using ensemble method
     if method == "mean":
         # Compute mean of outputs
-        combined_dist = jax.tree.map(lambda d: d.mean(axis=0), outs)
+        combined_dist = jax.tree.map(lambda d: d.mean(axis=axis), outs)
     elif method == "median":
         # Compute median of outputs
-        combined_dist = jax.tree.map(lambda d: d.median(axis=0), outs)
+        combined_dist = jax.tree.map(lambda d: d.median(axis=axis), outs)
     elif method == "linear":
         # Compute linear combination of outputs
         out_gates = combine_layer(x)
         out_gates = jax.nn.softmax(out_gates, axis=-1)
-        combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), outs)
+        combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d, axis=axis), outs)
     elif method == "dist":
         combined_dist = UniformMixture(outs)
     elif method == "kalman":
@@ -710,6 +710,7 @@ class RNNEnsemble(nn.RNNCellBase):
                     if self.config.ensemble_method == "linear"
                     else None,
                     x=jnp.concatenate([outs.flatten(), x.flatten()], axis=-1),
+                    axis=0,
                 )
             else:
                 # Do not combine, return all distributions

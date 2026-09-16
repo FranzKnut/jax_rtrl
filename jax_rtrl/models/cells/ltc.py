@@ -36,8 +36,8 @@ def ltc_farsang(params, h, x):
 
     h' = -fi hi + ui eli.
 
-    fi = Pm+n  \sum gji sigmoid(aji yj + bji) + gli
-    ui = Pm+n  \sum kji sigmoid(aji yj + bji) + gli
+    fi = Pm+n  sum gji sigmoid(aji yj + bji) + gli
+    ui = Pm+n  sum kji sigmoid(aji yj + bji) + gli
     kji = gji eji/eli
     """
     # Concatenate input and hidden state
@@ -102,7 +102,33 @@ class LTCCell(ODECell):
         return 1
 
 
-def rflo_ltc(cell: LTCCell, carry, params, x):
+def infomax(pre, post, a, b, activation="sigm", regularization=1e-3):
+    """Compute the infomax update for the weights.
+
+    Args:
+        pre: pre-synaptic activity
+        post: post-synaptic activity
+        a: gain parameter
+        b: bias parameter
+        activation: activation function
+        regularization: regularization parameter
+    Returns:
+        da: update for gain parameter
+        db: update for bias parameter
+    """
+    if activation == "sigm":
+        da = pre * (1 - 2 * post) + 1 / (a + 1e-8)
+        db = 1 - 2 * post
+    else:
+        da = -2 * pre * post + 1 / (a + 1e-8)
+        db = -2 * post
+    if regularization > 0:
+        da -= regularization * a
+        db -= regularization * b
+    return da, db
+
+
+def rflo_ltc(cell: LTCCell, carry, params, x, use_infomax=True):
     """Compute jacobian trace for RFLO."""
     h, jp, jx = carry
 
@@ -138,6 +164,8 @@ def rflo_ltc(cell: LTCCell, carry, params, x):
     # dh_db = dh_dh[:, None] * jp["b"]
 
     # Infomax
+    if use_infomax:
+        dh_da, dh_db = infomax(y, syn, params["a"], params["b"], activation="sigm")
     # dh_db = 1 - 2 * syn
     # dh_da = 1 / params["a"] + y * dh_db
 
@@ -174,7 +202,13 @@ class OnlineLTCCell(OnlineODECell, LTCCell):
                 traces = snap0(self, carry, _p["params"], x, ode=_ode_fn)
 
         elif self.plasticity == "rflo":
-            traces = rflo_ltc(self, carry, _p["params"], x)
+            traces = rflo_ltc(
+                self,
+                carry,
+                _p["params"],
+                x,
+                use_infomax=self.non_rtrl_params is not None,
+            )
         else:
             raise ValueError(f"Plasticity mode {self.plasticity} not recognized.")
         return traces

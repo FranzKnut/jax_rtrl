@@ -30,20 +30,29 @@ class TrainingConfig:
     # dataset: str = "legacy_rollouts"
     dataset: str = "sine"
     # dataset: str = "spirals"
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
     gradient_clip: float | None = None
     num_steps: int = 10000
 
     rnn_config: RNNEnsembleConfig = field(
         default_factory=lambda: RNNEnsembleConfig(
+            ## CT-RNN
             model_name="rflo",
+            # model_name="eprop",
             # model_name="snap0",
             # model_name="rtrl",
+            ## LRC
+            # model_name="lrc_rflo",
             # model_name="lrc_snap0",
-            # model_name="ltc_rtrl",
             # model_name="lrc_rtrl",
+            ## LTC
             # model_name="ltc_rflo",
-            _layers=(32,),
+            # model_name="ltc_rflo_infomax",
+            # model_name="ltc_snap0",
+            # model_name="ltc_rtrl",
+            ## LRU
+            # model_name="lru_rtrl",
+            _layers=(16,),
             num_modules=1,
             num_blocks=1,
             layer_config=SequenceLayerConfig(
@@ -161,8 +170,8 @@ def main(cfg: TrainingConfig, plot: bool = True):
             plt.savefig("plots/sinewave.png")
             plt.show()
         else:
-            plt.plot(y_test[:, 0, ..., 0], label="target")
-            plt.plot(y_hat[:, 0, ..., 0], label="trained")
+            plt.plot(y_test[0, :100, 0], label="target")
+            plt.plot(y_hat[0, :100, 0], label="trained")
             plt.legend()
             os.makedirs("plots/supervised", exist_ok=True)
             plt.savefig(

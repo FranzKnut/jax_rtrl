@@ -229,11 +229,12 @@ def sine(length=100, offset=2, num_periods=3):
 # Gym Simulations ---------------------------------------------------------------
 
 
-def legacy_rollouts(data_folder="data/spring/halfcheetah", with_time=False):
+def legacy_rollouts(data_folder="data/brax/spring/ant", with_time=False):
     """Load a dataset from the BulletEnv simulator."""
     outputs, _ = load_np_files_from_folder(data_folder, is_npz=True, stack=False)
-    obs = outputs["obs"]
-    return obs, obs
+    obs = outputs["obs"][..., :4]  # Only take the first 4 obs dimensions
+    act = outputs["act"][..., :1]  # Only take the first 1 act dimensions
+    return obs, act
 
 
 def rollouts(data_folder="data/cheetah", with_time=False):
