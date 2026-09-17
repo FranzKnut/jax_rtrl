@@ -35,7 +35,7 @@ This library provides biologically-plausible, online-capable gradient rules for 
 |---|---|---|
 | `CTRNNCell` / `OnlineCTRNNCell` | `rflo`, `rtrl`, `eprop`, `snap0`, `bptt` | Continuous-Time RNN |
 | `LTCCell` / `OnlineLTCCell` | `ltc_rtrl`, `ltc_rflo`, `ltc_snap0` | Liquid Time-Constant network |
-| `LRCCell` / `OnlineLRCCell` | `lrc_rtrl`, `lrc_snap0` | Linear Recurrent Cell |
+| `LRCCell` / `OnlineLRCCell` | `lrc_rtrl`, `lrc_snap0` | Liquid Resistance Liquid Capacitance Recurrent Cell |
 | `OnlineLRULayer` | `lru_rtrl` | Linear Recurrent Unit with online learning |
 | `StackedEncoderModel` | `s5_rtrl`, `s5` | S5 state-space model |
 

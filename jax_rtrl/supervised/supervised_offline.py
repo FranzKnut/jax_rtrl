@@ -80,7 +80,7 @@ def main(cfg: TrainingConfig, plot: bool = True):
 
     def loss(p, __x, __y):
         # MSE loss
-        _, y_hat = scan_rnn(model, p, __x, batched=True)
+        _, y_hat = scan_rnn(model, p, __x, batched=True, training=True, rngs={"dropout": key_train})
         if cfg.rnn_config.ensemble_method is not None:
             y_hat = y_hat[0]
         return mse_loss(y_hat.mode().reshape(__y.shape), __y)

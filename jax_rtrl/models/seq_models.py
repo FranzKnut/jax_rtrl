@@ -593,7 +593,7 @@ def combine_ensemble_outputs(outs, method="mean", combine_layer=None, x=None, ax
         # Compute linear combination of outputs
         out_gates = combine_layer(x)
         out_gates = jax.nn.softmax(out_gates, axis=-1)
-        combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d, axis=axis), outs)
+        combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), outs)
     elif method == "dist":
         combined_dist = UniformMixture(outs)
     elif method == "kalman":
@@ -927,6 +927,7 @@ def scan_rnn(
     init_carry: jnp.ndarray = None,
     batched: bool = False,
     training: bool = True,
+    rngs: dict | None = None,
 ):
     """Scan RNN over time dimension. Makes sure to use parallel scan if possible.
 
@@ -938,18 +939,19 @@ def scan_rnn(
         init_carry: Initial carry (hidden state) of the model.
         batched: Whether the input is batched (batch, time, features).
         training: Whether the model is in training mode (affects dropout behavior).
+        rngs: PRNG keys per collection, e.g. ``{"dropout": key}``. Required when
+            training a model with dropout. Sequential scans split each key over
+            the time dimension so that every step draws its own mask.
     Returns:
         outputs: Final carry (hidden state) of the model.
         y_hats: Output sequences of the model.
     """
     extra_args = xs[1:] if len(xs) > 1 else ()
     xs = xs[:1]
-    # training_kwargs = {}
+    # Kwargs are not supported by flax's vmap, so training goes in positionally,
+    # right after the input, matching RNNEnsemble and PolicyRNN.
     training_arg = ()
-    if isinstance(model, RNNEnsemble):
-        # Passed as a kwarg (not positional) so vmap over the batched model
-        # doesn't try to map the batch axis over this scalar flag.
-        # training_kwargs = {"training": training}
+    if isinstance(getattr(model, "config", None), RNNEnsembleConfig):
         training_arg = (training,)
     else:
         print("WARNING: model is not an RNNEnsemble, training flag is ignored.")
@@ -965,7 +967,7 @@ def scan_rnn(
         isinstance(getattr(model, "config", None), RNNEnsembleConfig)
         and model.config.model_name in ["s5", "lru", "attention", "causal_attention"]
     ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell, AttentionCell)):
-        return model.apply(params, init_carry, *xs, *extra_args, *training_arg)
+        return model.apply(params, init_carry, *xs, *training_arg, *extra_args, rngs=rngs)
 
     else:
         if init_carry is None:
@@ -977,12 +979,22 @@ def scan_rnn(
                 method=model.initialize_carry,
             )
 
+        num_steps = obs_time_major[0].shape[0]
+        step_rngs = {
+            name: jrandom.split(key, num_steps) for name, key in (rngs or {}).items()
+        }
+
         def _step(_c, _b):
             p, h = _c
-            h, y_hat = model.apply(p, h, *_b, *extra_args, *training_arg)
+            _x, _keys = _b
+            h, y_hat = model.apply(
+                p, h, *_x, *training_arg, *extra_args, rngs=_keys or None
+            )
             return (p, h), y_hat
 
-        outputs, y_hats = jax.lax.scan(_step, (params, init_carry), obs_time_major)
+        outputs, y_hats = jax.lax.scan(
+            _step, (params, init_carry), (obs_time_major, step_rngs)
+        )
     if batched:
         y_hats = jax.tree.map(
             lambda x: x.transpose(1, 0, *range(2, len(x.shape))), y_hats

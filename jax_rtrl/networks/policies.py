@@ -123,12 +123,15 @@ class PolicyRNN(nn.RNNCellBase, Policy):
         self,
         carry: jax.Array | None = None,
         x: jax.Array = None,
-        img: jax.Array = None,
         training: bool = False,
+        img: jax.Array = None,
         *args,
         **kwargs,
     ):  # type: ignore
-        """Compute Action from observation."""
+        """Compute Action from observation.
+
+        Argument order matches RNNEnsemble.__call__ so that both can be scanned by the same helpers.
+        """
         if self.config.use_cnn:
             if img is None:
                 img = x
@@ -287,9 +290,11 @@ def download_policy(ckpt_path: str, a_dim: int, **inputs):
         **inputs,
     )
     print("Successfully restored policy from checkpoint:", ckpt_path)
+    pprint_params(policy.variables)
+
     if isinstance(policy, tuple):
         autoencoder, policy = policy
-        print("Also restored autoencoder.")
+        print("Also restored autoencoder:")
         pprint_params(autoencoder.variables)
-    pprint_params(policy.variables)
+        return autoencoder, policy
     return policy
