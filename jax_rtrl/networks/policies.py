@@ -290,11 +290,15 @@ def download_policy(ckpt_path: str, a_dim: int, **inputs):
         **inputs,
     )
     print("Successfully restored policy from checkpoint:", ckpt_path)
-    pprint_params(policy.variables)
 
     if isinstance(policy, tuple):
         autoencoder, policy = policy
         print("Also restored autoencoder:")
+        print("Autoencoder parameters:")
         pprint_params(autoencoder.variables)
         return autoencoder, policy
+    
+    print("Policy parameters:")
+    pprint_params(policy.variables)
+    
     return policy
