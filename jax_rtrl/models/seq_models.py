@@ -23,6 +23,11 @@ from jax_rtrl.models.s5 import S5SSM, S5Config
 from jax_rtrl.util.jax_util import kalman_fusion, get_normalization_fn
 from jax_rtrl.models.feedforward import MLP, DistributionLayer, FADense
 
+# Models whose submodules take a trailing reset flag. RNNEnsemble reserves an
+# extra argument slot for these; passing a reset to any other model raises a
+# tuple arity mismatch, since the cells have no such parameter.
+RESET_ARG_MODELS = ("lru",)
+
 
 @dataclass(frozen=True)
 class SequenceLayerConfig:
@@ -623,7 +628,7 @@ class RNNEnsemble(nn.RNNCellBase):
         """Initialize submodules."""
         if self.config.model_name in CELL_TYPES:
             in_axes = (0, 0, None)
-            if self.config.model_name in ["lru"]:
+            if self.config.model_name in RESET_ARG_MODELS:
                 in_axes += (None,)
             self.ensembles = make_batched_model(
                 FAMultiLayerRNN,
@@ -766,7 +771,7 @@ class RNNEnsemble(nn.RNNCellBase):
 
         if self.config.model_name in CELL_TYPES:
             # call rnn submodules
-            if self.config.model_name in ["lru"] and len(call_args) == 0:
+            if self.config.model_name in RESET_ARG_MODELS and len(call_args) == 0:
                 # Add reset argument for SSMs
                 # The ensembles always need the same number of arguments.
                 # If no reset flag is given, we set it to False by default.
