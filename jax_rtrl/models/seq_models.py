@@ -100,8 +100,12 @@ class RNNEnsembleConfig(FrozenSerializable):
         ),
     )
     out_mapping: Literal["dense", "affine"] = "dense"
-    dist_loc_bounds: tuple[float, float] | None = None
-    dist_scale_bounds: float | tuple[float, float] | None = 0
+    dist_loc_bounds: (
+        float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
+    ) = None
+    dist_scale_bounds: (
+        float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
+    ) = 0
     dist_eps: float = 0.01  # Unimix epsilon for Categorical/Bernoulli
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
@@ -972,7 +976,9 @@ def scan_rnn(
         isinstance(getattr(model, "config", None), RNNEnsembleConfig)
         and model.config.model_name in ["s5", "lru", "attention", "causal_attention"]
     ) or isinstance(model, (S5SSM, OnlineLRUCell, LRUCell, AttentionCell)):
-        return model.apply(params, init_carry, *xs, *training_arg, *extra_args, rngs=rngs)
+        return model.apply(
+            params, init_carry, *xs, *training_arg, *extra_args, rngs=rngs
+        )
 
     else:
         if init_carry is None:

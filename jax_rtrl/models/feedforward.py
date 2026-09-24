@@ -296,8 +296,12 @@ class DistributionLayer(nn.Module):
     layers: tuple[int, ...] = ()
     mapping: Literal["dense", "affine"] = "dense"
     eps_unimix: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
-    loc_bounds: float | tuple[float, float] | None = None  # Needs to be
-    scale_bounds: float | tuple[float, float] | None = 0
+    loc_bounds: (
+        float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
+    ) = None  # A float or tuple of (min, max) bounds for the location parameter of the distribution, either a global bound or a tuple of bounds for each output dimension. If None, no bounds are applied.
+    scale_bounds: (
+        float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
+    ) = 0  # A float or tuple of (min, max) bounds for the scale parameter of the distribution similar to loc_bounds. If None, no bounds are applied.
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
@@ -313,7 +317,7 @@ class DistributionLayer(nn.Module):
                 kernel_init=self.kernel_init,
                 norm=self.norm,
             )(x, training=training)
-            
+
         if isinstance(self.distribution, Callable):
             dist = self.distribution(x)
             return dist
@@ -402,7 +406,12 @@ class DistributionLayer(nn.Module):
             #     # sigmoid_transform = distrax.Sigmoid()
             #     # bij = distrax.Chain([scaling_transform, sigmoid_transform])
 
-            if self.distribution.startswith("Scaled"):
+            if not self.distribution.startswith("Scaled"):
+                if self.loc_bounds is not None:
+                    print(
+                        f"Warning: loc_bounds is set for {self.distribution} distribution, but the distribution is not a Scaled distribution so they are ignored."
+                    )
+            else:
                 if self.loc_bounds is not None:
                     bounds = jnp.array(self.loc_bounds)
                     if bounds.ndim < 2:
@@ -413,14 +422,18 @@ class DistributionLayer(nn.Module):
                     )
                     # Adjust bounds for symmetric Tanh
                     min_val = 0
-                    assert (
-                        isinstance(self.loc_bounds, Number)
-                        or self.loc_bounds[0] == -self.loc_bounds[1]
-                    ), (
-                        "For Scaled distribution with asymmetric bounds, please use ScaledNormal with a Sigmoid transform."
-                    )
-                    shift = jnp.zeros(loc.shape[-1:])
-                    factor = bounds if isinstance(self.loc_bounds, Number) else bounds[1]
+                    if isinstance(self.loc_bounds, Number) or all(
+                        np.array(self.loc_bounds[0]) == -np.array(self.loc_bounds[1])
+                    ):
+                        # Symmetric bounds don't need a shift
+                        shift = jnp.zeros(loc.shape[-1:])
+                        factor = (
+                            bounds if isinstance(self.loc_bounds, Number) else bounds[1]
+                        )
+                    else:
+                        # Asymmetric bounds need a shift and scale
+                        shift = (bounds[0] + bounds[1]) / 2  # Shift to center the distribution
+                        factor = (bounds[1] - bounds[0]) / 2
                 else:
                     # Define limits and scale for bounded distributions
                     if self.loc_bounds is not None:
