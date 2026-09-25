@@ -417,6 +417,7 @@ class DistributionLayer(nn.Module):
                     if bounds.ndim < 2:
                         bounds = jnp.tile(bounds, (self.out_size, 1)).T
                 if dist_name == "NormalTanh":
+                    # TODO: move this to a separate ScaledNormalTanh class that inherits from NormalTanh in order to implement variance()
                     assert self.loc_bounds is not None, (
                         "loc_bounds must be defined for Scaled NormalTanh distribution"
                     )
