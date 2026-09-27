@@ -159,6 +159,8 @@ def checkpointing(
         else:
             restored_params, restored_hparams = restore_params_and_config(path, tree)
             print("Restored checkpoint")
+            if isinstance(hparams, Serializable):
+                hparams = hparams.to_dict()
             diffs = config_diff(restored_hparams, hparams) if hparams else {}
             if diffs:
                 print("Config differences between restored and current:")

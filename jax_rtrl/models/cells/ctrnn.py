@@ -248,7 +248,7 @@ def rflo_tau_softplus(cell: CTRNNCell, carry, params, x):
     # immediate jacobian (this step)
     v = jnp.concatenate([x, h, jnp.ones(x.shape[:-1] + (1,))], axis=-1)
     u = v @ W.T
-    print("u shape:", u.shape)
+    # print("u shape:", u.shape)
     # df_dh = jax.jacfwd(jax.nn.tanh)(u)
     # df_dh = jax.jacrev(jax.nn.tanh)(u)
     phi_prime = 1 - jnp.tanh(u) ** 2
