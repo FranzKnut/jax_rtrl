@@ -50,36 +50,65 @@ def random(output_size: int, input_size: int, key=None, sparsity=0.5, **_):
 
 
 def ncp(
-    num_units: int, input_size: int, output_neurons: int = None, key=None, sparsity=0.3
+    num_units: int,
+    input_size: int,
+    output_neurons: int = None,
+    key=None,
+    sparsity=0.3,
+    has_bias=True,
+    **_,
 ):
-    """Neural Circuit Policies (NCP) wiring."""
+    """
+    Neural Circuit Policies (NCP) wiring.
+
+    Hidden units are ordered as output neurons first, interneurons last.
+    Inputs only reach interneurons, and every unit receives only from
+    interneurons.
+
+    Parameters
+    ----------
+    num_units : int
+        Number of hidden units.
+    input_size : int
+        Number of mask columns, laid out as ``[x, h, bias]``.
+    output_neurons : int, optional
+        Number of output neurons. Defaults to ``num_units // 2``.
+    key : PRNGKey, optional
+        Random key for sampling connections.
+    sparsity : float
+        Probability of dropping an allowed connection.
+    has_bias : bool
+        Whether the last column is a bias column.
+
+    Returns
+    -------
+    mask : ndarray
+        Mask of shape ``(num_units, input_size)``.
+    """
     if output_neurons is None:
         output_neurons = num_units // 2
-    assert num_units >= output_neurons, (
-        f"num_units ({num_units}) must be greater equal interneurons ({output_neurons})"
+    assert 0 <= output_neurons < num_units, (
+        f"output_neurons ({output_neurons}) must be in [0, num_units={num_units})"
     )
+    if has_bias:
+        input_size -= 1
+    n_inputs = input_size - num_units
     interneurons = num_units - output_neurons
     if key is None:
         key = jrandom.PRNGKey(0)
-    mask = jnp.zeros((num_units, input_size))
-    # interneurons receive from inputs and interneurons
-    mask = mask.at[-interneurons:, :-output_neurons].set(
-        jrandom.bernoulli(
-            key, 1 - sparsity, shape=(interneurons, input_size - output_neurons)
-        )
-    )
-    # all neurons do receive from interneurons
-    mask = mask.at[:, -interneurons:].set(
-        jrandom.bernoulli(key, 1 - sparsity, shape=(num_units, interneurons))
-    )
+    key_in, key_rec = jrandom.split(key)
 
-    # state_strings = [f'o{j}' for j in range(output_neurons)]
-    # state_strings += [f'r{j}' for j in range(num_units - interneurons - output_neurons)]
-    # state_strings += [f'h{j}' for j in range(interneurons)]
-    # inputs_strings = [f'i{j}' for j in range(input_size)] + state_strings
-    # print('    ' + ' '.join(inputs_strings))
-    # for j, line in enumerate(mask):
-    #     print(state_strings[j] + ' ' + str(line))
+    input_mask = jnp.zeros((num_units, n_inputs))
+    input_mask = input_mask.at[output_neurons:].set(
+        jrandom.bernoulli(key_in, 1 - sparsity, shape=(interneurons, n_inputs))
+    )
+    recurrent_mask = jnp.zeros((num_units, num_units))
+    recurrent_mask = recurrent_mask.at[:, output_neurons:].set(
+        jrandom.bernoulli(key_rec, 1 - sparsity, shape=(num_units, interneurons))
+    )
+    mask = jnp.concatenate([input_mask, recurrent_mask], axis=1)
+    if has_bias:
+        mask = jnp.concatenate([mask, jnp.ones((num_units, 1))], axis=1)
     return mask
 
 
