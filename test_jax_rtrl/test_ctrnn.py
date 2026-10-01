@@ -1,7 +1,7 @@
 import unittest
 
 import jax
-from jax_rtrl.models.cells.ctrnn import OnlineCTRNNCell
+from jax_rtrl.models.cells.ctrnn import CTRNNCell, OnlineCTRNNCell
 from jax_rtrl.models.seq_models import scan_rnn
 from jax_rtrl.util.jax_util import mse_loss
 
@@ -194,6 +194,25 @@ class TestCTRNNDiagGradients(CTRNNGradientsTestBase):
                 ),
                 f"Gradients do not match for key {key}",
             )
+
+
+class TestCTRNNWiring(unittest.TestCase):
+    def test_ncp_wiring_init(self):
+        """Regression: ncp init crashed, and its mask ignored the [x, h, bias] layout."""
+        n_out, n_in = 2, 3
+        cell = CTRNNCell(
+            num_units=8, wiring="ncp", wiring_kwargs={"output_neurons": n_out}
+        )
+        x = jax.numpy.ones(n_in)
+        params = cell.init(jax.random.PRNGKey(0), jax.numpy.ones(8), x)
+        mask = params["wiring"]["mask"]
+        self.assertEqual(mask.shape, params["params"]["W"].shape)
+        # Outputs get no input, nobody listens to outputs, bias always on.
+        self.assertFalse(mask[:n_out, :n_in].any())
+        self.assertFalse(mask[:, n_in : n_in + n_out].any())
+        self.assertTrue(mask[:, -1].all())
+        _, out = cell.apply(params, jax.numpy.ones(8), x)
+        self.assertEqual(out.shape, (8,))
 
 
 if __name__ == "__main__":
