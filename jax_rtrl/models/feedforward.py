@@ -1,7 +1,6 @@
 """Neural networks built with flax."""
 
 from dataclasses import field
-from numbers import Number
 from typing import Callable, Literal
 
 import distrax
@@ -11,7 +10,7 @@ import jax.numpy as jnp
 from jax_rtrl.models import distributions
 import numpy as np
 
-from jax_rtrl.util.jax_util import get_normalization_fn, sigmoid_between
+from jax_rtrl.util.jax_util import get_normalization_fn
 
 
 class FADense(nn.Dense):
@@ -289,19 +288,30 @@ def straight_through_wrapper(  # pylint: disable=invalid-name
 
 
 class DistributionLayer(nn.Module):
-    """Parameterized distribution output layer."""
+    """
+    Parameterized distribution output layer.
 
-    out_size: int
-    distribution: str | Callable = "LogStddevNormal"
+    An optional MLP is followed by a linear projection whose outputs
+    parameterize the distribution. String names are resolved with
+    `distributions.get_distribution`; heads deriving from
+    `distributions.DistributionHead` decide how many outputs they need and how
+    to build themselves. A callable `distribution` gets the MLP output
+    directly, and `None` returns the projection itself.
+    """
+
+    out_size: int | tuple[int, ...]
+    distribution: str | Callable | None = "LogStddevNormal"
     layers: tuple[int, ...] = ()
     mapping: Literal["dense", "affine"] = "dense"
-    eps_unimix: float = 0.0  # Unimix epsilon TODO: rename and write doc for Normal
+    eps_unimix: float = 0.0  # Uniform mixing for Categorical/Bernoulli
     loc_bounds: (
         float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
     ) = None  # A float or tuple of (min, max) bounds for the location parameter of the distribution, either a global bound or a tuple of bounds for each output dimension. If None, no bounds are applied.
     scale_bounds: (
         float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
     ) = 0  # A float or tuple of (min, max) bounds for the scale parameter of the distribution similar to loc_bounds. If None, no bounds are applied.
+    num_bins: int = 255  # Only used by TwoHot
+    activation_fn: Callable | None = None  # Also applied after the MLP if set
     f_align: bool = False
     norm: str | None = None  # 'layer' or 'batch'
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
@@ -312,174 +322,50 @@ class DistributionLayer(nn.Module):
         if self.layers:
             x = MLP(
                 layers=self.layers,
-                activation_fn=jax.nn.relu,
+                activation_fn=self.activation_fn or jax.nn.relu,
                 f_align=self.f_align,
                 kernel_init=self.kernel_init,
                 norm=self.norm,
             )(x, training=training)
+            if self.activation_fn is not None:
+                x = self.activation_fn(x)
 
         if isinstance(self.distribution, Callable):
-            dist = self.distribution(x)
-            return dist
+            return self.distribution(x)
 
-        out_size = self.out_size
-        # x = get_normalization_fn(self.norm, training=training)(x)
-
-        # Get the base distribution name
-        dist_name = self.distribution.replace("Scaled", "")
-        # dist_name = dist_name.replace("Tanh", "")
-
-        if dist_name in ["Normal", "LogStddevNormal", "beta", "NormalTanh"]:
-            out_size = 2 * out_size
-        elif self.distribution in ["Categorical", "Bernoulli"] and isinstance(
-            out_size, tuple
-        ):
-            out_size = np.prod(out_size)
-
-        # elif self.act_dist_name == "brax":
-        #         from brax.training.distribution import NormalTanhDistribution
-
-        #         return NormalTanhDistribution(
-        #             event_size=self.a_dim,
-        #             min_std=jnp.exp(self.act_log_bounds),
-        #         ).create_dist(model_out)
+        dist_cls = distributions.get_distribution(self.distribution)
+        cfg = dict(
+            loc_bounds=self.loc_bounds,
+            scale_bounds=self.scale_bounds,
+            eps_unimix=self.eps_unimix,
+            num_bins=self.num_bins,
+        )
+        is_head = dist_cls is not None and issubclass(
+            dist_cls, distributions.DistributionHead
+        )
+        if is_head:
+            num_params = dist_cls.num_params(self.out_size, **cfg)
+        else:
+            num_params = int(np.prod(self.out_size))
 
         if self.mapping == "dense":
-            x = FADense(out_size, f_align=self.f_align, kernel_init=self.kernel_init)(x)
+            x = FADense(num_params, f_align=self.f_align, kernel_init=self.kernel_init)(x)
         elif self.mapping == "affine":
-            assert x.shape[-1] >= out_size, (
-                f"Input dimension {x.shape[-1]} must be greater than or equal to output dimension {out_size} for affine mapping."
+            assert x.shape[-1] >= num_params, (
+                f"Input dimension {x.shape[-1]} must be greater than or equal to output dimension {num_params} for affine mapping."
             )
-            x = FAAffine(out_size, f_align=self.f_align)(x)
+            x = FAAffine(num_params, f_align=self.f_align)(x)
         else:
             raise ValueError(f"Invalid mapping type: {self.mapping}.")
 
-        if self.distribution is None:
+        if dist_cls is None:
             return x
+        if not is_head:
+            return dist_cls(x)
 
-        if self.distribution.startswith("beta"):
-            if self.loc_bounds is not None:
-                # If action limits are defined we sample from [0, 1] and transform the event.
-                act_range = jnp.array(self.loc_bounds[1]) - jnp.array(
-                    self.loc_bounds[0]
-                )
-                act_min = jnp.array(self.loc_bounds[0])
-                scaling_transform = distrax.ScalarAffine(act_min, act_range)
-            alpha = jax.nn.softplus(x[..., : x.shape[-1] // 2])
-            beta = jax.nn.softplus(x[..., x.shape[-1] // 2 :])
-            return distrax.Transformed(distrax.Beta(alpha, beta), scaling_transform)
-
-        if hasattr(distributions, dist_name):
-            _dist = getattr(distributions, dist_name)
-        else:
-            _dist = getattr(distrax, dist_name)
-
-        if dist_name in ["Normal", "LogStddevNormal", "NormalTanh"]:
-            loc, scale = jnp.split(x, 2, axis=-1)
-            if dist_name != "NormalTanh":
-                if isinstance(self.loc_bounds, tuple):
-                    loc = sigmoid_between(loc, *self.loc_bounds)
-                elif isinstance(self.loc_bounds, Number):
-                    loc = jax.nn.tanh(loc) * self.loc_bounds
-
-            if isinstance(self.scale_bounds, tuple):
-                # scale -= 1  # Magic shift to make initial scale closer to 1 for sigmoid
-                scale = sigmoid_between(scale, *self.scale_bounds)
-                # Gaussian function
-                # scale = (
-                #     jnp.exp(-(scale * scale)) * self.scale_bounds[1]
-                #     + self.scale_bounds[0]
-                # )
-            elif isinstance(self.scale_bounds, Number):
-                assert (
-                    "LogStddevNormal" in self.distribution
-                    # or "NormalTanh" in self.distribution
-                ) or self.scale_bounds >= 0, (
-                    "scale_bounds must be non-negative for Normal distributions"
-                )
-                scale = jax.nn.softplus(scale) + self.scale_bounds
-
-            dist = _dist(loc, scale)
-            # if "Tanh" in self.distribution:
-            #     dist = distrax.Transformed(dist, distrax.Tanh())
-            # elif "Sigmoid" in self.distribution:
-            #     # sigmoid_transform = distrax.Sigmoid()
-            #     # bij = distrax.Chain([scaling_transform, sigmoid_transform])
-
-            if not self.distribution.startswith("Scaled"):
-                if self.loc_bounds is not None:
-                    print(
-                        f"Warning: loc_bounds is set for {self.distribution} distribution, but the distribution is not a Scaled distribution so they are ignored."
-                    )
-            else:
-                if self.loc_bounds is not None:
-                    bounds = jnp.array(self.loc_bounds)
-                    if bounds.ndim < 2:
-                        bounds = jnp.tile(bounds, (self.out_size, 1)).T
-                if dist_name == "NormalTanh":
-                    # TODO: move this to a separate ScaledNormalTanh class that inherits from NormalTanh in order to implement variance()
-                    assert self.loc_bounds is not None, (
-                        "loc_bounds must be defined for Scaled NormalTanh distribution"
-                    )
-                    # Adjust bounds for symmetric Tanh
-                    min_val = 0
-                    if isinstance(self.loc_bounds, Number) or all(
-                        np.array(self.loc_bounds[0]) == -np.array(self.loc_bounds[1])
-                    ):
-                        # Symmetric bounds don't need a shift
-                        shift = jnp.zeros(loc.shape[-1:])
-                        factor = (
-                            bounds if isinstance(self.loc_bounds, Number) else bounds[1]
-                        )
-                    else:
-                        # Asymmetric bounds need a shift and scale
-                        shift = (bounds[0] + bounds[1]) / 2  # Shift to center the distribution
-                        factor = (bounds[1] - bounds[0]) / 2
-                else:
-                    # Define limits and scale for bounded distributions
-                    if self.loc_bounds is not None:
-                        min_val, max_val = bounds
-                    else:
-                        min_val = self.param(
-                            "min_val", nn.initializers.constant(-1.0), self.out_size
-                        )
-                        max_val = self.param(
-                            "max_val", nn.initializers.constant(1.0), self.out_size
-                        )
-                    shift = min_val
-                    factor = max_val - min_val
-                # Broadcast to loc's full shape (e.g. including a leading time axis for
-                # models that process a whole sequence in one call, like lru/s5) so that
-                # generic pytree ops downstream (e.g. the ensemble output axis swap for
-                # SSMs in seq_models.py) see consistent shapes across all distribution leaves.
-                shift = jnp.broadcast_to(shift, loc.shape)
-                factor = jnp.broadcast_to(factor, loc.shape)
-                bij = distrax.ScalarAffine(shift, factor)
-                # dist = distrax.Transformed(dist, distrax.Block(bij, 1))
-                dist = distrax.Transformed(dist, bij)
-
-        elif self.distribution in ["Categorical", "Bernoulli"]:
-            if isinstance(self.out_size, tuple):
-                x = x.reshape(self.out_size)
-            if self.eps_unimix > 0:
-                # Unimix: blend with uniform to prevent probability collapse
-                probs = (
-                    jax.nn.sigmoid(x)
-                    if self.distribution == "Bernoulli"
-                    else jax.nn.softmax(x, axis=-1)
-                )
-                s = probs.shape[-1] if self.distribution == "Categorical" else out_size
-                probs = probs * (1 - self.eps_unimix) + self.eps_unimix / s
-                # dist = straight_through_wrapper(_dist)(probs=probs)
-                dist = _dist(probs=probs)
-            else:
-                # Use logits directly so distrax uses log_softmax internally,
-                # which avoids log(softmax(x)) → log(0) = -inf.
-                # Clip to prevent log_softmax(inf, inf) = inf - inf = NaN when
-                # weights explode. A gap of 40 is still functionally deterministic.
-                dist = _dist(logits=jnp.clip(x, -20.0, 20.0))
-
-        else:
-            dist = _dist(x)
-
-        return dist
+        if issubclass(dist_cls, distributions.Scaled) and self.loc_bounds is None:
+            cfg["learned_bounds"] = (
+                self.param("min_val", nn.initializers.constant(-1.0), self.out_size),
+                self.param("max_val", nn.initializers.constant(1.0), self.out_size),
+            )
+        return dist_cls.from_params(x, self.out_size, **cfg)
