@@ -16,6 +16,7 @@ from chex import PRNGKey
 from flax import linen as nn
 
 from jax_rtrl.models.cells import CELL_TYPES
+from jax_rtrl.models.cells.ode import ODECell
 from jax_rtrl.models.distributions import UniformMixture
 from jax_rtrl.models.cells.attention import AttentionCell
 from jax_rtrl.models.cells.lru import LRUCell, OnlineLRUCell
@@ -619,20 +620,29 @@ class RNNEnsemble(nn.RNNCellBase):
         out_size: Size of the output layer (if any).
         loc_bounds: Bounds for the location parameter of the output distribution.
         split_input: Whether to split input among ensemble modules.
-        num_submodule_extra_args: Number of additional arguments for submodules.
     """
 
     config: RNNEnsembleConfig
     out_size: int | None = None
     loc_bounds: tuple[float, float] | None = None
     split_input: bool = False  # Whether to split input among ensemble modules
-    num_submodule_extra_args: int = 0  # set to number of additional args for submodule!
+    irregular_timesteps: bool = False  # Whether to handle irregular timesteps
 
     def setup(self):
         """Initialize submodules."""
         if self.config.model_name in CELL_TYPES:
+            # Set in_axes for vmap over ensemble modules
             in_axes = (0, 0, None)
+            cell_type = CELL_TYPES[self.config.model_name]
             if self.config.model_name in RESET_ARG_MODELS:
+                # Add in_axes for reset argument if model requires it
+                in_axes += (None,)
+            if self.irregular_timesteps:
+                # Add in_axes for dt if irregular_timesteps is True
+                if not issubclass(cell_type, ODECell):
+                    raise ValueError(
+                        f"irregular_timesteps is only supported for ODECell models. model_name: {self.config.model_name}"
+                    )
                 in_axes += (None,)
             self.ensembles = make_batched_model(
                 FAMultiLayerRNN,
@@ -643,7 +653,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 # methods=["initialize_carry"],
             )(
                 self.config.layers,
-                rnn_cls=CELL_TYPES[self.config.model_name],
+                rnn_cls=cell_type,
                 rnn_kwargs=self.config.rnn_kwargs,
                 num_blocks=self.config.num_blocks,
                 fa_type=self.config.fa_type,

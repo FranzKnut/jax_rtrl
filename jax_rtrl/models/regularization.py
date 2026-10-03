@@ -14,7 +14,10 @@ def _maybe_reduce_tree(fun, tree):
     if isinstance(tree, jnp.ndarray):
         return fun(tree)
     else:
-        return jax.tree.reduce(lambda _x, _y: _x + fun(_y), tree, initializer=0)
+        num_leaves = len(jax.tree_util.tree_leaves(tree))
+        return jax.tree.reduce(
+            lambda _x, _y: _x + fun(_y) / num_leaves, tree, initializer=0
+        )
 
 
 def R_SLNI(H, sigma: float | None = None):
@@ -41,13 +44,14 @@ def R_SLNI(H, sigma: float | None = None):
 
         # Dot products between all pairs: H H^T
         x = jnp.abs(x)
-        dot_products = jax.vmap(jax.vmap(jnp.outer))(x, x)  # shape (N, N), entries are h_i * h_j
+        # shape (N, N), entries are h_i * h_j
+        dot_products = jax.vmap(jax.vmap(jnp.outer))(x, x)
 
         # Exclude diagonal terms (i != j)
         mask = 1 - jnp.eye(N)
 
         # Apply mask, weights, and normalize
-        R = (weights * dot_products * mask).sum()
+        R = (weights * dot_products * mask).mean()
         return R
 
     return _maybe_reduce_tree(_f, H)

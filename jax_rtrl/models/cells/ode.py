@@ -15,7 +15,7 @@ class ODECell(nn.RNNCellBase):
     num_units: int
     dt: float = 1.0
     T: float = 1.0
-    solver: Literal["euler"] = "euler"
+    solver: Literal["euler", "odeint"] = "euler"
     wiring: str | None = None
     wiring_kwargs: dict = field(default_factory=dict)
 
@@ -37,16 +37,27 @@ class ODECell(nn.RNNCellBase):
                 int,
             )  # .value
 
-    def solve(self, h, x, return_sequences=False):
+    def solve(self, h, x, T=None, return_sequences=False):
         """Solve ODE over time T with step dt."""
+        if T is None:
+            T = self.T
+        dt = jnp.minimum(self.dt, T)  # Ensure dt does not exceed T
         outs = []
         if self.solver == "euler":
             # Euler integration steps with dt
-            for _step in jnp.arange(0, self.T, self.dt):
+            for _ in jnp.arange(0, T, dt):
                 h_dot = self._f(h, x)
-                h = jax.tree.map(lambda a, b: a + b * self.dt, h, h_dot)
+                h = jax.tree.map(lambda a, b: a + b * dt, h, h_dot)
                 if return_sequences:
                     outs.append(h)
+        elif self.solver == "odeint":
+            # Use jax.experimental.ode.odeint to solve the ODE
+            from jax.experimental.ode import odeint
+
+            def ode_func(h, t, x):
+                return self._f(h, x)
+
+            h = odeint(ode_func, h, jnp.array([0.0, T]), x)[-1]
         else:
             raise ValueError(f"Unknown solver: {self.solver}")
 
@@ -55,15 +66,27 @@ class ODECell(nn.RNNCellBase):
         return h
 
     @nn.compact
-    def __call__(self, h, x, return_sequences=False):  # noqa
-        """Call ODE solver."""
+    def __call__(self, h, x, T=None, return_sequences=False):  # noqa
+        """Call ODE solver.
+
+        Parameters
+        ----------
+        h : jnp.ndarray
+            The hidden state of the RNN cell.
+        x : jnp.ndarray
+            The input to the RNN cell.
+        T : float, optional
+            The total time to integrate over. If None, uses self.T.
+        return_sequences : bool, optional
+            Whether to return the full sequence of hidden states or just the final state.
+        """
         # Initialize hidden state
         if h is None:
             h = self.initialize_carry(self.make_rng(), x.shape)
         # Initialize parameters
         self._make_params(x)
-        # Solve
-        out = self.solve(h, x, return_sequences)
+        # Solve ODE
+        out = self.solve(h, x, T, return_sequences)
         return out, out
 
     @property
@@ -167,7 +190,9 @@ class OnlineODECell(ODECell):
                 if return_sequences:
                     outs.append((carry, h))
         else:
-            raise ValueError(f"Unknown solver: {self.solver}")
+            raise ValueError(
+                f"Plasticity {self.plasticity} not supported for solver {self.solver}."
+            )
 
         if return_sequences:
             return tree_stack(outs)

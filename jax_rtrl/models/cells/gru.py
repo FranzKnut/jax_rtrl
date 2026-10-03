@@ -1,7 +1,6 @@
 from functools import partial
 import jax
 import jax.numpy as jnp
-from jax import random
 from flax import linen as nn
 from flax.core.frozen_dict import unfreeze
 
