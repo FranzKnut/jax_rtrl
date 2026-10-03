@@ -1,4 +1,5 @@
 from dataclasses import field
+from functools import partial
 from typing import Literal
 from chex import PRNGKey
 import flax.linen as nn
@@ -37,15 +38,16 @@ class ODECell(nn.RNNCellBase):
                 int,
             )  # .value
 
+    # @partial(jax.jit, static_argnames=("self", "T", "return_sequences"))
     def solve(self, h, x, T=None, return_sequences=False):
         """Solve ODE over time T with step dt."""
         if T is None:
             T = self.T
-        dt = jnp.minimum(self.dt, T)  # Ensure dt does not exceed T
+        dt = min(self.dt, T)  # Ensure dt does not exceed T
         outs = []
         if self.solver == "euler":
             # Euler integration steps with dt
-            for _ in jnp.arange(0, T, dt):
+            for _ in range(0, int(T / dt)): # FIXME: Can't use traced T here!
                 h_dot = self._f(h, x)
                 h = jax.tree.map(lambda a, b: a + b * dt, h, h_dot)
                 if return_sequences:
@@ -102,7 +104,7 @@ class OnlineODECell(ODECell):
     non_rtrl_params: list[str] = field(default_factory=list)
 
     @nn.compact
-    def __call__(self, carry, x, return_sequences=False):  # noqa
+    def __call__(self, carry, x, T=None, return_sequences=False):  # noqa
         """Call ODE solver."""
         # Initialize hidden state
         if carry is None:
@@ -110,7 +112,7 @@ class OnlineODECell(ODECell):
         # Initialize parameters
         self._make_params(x)
         # Solve ODE
-        return self.solve(carry, x, return_sequences)
+        return self.solve(carry, x, T, return_sequences)
 
     def solve(self, carry, x, return_sequences=False, force_trace_compute=False):
         """Solve ODE over time T with step dt."""
