@@ -13,6 +13,7 @@ from jax_rtrl.networks.autoencoders import (
     ConvEncoder,
     ConvConfig,
 )
+from jax_rtrl.models.consolidation import restore_with_cons_state
 from jax_rtrl.models.feedforward import MLPEnsemble
 from jax_rtrl.models.seq_models import RNNEnsemble, RNNEnsembleConfig
 
@@ -207,52 +208,54 @@ class PolicyRTRL(PolicyRNN):
         }
 
 
+def _from_legacy_dict(config_dict: dict) -> "PolicyConfig":
+    # HACK: support legacy config before layers was renamed to _layers
+    if "layers" in config_dict:
+        config_dict["_layers"] = config_dict.pop("layers")
+    return PolicyConfig.from_dict(config_dict)
+
+
 def restore_policy_from_ckpt(
-    ckpt_path: str, a_dim: int, **inputs
-) -> Policy | tuple[Autoencoder, Policy]:
-    """Restore a policy from a checkpoint.
+    ckpt_path: str, a_dim: int, return_cons_state: bool = False, **inputs
+):
+    """
+    Restore a policy (and its autoencoder/critic, if trained) from a checkpoint.
 
     Parameters
     ----------
     ckpt_path : str
-        Path to the checkpoint file.
+        Path to the checkpoint directory.
     a_dim : int
         Dimension of the action space.
+    return_cons_state : bool
+        Also return the weight consolidation state (None if not saved).
     **inputs : dict
-        Inputs required to initialize the policy module.
+        Inputs required to initialize the policy module (`x` and/or `img`).
 
     Returns
     -------
-    Policy
-        The restored policy module.
+    models : PolicyRNN or tuple
+        Bound modules in training order: `policy`, plus `autoencoder` if
+        `use_autoencoder` and `critic` if `train_critic`. A bare `policy`
+        if it's the only one.
+    cons_state : WeightConsolidationState or None
+        Only returned if `return_cons_state`.
     """
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"Checkpoint path {ckpt_path} does not exist.")
     config_dict = jax_rtrl.util.checkpointing.restore_config(ckpt_path)
-    # Try to unpack nested config and make config object
-    policy_config_dict = config_dict.get("policy_config", config_dict)
+    policy_config = _from_legacy_dict(config_dict.get("policy_config", config_dict))
 
-    # HACK: support legacy config before layers was renamed to _layers
-    if "layers" in policy_config_dict:
-        policy_config_dict["_layers"] = policy_config_dict.pop("layers")
-
-    policy_config = PolicyConfig.from_dict(
-        config_dict.get("policy_config", config_dict)
-    )
+    models, params = [], []
+    autoencoder = None
     with_autoencoder = config_dict.get("use_autoencoder", False)
     if with_autoencoder:
         autoencoder_config = AutoencoderConfig.from_dict(
             config_dict.get("autoencoder_cfg")
         )
-
         policy_config = replace(
             policy_config, latent_size=autoencoder_config.latent_size
         )
-    # if config.model_name == "mlp":
-    #     policy = PolicyMLP(config=config)
-    # else:
-
-    if with_autoencoder:
         autoencoder = Autoencoder(
             inputs["img"].shape, config=autoencoder_config, name="autoencoder"
         )
@@ -260,43 +263,51 @@ def restore_policy_from_ckpt(
         inputs["x"] = jnp.zeros(autoencoder_config.latent_size)
 
     policy = PolicyRNN(a_dim=a_dim, config=policy_config)
-    policy_params = policy.lazy_init(jax.random.PRNGKey(0), **inputs)
+    models.append(policy)
+    params.append(policy.lazy_init(jax.random.PRNGKey(0), **inputs))
 
-    if with_autoencoder:
-        target = (policy_params, autoencoder_params)
+    if autoencoder is not None:
+        models.append(autoencoder)
+        params.append(autoencoder_params)
+
+    if config_dict.get("train_critic", False):
+        critic_config = _from_legacy_dict(config_dict.get("critic_config", {}))
+        critic = PolicyRNN(a_dim=1, config=critic_config)
+        # The critic sees the policy input plus the action taken
+        init_x = inputs.get("x")
+        init_a = jnp.zeros((a_dim,))
+        _init_x = (
+            jnp.concatenate([init_x, init_a], axis=-1) if init_x is not None else init_a
+        )
+        models.append(critic)
+        params.append(
+            critic.lazy_init(
+                jax.random.PRNGKey(0), None, x=_init_x, img=inputs.get("img")
+            )
+        )
+
+    target = tuple(params) if len(params) > 1 else params[0]
+    variables, cons_state = restore_with_cons_state(ckpt_path, target)
+    if len(models) == 1:
+        models = models[0].bind(variables)
     else:
-        target = policy_params
+        models = tuple(m.bind(v) for m, v in zip(models, variables))
 
-    variables = jax_rtrl.util.checkpointing.restore_params(ckpt_path, tree=target)
-
-    if with_autoencoder:
-        policy = policy.bind(variables[0])
-        autoencoder = autoencoder.bind(variables[1])
-        return autoencoder, policy
-    else:
-        policy = policy.bind(variables)
-        return policy
+    if return_cons_state:
+        return models, cons_state
+    return models
 
 
 def download_policy(ckpt_path: str, a_dim: int, **inputs):
     """Download a policy checkpoint from remote storage."""
     ckpt_path = restore_remote(ckpt_path)
 
-    policy = restore_policy_from_ckpt(
+    models = restore_policy_from_ckpt(
         a_dim=a_dim,
         ckpt_path=ckpt_path,
         **inputs,
     )
     print("Successfully restored policy from checkpoint:", ckpt_path)
+    pprint_params(jax.tree.map(lambda m: m.variables, models))
 
-    if isinstance(policy, tuple):
-        autoencoder, policy = policy
-        print("Also restored autoencoder:")
-        print("Autoencoder parameters:")
-        pprint_params(autoencoder.variables)
-        return autoencoder, policy
-    
-    print("Policy parameters:")
-    pprint_params(policy.variables)
-    
-    return policy
+    return models

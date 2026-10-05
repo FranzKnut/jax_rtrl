@@ -73,6 +73,15 @@ def restore_params(path: str, tree: PyTree = None) -> PyTree | None:
     return params
 
 
+def checkpoint_tree_metadata(path: str) -> PyTree | None:
+    """Return the saved tree structure (array metadata as leaves), or None if missing."""
+    orbax_path = os.path.join(os.path.abspath(path), "ckpt")
+    if not os.path.exists(orbax_path):
+        return None
+    item_metadata = checkpoint.StandardCheckpointer().metadata(orbax_path).item_metadata
+    return getattr(item_metadata, "tree", item_metadata)
+
+
 def restore_params_and_config(
     path: str, tree: PyTree = None
 ) -> tuple[PyTree | None, dict]:
@@ -88,7 +97,11 @@ def config_diff(cfg1: dict, cfg2: dict) -> dict:
     for k in cfg1.keys() | cfg2.keys():
         v1 = cfg1.get(k, None)
         v2 = cfg2.get(k, None)
-        if v1 != v2:
+        if isinstance(v1, dict) and isinstance(v2, dict):
+            nested_diff = config_diff(v1, v2)
+            if nested_diff:
+                diff[k] = nested_diff
+        elif v1 != v2:
             diff[k] = (v1, v2)
     return diff
 

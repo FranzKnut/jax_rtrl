@@ -8,6 +8,7 @@ import jax
 
 from jax_rtrl.models.cells import CELL_TYPES, ONLINE_CELL_TYPES  # noqa
 from jax_rtrl.models.feedforward import FADense, FAAffine  # noqa
+from jax_rtrl.models.consolidation import WeightConsolidation, WeightConsolidationConfig  # noqa
 
 from .seq_models import RNNEnsembleConfig, SequenceLayerConfig
 

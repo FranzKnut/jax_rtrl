@@ -13,12 +13,8 @@ from pprint import pprint
 
 
 def pprint_params(params):
-    def mask_leaves(d):
-        if isinstance(d, dict):
-            return {k: mask_leaves(v) for k, v in d.items()}
-        return d.shape  # Replace all non-dict leaves
-
-    pprint(mask_leaves(params))
+    """Pretty-print the shapes of all arrays in a PyTree."""
+    pprint(jax.tree.map(lambda x: getattr(x, "shape", x), params))
 
 
 class JaxRng:

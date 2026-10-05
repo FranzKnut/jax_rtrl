@@ -37,6 +37,7 @@ from typing import Literal
 import jax
 import jax.numpy as jnp
 from flax.struct import dataclass
+from jax_rtrl.util.checkpointing import checkpoint_tree_metadata, restore_params
 from jax_rtrl.util.jax_util import zeros_like_tree
 from jaxtyping import PyTree
 
@@ -144,6 +145,40 @@ def init_weight_consolidation_state(theta):
         reg_strength=zeros_like_tree(theta),
         theta_ref=theta,
     )
+
+
+def restore_with_cons_state(path: str, params_target):
+    """
+    Restore params and, if it was saved alongside, the consolidation state.
+
+    The checkpoint layout is read from its metadata, so this works for both
+    `params` and `(params, cons_state)` checkpoints regardless of the hparams.
+
+    Parameters
+    ----------
+    path : str
+        Checkpoint directory (containing `ckpt/`).
+    params_target : PyTree
+        Params with the same structure as the saved ones.
+
+    Returns
+    -------
+    params : PyTree
+        Restored params.
+    cons_state : WeightConsolidationState or None
+        Restored consolidation state, None if the checkpoint has none.
+    """
+    meta = checkpoint_tree_metadata(path)
+    has_cons_state = (
+        isinstance(meta, (list, tuple))
+        and len(meta) == 2
+        and isinstance(meta[1], dict)
+        and set(meta[1]) == {"omega", "reg_strength", "theta_ref"}
+    )
+    if not has_cons_state:
+        return restore_params(path, tree=params_target), None
+    target = (params_target, init_weight_consolidation_state(params_target))
+    return restore_params(path, tree=target)
 
 
 @partial(jax.jit, static_argnames=("reset_omega",))
