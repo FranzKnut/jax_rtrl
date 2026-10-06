@@ -108,6 +108,7 @@ class RNNEnsembleConfig(FrozenSerializable):
         float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
     ) = 0
     dist_eps: float = 0.01  # Unimix epsilon for Categorical/Bernoulli
+    dist_kwargs: dict = mutable_field(dict, hash=False)  # extra out_dist head config
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
@@ -697,6 +698,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 else self.config.dist_loc_bounds,
                 scale_bounds=self.config.dist_scale_bounds,
                 eps_unimix=self.config.dist_eps,
+                dist_kwargs=dict(self.config.dist_kwargs),
                 norm=self.config.layer_config.norm,
                 name="dists",
             )

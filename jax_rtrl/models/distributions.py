@@ -457,6 +457,222 @@ class TwoHot(DistributionHead):
         return -jnp.sum(self.probs * jax.nn.log_softmax(self.bin_logits, -1), -1)
 
 
+_PAD_LOGIT = -1e9  # padded classes of a shorter categorical axis
+
+
+def _split_columns(num_classes) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Indices of the continuous (0 classes) and categorical columns."""
+    cont = tuple(i for i, k in enumerate(num_classes) if k == 0)
+    cat = tuple(i for i, k in enumerate(num_classes) if k > 0)
+    return cont, cat
+
+
+def encode_mixed_action(value, num_classes, mask=None) -> jax.Array:
+    """
+    Continuous columns followed by one one-hot per categorical column.
+
+    Parameters
+    ----------
+    value : jax.Array, shape (..., len(num_classes))
+        Raw actions; categorical columns hold integer codes (possibly as floats).
+    num_classes : sequence of int
+        Classes per column, 0 for a continuous one.
+    mask : jax.Array, optional
+        Same shape as `value`. A categorical entry that's False encodes as
+        all zeros rather than as level 0.
+
+    Returns
+    -------
+    jax.Array, shape (..., n_cont + sum(num_classes))
+    """
+    cont_idx, cat_idx = _split_columns(num_classes)
+    parts = [value[..., cont_idx]]
+    for i in cat_idx:
+        k = num_classes[i]
+        code = jnp.clip(jnp.round(value[..., i]), 0, k - 1).astype(jnp.int32)
+        one_hot = jax.nn.one_hot(code, k, dtype=value.dtype)
+        if mask is not None:
+            one_hot = one_hot * mask[..., i, None]
+        parts.append(one_hot)
+    return jnp.concatenate(parts, axis=-1)
+
+
+@struct.dataclass
+class MixedCategorical(DistributionHead):
+    """
+    Continuous head over some columns, an independent categorical over each other one.
+
+    Every method returns one value per action column, in the original column
+    order, so masked per-column losses work as with a plain Normal head.
+    Categorical columns hold integer codes (as floats) in raw actions.
+
+    Notes
+    -----
+    `logits` stores per-axis log-probabilities, padded to the widest axis with
+    a large negative value. Methods renormalize with `log_softmax`, so ensemble
+    averaging of the leaves (a geometric mean of the probabilities) stays a
+    valid distribution. `eps_unimix` mixes each axis with a uniform over its
+    own classes, which bounds a single axis's NLL by ``log(K / eps)``.
+    """
+
+    cont: Any  # distribution over the continuous columns
+    logits: jax.Array  # (..., n_cat, max(num_classes))
+    num_classes: tuple[int, ...] = struct.field(pytree_node=False)
+
+    @classmethod
+    def _parse(cls, out_size, num_classes, cont_dist):
+        num_classes = tuple(int(k) for k in num_classes)
+        assert len(num_classes) == int(np.prod(out_size)), (
+            f"num_classes has {len(num_classes)} entries for out_size {out_size}"
+        )
+        cont_idx, cat_idx = _split_columns(num_classes)
+        assert cont_idx and cat_idx, "MixedCategorical needs both column kinds"
+        return num_classes, len(cont_idx), get_distribution(cont_dist)
+
+    @classmethod
+    def num_params(cls, out_size, num_classes=(), cont_dist="Normal", **cfg) -> int:
+        """Continuous head's parameters plus one logit per class."""
+        num_classes, n_cont, cont_cls = cls._parse(out_size, num_classes, cont_dist)
+        return cont_cls.num_params(n_cont, **cfg) + sum(num_classes)
+
+    @classmethod
+    def from_params(
+        cls, x, out_size, num_classes=(), cont_dist="Normal", eps_unimix=0.0, **cfg
+    ):
+        """Split `x` into the continuous head's parameters and per-axis logits."""
+        num_classes, n_cont, cont_cls = cls._parse(out_size, num_classes, cont_dist)
+        n_cont_params = cont_cls.num_params(n_cont, **cfg)
+        cont = cont_cls.from_params(x[..., :n_cont_params], n_cont, **cfg)
+        k_max = max(num_classes)
+        axes, start = [], n_cont_params
+        for k in num_classes:
+            if k == 0:
+                continue
+            logp = jax.nn.log_softmax(x[..., start : start + k], axis=-1)
+            start += k
+            if eps_unimix > 0:
+                logp = jnp.log(jnp.exp(logp) * (1 - eps_unimix) + eps_unimix / k)
+            pad = [(0, 0)] * (logp.ndim - 1) + [(0, k_max - k)]
+            axes.append(jnp.pad(logp, pad, constant_values=_PAD_LOGIT))
+        return cls(cont, jnp.stack(axes, axis=-2), num_classes)
+
+    @property
+    def _cont_idx(self) -> tuple[int, ...]:
+        return _split_columns(self.num_classes)[0]
+
+    @property
+    def _cat_idx(self) -> tuple[int, ...]:
+        return _split_columns(self.num_classes)[1]
+
+    @property
+    def _cat_sizes(self) -> np.ndarray:
+        return np.array([self.num_classes[i] for i in self._cat_idx])
+
+    @property
+    def log_probs(self) -> jax.Array:
+        """Normalized class log-probabilities, (..., n_cat, max(num_classes))."""
+        return jax.nn.log_softmax(self.logits, axis=-1)
+
+    @property
+    def probs(self) -> jax.Array:
+        """Class probabilities, (..., n_cat, max(num_classes))."""
+        return jax.nn.softmax(self.logits, axis=-1)
+
+    def _merge(self, cont_vals, cat_vals) -> jax.Array:
+        dtype = jnp.result_type(cont_vals, jnp.float32)
+        out = jnp.zeros((*cont_vals.shape[:-1], len(self.num_classes)), dtype)
+        out = out.at[..., self._cont_idx].set(cont_vals)
+        return out.at[..., self._cat_idx].set(cat_vals.astype(dtype))
+
+    def _codes(self, value) -> jax.Array:
+        cat = jnp.round(value[..., self._cat_idx])
+        return jnp.clip(cat, 0, self._cat_sizes - 1).astype(jnp.int32)
+
+    def _cat_log_prob(self, codes) -> jax.Array:
+        return jnp.take_along_axis(self.log_probs, codes[..., None], -1)[..., 0]
+
+    def log_prob(self, value: jax.Array) -> jax.Array:
+        """Per-column log-probability; categorical codes are rounded and clipped."""
+        cont_lp = self.cont.log_prob(value[..., self._cont_idx])
+        return self._merge(cont_lp, self._cat_log_prob(self._codes(value)))
+
+    def mode(self) -> jax.Array:
+        """Continuous mode and the most likely code per categorical column."""
+        return self._merge(self.cont.mode(), jnp.argmax(self.logits, -1))
+
+    def mean(self) -> jax.Array:
+        """Continuous mean; categorical columns report their mode, as codes are nominal."""
+        return self._merge(self.cont.mean(), jnp.argmax(self.logits, -1))
+
+    def variance(self) -> jax.Array:
+        """Continuous variance; zero for categorical columns."""
+        cont_var = self.cont.variance()
+        return self._merge(cont_var, jnp.zeros(self.logits.shape[:-1]))
+
+    def stddev(self) -> jax.Array:
+        """Continuous standard deviation; zero for categorical columns."""
+        return jnp.sqrt(self.variance())
+
+    def entropy(self) -> jax.Array:
+        """Per-column entropy."""
+        cat_ent = -jnp.sum(self.probs * self.log_probs, -1)
+        return self._merge(self.cont.entropy(), cat_ent)
+
+    def _sample_codes(self, seed, sample_shape) -> jax.Array:
+        shape = tuple(sample_shape) + self.logits.shape[:-1]
+        return jax.random.categorical(seed, self.logits, axis=-1, shape=shape)
+
+    def sample(self, seed: PRNGKey, sample_shape: tuple[int, ...] = ()) -> jax.Array:
+        """Raw actions: continuous samples and integer codes."""
+        return self.sample_and_log_prob(seed=seed, sample_shape=sample_shape)[0]
+
+    def sample_and_log_prob(self, seed: PRNGKey, sample_shape: tuple[int, ...] = ()):
+        """Raw actions and their per-column log-probabilities."""
+        seed_cont, seed_cat = jax.random.split(seed)
+        cont, cont_lp = self.cont.sample_and_log_prob(
+            seed=seed_cont, sample_shape=sample_shape
+        )
+        codes = self._sample_codes(seed_cat, sample_shape)
+        return self._merge(cont, codes), self._merge(cont_lp, self._cat_log_prob(codes))
+
+    def _encode_one_hots(self, cont, one_hots) -> jax.Array:
+        parts = [cont] + [one_hots[..., j, : self._cat_sizes[j]] for j in range(len(self._cat_idx))]
+        return jnp.concatenate(parts, axis=-1)
+
+    def _straight_through(self, scores) -> jax.Array:
+        soft = jax.nn.softmax(scores, axis=-1)
+        hard = jax.nn.one_hot(jnp.argmax(scores, -1), scores.shape[-1], dtype=soft.dtype)
+        return hard + (soft - jax.lax.stop_gradient(soft))  # exactly `hard` forward
+
+    def rsample_encoded(self, seed: PRNGKey, temperature: float = 1.0):
+        """
+        Reparameterized sample in the `encode_mixed_action` layout.
+
+        Categorical columns use straight-through Gumbel-softmax: exact one-hots
+        forward, the relaxed sample's gradient backward.
+
+        Returns
+        -------
+        encoded : jax.Array, shape (..., n_cont + sum(K))
+        log_prob : jax.Array, shape (..., len(num_classes))
+            Per column, of the hard sample.
+        """
+        seed_cont, seed_cat = jax.random.split(seed)
+        cont, cont_lp = self.cont.sample_and_log_prob(seed=seed_cont)
+        gumbel = jax.random.gumbel(seed_cat, self.logits.shape, self.logits.dtype)
+        one_hots = self._straight_through((self.log_probs + gumbel) / temperature)
+        cat_lp = jnp.sum(jax.lax.stop_gradient(one_hots) * self.log_probs, -1)
+        return self._encode_one_hots(cont, one_hots), self._merge(cont_lp, cat_lp)
+
+    def mode_encoded(self) -> jax.Array:
+        """Mode in the `encode_mixed_action` layout, straight-through on categorical columns."""
+        return self._encode_one_hots(self.cont.mode(), self._straight_through(self.logits))
+
+    def encode(self, value: jax.Array, mask: jax.Array | None = None) -> jax.Array:
+        """Encode raw actions the way `rsample_encoded` lays out its samples."""
+        return encode_mixed_action(value, self.num_classes, mask)
+
+
 _ALIASES = {"beta": ScaledBeta}
 
 

@@ -300,7 +300,11 @@ class OnlineLRULayer(nn.RNNCellBase):
             (self.d_output, hidden_dim),
         )
 
-        D = self.param("D", matrix_init, (self.d_output, x_t.shape[-1]))
+        D = self.param(
+            "D",
+            partial(matrix_init, normalization=jnp.sqrt(hidden_dim)),
+            (self.d_output, x_t.shape[-1]),
+        )
 
         online_lru = OnlineLRUCell(self.d_hidden or self.d_output, self.plasticity)
         if self.plasticity == "bptt" or len(x_t.shape) <= 1:
