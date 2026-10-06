@@ -377,12 +377,10 @@ def two_hot(x: jax.Array, bins: jax.Array) -> jax.Array:
 @struct.dataclass
 class TwoHot(DistributionHead):
     """
-    Categorical over fixed, evenly spaced bins trained with two-hot targets (DreamerV3).
+    Categorical over evenly spaced bins, trained with two-hot targets (DreamerV3).
 
-    Mimics the parts of the `distrax.Normal` interface the world model uses.
-    `logits` keeps the bins flattened into the last axis, so it has the same
-    rank as the `loc` of a Normal head and ensemble reductions act on the
-    module axis as usual. As a head, the bins span `loc_bounds`.
+    Mimics the `distrax.Normal` interface. `logits` keeps the bins flattened
+    into the last axis, so it has the same rank as a Normal head's `loc`.
     """
 
     logits: jax.Array  # (..., event_size * num_bins)
@@ -397,7 +395,20 @@ class TwoHot(DistributionHead):
 
     @classmethod
     def from_params(cls, x, out_size, loc_bounds=None, num_bins=255, **_):
-        """Use `x` as flattened bin logits over `loc_bounds`."""
+        """
+        Use `x` as flattened bin logits over `loc_bounds`.
+
+        Parameters
+        ----------
+        x : jax.Array, shape (..., prod(out_size) * num_bins)
+            Bin logits, bins varying fastest.
+        out_size : int or tuple of int
+            Event shape.
+        loc_bounds : float or (float, float)
+            Range spanned by the bins; a number `b` means `(-b, b)`. Required.
+        num_bins : int
+            Number of bins per event dimension.
+        """
         assert loc_bounds is not None, "TwoHot needs loc_bounds for the bin range"
         low, high = _as_bounds(loc_bounds)
         return cls(x, num_bins, float(low), float(high))
@@ -500,19 +511,15 @@ def encode_mixed_action(value, num_classes, mask=None) -> jax.Array:
 @struct.dataclass
 class MixedCategorical(DistributionHead):
     """
-    Continuous head over some columns, an independent categorical over each other one.
+    Continuous head over some columns, an independent categorical over the rest.
 
-    Every method returns one value per action column, in the original column
-    order, so masked per-column losses work as with a plain Normal head.
-    Categorical columns hold integer codes (as floats) in raw actions.
+    Methods return one value per action column in the original order.
+    Categorical columns hold integer codes (as floats).
 
     Notes
     -----
-    `logits` stores per-axis log-probabilities, padded to the widest axis with
-    a large negative value. Methods renormalize with `log_softmax`, so ensemble
-    averaging of the leaves (a geometric mean of the probabilities) stays a
-    valid distribution. `eps_unimix` mixes each axis with a uniform over its
-    own classes, which bounds a single axis's NLL by ``log(K / eps)``.
+    `logits` holds per-axis log-probabilities padded with a large negative
+    value. Methods renormalize, so ensemble-averaged logits stay valid.
     """
 
     cont: Any  # distribution over the continuous columns
@@ -539,7 +546,26 @@ class MixedCategorical(DistributionHead):
     def from_params(
         cls, x, out_size, num_classes=(), cont_dist="Normal", eps_unimix=0.0, **cfg
     ):
-        """Split `x` into the continuous head's parameters and per-axis logits."""
+        """
+        Split `x` into the continuous head's parameters and per-axis logits.
+
+        Parameters
+        ----------
+        x : jax.Array, shape (..., num_params)
+            Continuous head's parameters, then one logit per class of each
+            categorical column in column order.
+        out_size : int or tuple of int
+            Event shape; must have `len(num_classes)` elements.
+        num_classes : sequence of int
+            Classes per column, 0 for a continuous one. Needs both kinds.
+        cont_dist : str
+            Name of the head for the continuous columns.
+        eps_unimix : float
+            Weight of a uniform mixed into each categorical axis. Bounds an
+            axis's NLL by ``log(K / eps_unimix)`` for `K` classes.
+        **cfg
+            Forwarded to the continuous head.
+        """
         num_classes, n_cont, cont_cls = cls._parse(out_size, num_classes, cont_dist)
         n_cont_params = cont_cls.num_params(n_cont, **cfg)
         cont = cont_cls.from_params(x[..., :n_cont_params], n_cont, **cfg)
