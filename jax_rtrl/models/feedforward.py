@@ -310,7 +310,7 @@ class DistributionLayer(nn.Module):
     scale_bounds: (
         float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
     ) = 0  # A float or tuple of (min, max) bounds for the scale parameter of the distribution similar to loc_bounds. If None, no bounds are applied.
-    num_bins: int = 255  # Only used by TwoHot
+    num_bins: int = 127  # Only used by TwoHot
     dist_kwargs: dict | None = None  # extra head config, e.g. MixedCategorical's
     activation_fn: Callable | None = None  # Also applied after the MLP if set
     f_align: bool = False

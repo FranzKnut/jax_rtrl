@@ -628,6 +628,7 @@ class RNNEnsemble(nn.RNNCellBase):
     loc_bounds: tuple[float, float] | None = None
     split_input: bool = False  # Whether to split input among ensemble modules
     irregular_timesteps: bool = False  # Whether to handle irregular timesteps
+    out_layer_kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
 
     def setup(self):
         """Initialize submodules."""
@@ -699,6 +700,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 scale_bounds=self.config.dist_scale_bounds,
                 eps_unimix=self.config.dist_eps,
                 dist_kwargs=dict(self.config.dist_kwargs),
+                kernel_init=self.out_layer_kernel_init,
                 norm=self.config.layer_config.norm,
                 name="dists",
             )

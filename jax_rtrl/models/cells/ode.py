@@ -1,5 +1,4 @@
 from dataclasses import field
-from functools import partial
 from typing import Literal
 from chex import PRNGKey
 import flax.linen as nn
@@ -17,6 +16,7 @@ class ODECell(nn.RNNCellBase):
     dt: float = 1.0
     T: float = 1.0
     solver: Literal["euler", "odeint"] = "euler"
+    solver_steps: float = 1
     wiring: str | None = None
     wiring_kwargs: dict = field(default_factory=dict)
 
@@ -42,12 +42,13 @@ class ODECell(nn.RNNCellBase):
     def solve(self, h, x, T=None, return_sequences=False):
         """Solve ODE over time T with step dt."""
         if T is None:
-            T = self.T
-        dt = min(self.dt, T)  # Ensure dt does not exceed T
+            dt = self.dt
+        else:
+            dt = T / self.solver_steps
         outs = []
         if self.solver == "euler":
             # Euler integration steps with dt
-            for _ in range(0, int(T / dt)): # FIXME: Can't use traced T here!
+            for _ in range(0, self.solver_steps):
                 h_dot = self._f(h, x)
                 h = jax.tree.map(lambda a, b: a + b * dt, h, h_dot)
                 if return_sequences:
@@ -114,11 +115,19 @@ class OnlineODECell(ODECell):
         # Solve ODE
         return self.solve(carry, x, T, return_sequences)
 
-    def solve(self, carry, x, return_sequences=False, force_trace_compute=False):
+    def solve(
+        self, carry, x, T=None, return_sequences=False, force_trace_compute=False
+    ):
         """Solve ODE over time T with step dt."""
         if self.plasticity == "bptt":
-            out = super().solve(carry, x, return_sequences)
+            out = super().solve(carry, x, T, return_sequences)
             return out, out
+
+        if T is None:
+            dt = self.dt
+        else:
+            dt = T / self.solver_steps
+
         outs = []
         if self.solver == "euler":
 
@@ -126,7 +135,7 @@ class OnlineODECell(ODECell):
             def f(_p, _carry, _x):
                 h = _carry[0]
                 h_dot = self.apply(_p, h, _x, method=self._f)
-                h_next = jax.tree.map(lambda a, b: a + b * self.dt, h, h_dot)
+                h_next = jax.tree.map(lambda a, b: a + b * dt, h, h_dot)
                 if force_trace_compute:
                     traces = self._trace_update(_carry, _p, _x)
                 else:
@@ -137,7 +146,7 @@ class OnlineODECell(ODECell):
                 """Forward pass with tmp for backward pass."""
                 h = _carry[0]
                 out = jax.tree.map(
-                    lambda a, b: a + b * self.dt,
+                    lambda a, b: a + b * dt,
                     h,
                     self.apply(_p, h, _x, method=self._f),
                 )
@@ -186,8 +195,7 @@ class OnlineODECell(ODECell):
 
             # Euler integration steps with dt
             f.defvjp(fwd, bwd)
-            # f_grad = jax.custom_vjp(f, forward_fn=fwd, backward_fn=bwd)
-            for _step in jnp.arange(0, self.T, self.dt):
+            for _ in jnp.arange(0, self.solver_steps):
                 carry, h = f(self.variables, carry, x)
                 if return_sequences:
                     outs.append((carry, h))
