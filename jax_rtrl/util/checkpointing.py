@@ -92,7 +92,14 @@ def restore_params_and_config(
 
 
 def config_diff(cfg1: dict, cfg2: dict) -> dict:
-    """Return a dict of differences between two configs."""
+    """Return a dict of differences between two configs.
+
+    Returns
+    -------
+    dict
+        A flat dict where keys are the differing keys using dot notation for nested keys,
+        Values are tuples of (cfg1_value, cfg2_value).
+    """
     diff = {}
     for k in cfg1.keys() | cfg2.keys():
         v1 = cfg1.get(k, None)
@@ -100,7 +107,8 @@ def config_diff(cfg1: dict, cfg2: dict) -> dict:
         if isinstance(v1, dict) and isinstance(v2, dict):
             nested_diff = config_diff(v1, v2)
             if nested_diff:
-                diff[k] = nested_diff
+                for k2, v2 in nested_diff.items():
+                    diff[f"{k}.{k2}"] = v2
         elif v1 != v2:
             diff[k] = (v1, v2)
     return diff

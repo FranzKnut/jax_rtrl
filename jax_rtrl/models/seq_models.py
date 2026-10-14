@@ -114,7 +114,8 @@ class RNNEnsembleConfig(FrozenSerializable):
     fa_type: str = "bp"
     ensemble_method: Literal["linear", "dist", "mean", "kalman", None] = "mean"
     ensemble_visible_obs_prob: float = 1.0
-    ensemble_first_full_obs: bool = True
+    ensemble_first_full_obs: bool = False
+    ensemble_all_obs_visible: bool = True
     static_rng_seed: int = 0  # Used for ensemble input mask
     layer_config: SequenceLayerConfig = mutable_field(SequenceLayerConfig)
     rnn_kwargs: dict = mutable_field(dict, hash=False)
@@ -563,7 +564,25 @@ def make_rnn(
         return rnn_cls(size, name=name, **kwargs)
 
 
-def make_obs_visibility_mask(rng, shape, visible_prob=1.0, first_full=True):
+def print_obs_visibility_mask(config: RNNEnsembleConfig, ensemble_input_mask):
+    """Pretty print mask for the input observations."""
+    print(ensemble_input_mask)
+    print("Ensemble visible obs prob:", config.ensemble_visible_obs_prob)
+
+    print(
+        "Obs:         "
+        + ", ".join([f"{i:02d}" for i in range(ensemble_input_mask.shape[-1])])
+    )
+    for i in range(config.num_modules):
+        print(
+            f"Module {i}:     "
+            + ",  ".join([f"{m * 1}" for m in ensemble_input_mask[i, 0]])
+        )
+
+
+def make_obs_visibility_mask(
+    rng, shape, visible_prob=1.0, first_full=True, all_obs_visible=False
+):
     """Make a mask for the input observations, with given visible probability.
 
     Args:
@@ -571,8 +590,11 @@ def make_obs_visibility_mask(rng, shape, visible_prob=1.0, first_full=True):
         shape: Shape of the input observations.
         visible_prob: Probability of each observation being visible (not masked).
         first_full: If True, the first module sees the full input.
+        all_obs_visible: If True, makes sure all observations are visible by at least one module.
+
     Returns:
-        A boolean mask of the same shape as the input observations, where True indicates visible and False indicates masked.
+        A boolean mask of the same shape as the input observations,
+        where True indicates visible and False indicates masked.
     """
     if visible_prob >= 1.0:
         return jnp.ones(shape, dtype=bool)
@@ -580,6 +602,13 @@ def make_obs_visibility_mask(rng, shape, visible_prob=1.0, first_full=True):
         mask = jrandom.bernoulli(rng, p=visible_prob, shape=shape)
         if first_full:
             mask = mask.at[0].set(True)
+        if all_obs_visible:
+            random_true_per_obs = jrandom.randint(rng, shape[1:], 0, shape[0])
+            # Pick a random module index for each observation and flip the mask to True
+            # for that module if all modules are False for that observation.
+            mask = mask.at[:, random_true_per_obs].set(
+                mask[:, random_true_per_obs] | (mask.sum(axis=0) == 0)
+            )
         return mask
 
 
@@ -778,6 +807,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 x_tiled.shape,
                 self.config.ensemble_visible_obs_prob,
                 self.config.ensemble_first_full_obs,
+                self.config.ensemble_all_obs_visible,
             )
             x_tiled = x_tiled * ensemble_input_mask
         elif self.config.ensemble_visible_obs_prob < 1.0:
