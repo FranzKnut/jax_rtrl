@@ -87,13 +87,11 @@ class WeightConsolidation(object):
         elif self.config.cons_type is not None:
             raise ValueError(f"Unknown consolidation type: {self.config.cons_type}")
 
-    def episode(
-        self, state, new_theta: jax.Array, balance: float = 0.5
-    ) -> WeightConsolidationState:
+    def episode(self, state, new_theta: jax.Array) -> WeightConsolidationState:
         """Update the reference parameters at the end of an episode."""
         if self.config.cons_type == "si":
             return update_reg_strength(
-                state, new_theta, self.config.decay, balance, reset_omega=True
+                state, new_theta, self.config.decay, reset_omega=True
             )
         else:
             return self.set_theta_ref(state, new_theta)
@@ -186,7 +184,6 @@ def update_reg_strength(
     state: WeightConsolidationState,
     new_theta,
     decay: float = 1.0,
-    balance: float = 0.5,
     reset_omega: bool = True,
     xi: float = 1e-6,
 ):
@@ -196,8 +193,6 @@ def update_reg_strength(
         state: The current consolidation state.
         new_theta: The new parameter value.
         decay: The decay factor for the exponential moving average.
-        balance: The balance factor between accumulated importance and parameter drift.
-            1.0 means only consider new parameter drift, 0.0 means only consider accumulated importance.
         reset_omega: Whether to reset omega (useful for periodic consolidation).
         xi: A small positive value to prevent division by zero.
 
@@ -210,10 +205,7 @@ def update_reg_strength(
         # Online update: balance between accumulated importance (omega) and parameter drift
         param_drift = (t - t_ref) ** 2 + xi
         importance_contribution = omega / param_drift
-        return (
-            decay * reg_st * (1 - balance) * 2
-            + importance_contribution * balance * 2
-        )
+        return decay * reg_st + importance_contribution
 
     new_reg_strength = jax.tree.map(
         _update_reg_strength,
@@ -230,9 +222,7 @@ def update_reg_strength(
 
 
 @jax.jit
-def update_omega(
-    state: WeightConsolidationState, dL_dtheta, dtheta_dt, decay: float = 0.0
-):
+def update_omega(state: WeightConsolidationState, dL_dtheta, dtheta_dt):
     """Update the importance weights (omega) for online continual learning with synaptic intelligence (Zenke, 2017).
 
     Args:
@@ -243,7 +233,7 @@ def update_omega(
 
     # Synaptic Intelligence approximation
     return state.replace(
-        omega=jax.tree.map(lambda o, g, d: o - g * d, state.omega, dL_dtheta, dtheta_dt)
+        omega=jax.tree.map(lambda o, g, d: o + g * d, state.omega, dL_dtheta, dtheta_dt)
     )
 
 

@@ -301,7 +301,7 @@ def load_into_vault(
             if data_transform_fn is not None:
                 _data = data_transform_fn(_data)
             yield _data
-            
+
     batch_size = first_batch[list(first_batch.keys())[0]].shape[0]
 
     return make_vault(

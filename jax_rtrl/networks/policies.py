@@ -275,14 +275,15 @@ def restore_policy_from_ckpt(
         critic = PolicyRNN(a_dim=1, config=critic_config)
         # The critic sees the policy input plus the action taken
         init_x = inputs.get("x")
-        init_a = jnp.zeros((a_dim,))
-        _init_x = (
-            jnp.concatenate([init_x, init_a], axis=-1) if init_x is not None else init_a
-        )
+        if config_dict.get("train_critic") == "Q":
+            init_a = jnp.zeros((a_dim,))
+            init_x = (
+                jnp.concatenate([init_x, init_a], axis=-1) if init_x is not None else init_a
+            )
         models.append(critic)
         params.append(
             critic.lazy_init(
-                jax.random.PRNGKey(0), None, x=_init_x, img=inputs.get("img")
+                jax.random.PRNGKey(0), None, x=init_x, img=inputs.get("img")
             )
         )
 
