@@ -141,7 +141,7 @@ def make_vault(
         return vault, batch_starts
 
 
-def read_vault_data(vault, start_id: int, num_steps: int = 1):
+def read_vault_data(vault: Vault, start_id: int, num_steps: int = 1):
     """Read a chunk of data from the vault.
 
     Parameters
@@ -163,10 +163,12 @@ def read_vault_data(vault, start_id: int, num_steps: int = 1):
     if vault.vault_index == 0:
         print("Vault is empty. Cannot read data.")
         return None
-    start_percent = start_id * 100 / vault.vault_index
-    end_percent = start_percent + num_steps * 100 / vault.vault_index
-    assert start_percent >= 0, "Requested data chunk is negative."
-    assert start_percent < end_percent, "start_percent must be < end_percent."
+    start_id = int(start_id)
+    assert start_id >= 0, "Requested data chunk is negative."
+    assert num_steps > 0, "num_steps must be positive."
+    # Aim at index midpoints so int() truncation in Vault.read is exact
+    start_percent = (start_id + 0.5) * 100 / vault.vault_index
+    end_percent = (start_id + num_steps + 0.5) * 100 / vault.vault_index
 
     # Making sure to do all adjustments of the data in CPU or else we risk out of memory Errors!
     with jax.default_device(jax.devices("cpu")[0]):
@@ -213,13 +215,11 @@ def vault_generator(
             0,
             vault.vault_index - seq_len - eval_size,
         )
-        # HACK: Read a bit too much to avoid too small sequences
-        batch_ids = [max(b - 0.1, 0) for b in batch_ids]
         jit_tree_stack = jax.jit(tree_stack, static_argnames=["concatenate"])
         sample = jit_tree_stack(
             [
                 read_vault_data(vault, start_id=c, num_steps=seq_len).experience
-                for c in batch_ids
+                for c in np.asarray(batch_ids)
             ],
             concatenate=True,
         )
