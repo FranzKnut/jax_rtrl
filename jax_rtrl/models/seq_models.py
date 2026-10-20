@@ -112,7 +112,9 @@ class RNNEnsembleConfig(FrozenSerializable):
     # input_layers: tuple[int, ...] | None = None  # TODO
     output_layers: tuple[int, ...] | None = None
     fa_type: str = "bp"
-    ensemble_method: Literal["linear", "dist", "mean", "kalman", None] = "mean"
+    ensemble_method: Literal["linear", "dist", "mean", "median", "kalman", None] = (
+        "mean"
+    )
     ensemble_visible_obs_prob: float = 1.0
     ensemble_first_full_obs: bool = False
     ensemble_all_obs_visible: bool = True
@@ -628,16 +630,18 @@ def combine_ensemble_outputs(outs, method="mean", combine_layer=None, x=None, ax
         combined_dist = jax.tree.map(lambda d: d.mean(axis=axis), outs)
     elif method == "median":
         # Compute median of outputs
-        combined_dist = jax.tree.map(lambda d: d.median(axis=axis), outs)
+        combined_dist = jax.tree.map(lambda d: jnp.median(d, axis=axis), outs)
     elif method == "linear":
         # Compute linear combination of outputs
         out_gates = combine_layer(x)
         out_gates = jax.nn.softmax(out_gates, axis=-1)
         combined_dist = jax.tree.map(lambda d: jnp.dot(out_gates, d), outs)
     elif method == "dist":
-        combined_dist = UniformMixture(outs)
+        combined_dist = UniformMixture(outs, axis=axis)
     elif method == "kalman":
-        fused_loc, fused_scale = kalman_fusion(outs.loc, outs.scale)
+        fused_loc, fused_scale = kalman_fusion(
+            jnp.moveaxis(outs.loc, axis, 0), jnp.moveaxis(outs.scale, axis, 0)
+        )
         combined_dist = type(outs)(fused_loc, fused_scale)
     return combined_dist
 

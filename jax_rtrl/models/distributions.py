@@ -16,9 +16,9 @@ from jax_rtrl.util.jax_util import sigmoid_between
 class UniformMixture(distrax.MixtureSameFamily):
     """A uniform mixture of distributions."""
 
-    def __init__(self, components):
-        # HACK: Distrax MixtureSameFamily expects batch_dim in the last dimension? so we swap axes here.
-        components = jax.tree.map(lambda d: jax.numpy.swapaxes(d, 0, -1), components)
+    def __init__(self, components, axis=0):
+        # MixtureSameFamily expects the mixture axis last
+        components = jax.tree.map(lambda d: jnp.moveaxis(d, axis, -1), components)
         super().__init__(
             distrax.Categorical(logits=jax.numpy.zeros(components.batch_shape)),
             components,
@@ -26,6 +26,9 @@ class UniformMixture(distrax.MixtureSameFamily):
 
     def mode(self):
         """Return the mode of the mixture distribution."""
+        if isinstance(self.components_distribution, distrax.Bernoulli):
+            # A mixture of Bernoullis is a Bernoulli with the mean probability
+            return (self.mean() > 0.5).astype(self.components_distribution.dtype)
         try:
             return self.mean()
         except NotImplementedError:

@@ -237,12 +237,8 @@ def kalman_fusion(means, stds):
         fusion_std = jnp.sqrt(fusion_variance)
         return fusion_mean, fusion_std
 
-    x_1, std_1 = means[0], stds[0]
-    x_2, std_2 = means[1], stds[1]
-    fusion_u, fusion_std = fusion_kalman(std_1, x_1, std_2, x_2)
-
-    for i in range(1, len(means) - 2):
-        x_2, std_2 = means[i + 1], stds[i + 1]
-        fusion_u, fusion_std = fusion_kalman(fusion_std, fusion_u, std_2, x_2)
+    fusion_u, fusion_std = means[0], stds[0]
+    for i in range(1, len(means)):
+        fusion_u, fusion_std = fusion_kalman(fusion_std, fusion_u, stds[i], means[i])
 
     return fusion_u, fusion_std

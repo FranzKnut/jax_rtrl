@@ -10,20 +10,31 @@ from orbax import checkpoint
 from simple_parsing import Serializable
 
 
+def get_wandb_artifact(artifact_path: str):
+    """Get wandb artifact by id."""
+    import wandb
+
+    if artifact_path.startswith("wandb:"):
+        artifact_path = artifact_path.replace("wandb:", "")
+    if wandb.run:
+        print(f"Linked {artifact_path} to current wandb run.")
+        artifact = wandb.run.use_artifact(artifact_path)
+    else:
+        api = wandb.Api()
+        artifact = api.artifact(artifact_path)
+    return artifact
+
+
 def restore_remote(artifact_id: str, force_download=False) -> str:
     """Try to download wandb artifact if needed. Returns local path.
 
     Also checks if the path exists locally."""
-    import wandb
 
     # Get from wandb
-    path = artifact_id.replace("wandb:", "")
-    if wandb.run:
-        print(f"Linked {path} to current wandb run.")
-        ancestor = wandb.run.use_artifact(path)
-    else:
-        api = wandb.Api()
-        ancestor = api.artifact(path)
+    path = artifact_id
+    if artifact_id.startswith("wandb:"):
+        path = artifact_id.replace("wandb:", "")
+    ancestor = get_wandb_artifact(path)
     restore_path = os.path.join("artifacts/restored", path)
     if not os.path.exists(restore_path) or force_download:
         restore_path = ancestor.download(root=restore_path)

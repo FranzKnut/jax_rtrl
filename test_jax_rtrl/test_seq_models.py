@@ -1,6 +1,7 @@
 """Simple tests for RNNEnsemble features."""
 
 import unittest
+import distrax
 import jax.random as jrandom
 import jax.numpy as jnp
 from jax_rtrl.models.cells import BASE_CELL_TYPES
@@ -8,6 +9,7 @@ from jax_rtrl.models.seq_models import (
     RNNEnsemble,
     RNNEnsembleConfig,
     SequenceLayerConfig,
+    combine_ensemble_outputs,
 )
 
 
@@ -341,6 +343,29 @@ class TestRNNEnsembleMethods(unittest.TestCase):
         # Should return all distributions without combining
         # Output shape should be (num_modules, batch, out_size)
         self.assertEqual(output.loc.shape[0], 2)
+
+
+class TestCombineEnsembleOutputs(unittest.TestCase):
+    """Fusion of member distributions along a member axis."""
+
+    def setUp(self):
+        # Three members, five steps, two features; member axis first
+        loc = jnp.arange(30.0).reshape(3, 5, 2)
+        self.dist = distrax.Normal(loc, jnp.ones_like(loc))
+
+    def test_kalman_fuses_every_member(self):
+        """Regression: kalman fusion silently dropped the last member."""
+        fused = combine_ensemble_outputs(self.dist, "kalman", axis=0)
+        # Equal variances make Kalman fusion the plain mean
+        self.assertTrue(jnp.allclose(fused.loc, self.dist.loc.mean(0)))
+        self.assertTrue(jnp.allclose(fused.scale, 1 / jnp.sqrt(3.0)))
+
+    def test_median_and_dist_reduce_the_member_axis(self):
+        """Regression: median crashed and dist transposed sequence outputs."""
+        median = combine_ensemble_outputs(self.dist, "median", axis=0)
+        self.assertTrue(jnp.allclose(median.loc, self.dist.loc[1]))
+        mixture = combine_ensemble_outputs(self.dist, "dist", axis=0)
+        self.assertTrue(jnp.allclose(mixture.mode(), self.dist.loc.mean(0)))
 
 
 class TestRNNEnsembleInputMasking(unittest.TestCase):
