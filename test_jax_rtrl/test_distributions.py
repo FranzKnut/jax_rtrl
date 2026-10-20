@@ -154,5 +154,17 @@ class TestGetDistribution(unittest.TestCase):
         self.assertEqual(_make(None).shape, (4, OUT_SIZE))
 
 
+class TestQuantile(unittest.TestCase):
+    def test_mixture_quantile_inverts_the_mixture_cdf(self):
+        """Regression guard: plot bands of `dist` ensembles must be true mixture percentiles."""
+        loc = jnp.array([[0.0, 1.0], [4.0, 1.0], [8.0, 1.5]])
+        scale = jnp.array([[1.0, 0.1], [1.0, 0.2], [2.0, 0.1]])
+        mixture = distributions.UniformMixture(distrax.Normal(loc, scale), axis=0)
+        for q in (0.05, 0.5, 0.95):
+            x = distributions.quantile(mixture, q)
+            cdf = distrax.Normal(loc, scale).cdf(x[None]).mean(0)
+            np.testing.assert_allclose(cdf, q, atol=1e-4)
+
+
 if __name__ == "__main__":
     unittest.main()

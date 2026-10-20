@@ -719,3 +719,60 @@ def get_distribution(name: str | None) -> type | None:
     if isinstance(cls, type) and issubclass(cls, distrax.Distribution | DistributionHead):
         return cls
     return getattr(distrax, name)
+
+
+def _cdf(dist, x):
+    """Elementwise CDF of the distribution types `quantile` supports."""
+    if isinstance(dist, distrax.Deterministic):
+        return (x >= dist.loc).astype(jnp.float32)
+    if isinstance(dist, TwoHot):
+        return jnp.sum(dist.probs * (dist.bins <= x[..., None]), -1)
+    return dist.cdf(x)
+
+
+def quantile(dist, q: float, num_bisections: int = 50) -> jax.Array:
+    """
+    Elementwise `q` quantile of `dist`.
+
+    Supports Normal, Deterministic and TwoHot heads, and `UniformMixture`s of
+    Normal or Deterministic members. Quantiles map exactly through monotone
+    transforms such as `symexp`, which is why plots use them for bands.
+
+    Parameters
+    ----------
+    dist : distrax.Distribution
+        Distribution with a scalar event per element.
+    q : float
+        Probability in (0, 1).
+    num_bisections : int
+        Bisection steps for mixtures, which have no closed form quantile.
+
+    Returns
+    -------
+    jax.Array
+        Quantile, shaped like `dist.mean()`.
+    """
+    if isinstance(dist, UniformMixture):
+        members = dist.components_distribution  # mixture axis last
+        member_q = quantile(members, q)
+        # The mixture quantile lies between its members' quantiles
+        lo, hi = member_q.min(-1), member_q.max(-1)
+        for _ in range(num_bisections):
+            mid = (lo + hi) / 2
+            below = _cdf(members, mid[..., None]).mean(-1) < q
+            lo, hi = jnp.where(below, mid, lo), jnp.where(below, hi, mid)
+        return (lo + hi) / 2
+    if isinstance(dist, distrax.Deterministic):
+        return dist.loc
+    if isinstance(dist, distrax.Normal):
+        return dist.loc + dist.scale * jax.scipy.special.ndtri(q)
+    if isinstance(dist, TwoHot):
+        below = jnp.cumsum(dist.probs, -1) < q
+        return dist.bins[jnp.sum(below, -1).clip(max=dist.num_bins - 1)]
+    raise NotImplementedError(f"No quantile for {type(dist).__name__}.")
+
+
+def central_interval(dist, coverage: float = 0.9) -> tuple[jax.Array, jax.Array]:
+    """Lower and upper bound of the central `coverage` interval of `dist`."""
+    tail = (1 - coverage) / 2
+    return quantile(dist, tail), quantile(dist, 1 - tail)
