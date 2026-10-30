@@ -6,7 +6,9 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import jax.random as jrandom
+import numpy as np
 import flax.linen as nn
+from flax import traverse_util
 import jax.random as jrand
 import optax
 from pprint import pprint
@@ -223,6 +225,88 @@ def symmetric_uniform_init(lim, dtype=jnp.float32):
         return jrand.uniform(key, shape, dtype, minval=-lim, maxval=lim)
 
     return init
+
+
+def sparse_layer_densities(n, phi, sparsity):
+    """Allocate a global nonzero budget across layers in proportion to ``phi``.
+
+    Parameters
+    ----------
+    n : list of int
+        Number of weights per layer.
+    phi : list of float
+        Allocation score per layer, ``fan_in + fan_out`` for Dense layers.
+    sparsity : float
+        Target fraction of zero weights over all layers.
+
+    Returns
+    -------
+    densities : list of float
+        Fraction of nonzero weights per layer, capped at 1 with the excess redistributed.
+    """
+    budget = (1 - sparsity) * sum(n)
+    dense = set()
+    eps = 0.0
+    while len(dense) < len(n):
+        eps = (budget - sum(n[i] for i in dense)) / sum(phi[i] for i in range(len(n)) if i not in dense)
+        new = {i for i in range(len(n)) if i not in dense and eps * phi[i] >= n[i]}
+        if not new:
+            break
+        dense |= new
+    return [1.0 if i in dense else min(1.0, eps * phi[i] / n[i]) for i in range(len(n))]
+
+
+def sparse_init(params, sparsity, key, keys=None):
+    """Re-initialize Dense layers sparsely with a layer-aware nonzero budget.
+
+    Parameters
+    ----------
+    params : dict
+        Parameter tree, e.g. ``variables["params"]``.
+    sparsity : float
+        Target fraction of zero weights per network.
+    key : PRNGKey
+        Random key.
+    keys : tuple of str, optional
+        Top-level modules to sparsify, each treated as its own network. Defaults to all.
+
+    Returns
+    -------
+    params : dict
+        Parameters with sparsified kernels and zeroed biases.
+
+    Notes
+    -----
+    SparseInit (Algorithm 8) of Elsayed et al. (2026, arXiv:2410.14606). Per network, the
+    budget ``(1 - s) * sum(n_l)`` is split across layers in proportion to fan_in + fan_out.
+    Kernels are redrawn from ``U[-1/sqrt(m), 1/sqrt(m)]`` with ``m`` the fan-in, then each unit
+    gets ``ceil((1 - d_l) * m)`` inputs zeroed, keeping at least one. Biases are set to zero.
+    Only applied once, so zeroed weights may grow back during training. Only Dense kernels
+    (fan-in on axis -2, leading axes are ensemble members) are touched, recurrent weights
+    of the cells and convolutions are left alone.
+    """
+    flat = traverse_util.flatten_dict(params)
+    layers = [
+        p[:-1]
+        for p in flat
+        if p[-1] == "kernel" and "Dense" in p[-2] and (keys is None or p[0] in keys)
+    ]
+    for net in dict.fromkeys(p[0] for p in layers):
+        net_layers = [p for p in layers if p[0] == net]
+        shapes = [flat[p + ("kernel",)].shape[-2:] for p in net_layers]
+        densities = sparse_layer_densities(
+            [m * o for m, o in shapes], [m + o for m, o in shapes], sparsity
+        )
+        for p, (m, _), d in zip(net_layers, shapes, densities):
+            key, k_w, k_mask = jrandom.split(key, 3)
+            w = flat[p + ("kernel",)]
+            w = jrandom.uniform(k_w, w.shape, w.dtype, -1 / np.sqrt(m), 1 / np.sqrt(m))
+            rank = jnp.argsort(jnp.argsort(jrandom.uniform(k_mask, w.shape), axis=-2), axis=-2)
+            n_zero = min(int(np.ceil((1 - d) * m)), m - 1)
+            flat[p + ("kernel",)] = jnp.where(rank < n_zero, 0.0, w)
+            if p + ("bias",) in flat:
+                flat[p + ("bias",)] = jnp.zeros_like(flat[p + ("bias",)])
+    return traverse_util.unflatten_dict(flat)
 
 
 def kalman_fusion(means, stds):

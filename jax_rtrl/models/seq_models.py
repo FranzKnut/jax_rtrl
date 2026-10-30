@@ -101,6 +101,7 @@ class RNNEnsembleConfig(FrozenSerializable):
         ),
     )
     out_mapping: Literal["dense", "affine"] = "dense"
+    affine_offset: int = 0  # Only used for affine mapping
     dist_loc_bounds: (
         float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
     ) = None
@@ -679,6 +680,9 @@ class RNNEnsemble(nn.RNNCellBase):
                         f"irregular_timesteps is only supported for ODECell models. model_name: {self.config.model_name}"
                     )
                 in_axes += (None,)
+                
+            if self.config.fa_type == "fa" and self.config.model_name == "mlp":
+                self.config.rnn_kwargs["f_align"] = True
             self.ensembles = make_batched_model(
                 FAMultiLayerRNN,
                 split_rngs=True,
@@ -711,6 +715,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 axis_size=self.config.num_modules,
             )(
                 self.config.output_layers,
+                norm=self.config.layer_config.norm,
                 f_align=self.config.fa_type != "bp",
                 name="mlps_out",
             )
@@ -727,6 +732,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 self.out_size,
                 distribution=self.config.out_dist,
                 mapping=self.config.out_mapping,
+                affine_offset=self.config.affine_offset,
                 loc_bounds=self.loc_bounds
                 if self.loc_bounds is not None
                 else self.config.dist_loc_bounds,
@@ -735,6 +741,7 @@ class RNNEnsemble(nn.RNNCellBase):
                 dist_kwargs=dict(self.config.dist_kwargs),
                 kernel_init=self.out_layer_kernel_init,
                 norm=self.config.layer_config.norm,
+                f_align=self.config.fa_type != "bp",
                 name="dists",
             )
 

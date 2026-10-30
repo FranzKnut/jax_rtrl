@@ -114,7 +114,7 @@ class BennaFusi:
         self,
         state: BennaFusiState,
         dw: dict[str, Any],
-        consolidation_factor: dict[str, Any] | None = None,
+        consolidation_factor: dict[str, Any] | float | None = None,
     ) -> BennaFusiState:
         """Update hidden state given weight change.
 
@@ -126,14 +126,14 @@ class BennaFusi:
             state: Current hidden state (output from init_state or previous call).
             dw: Weight update for each parameter.
             dt: Time step.
-            consolidation_factor: Pytree with same prefix as dw of factors for consolidating updates.
-                If provided, dw is scaled by this factor to simulate consolidation effects.
+            consolidation_factor: Float or Pytree with same prefix as dw of factors for consolidating updates.
+                If provided, dw is scaled by this factor for adaptive consolidation.
         Returns:
             Updated state with same structure as input state.
         """
 
         def update_weight_state(
-            vessels, weight_update, initial_weight=None, cons_factor=None
+            vessels, weight_update, initial_weight=None, cons_factor=consolidation_factor
         ):
             # vessels shape: (..., n_vessels)
             # weight_update shape: (...)
@@ -175,7 +175,7 @@ class BennaFusi:
             if self.config.decay_to_initial
             else (zeros_like_tree(dw),)
         )
-        if consolidation_factor is not None:
+        if consolidation_factor is not None and isinstance(consolidation_factor, dict):
             _args += (consolidation_factor,)
 
         return state.replace(

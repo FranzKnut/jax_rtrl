@@ -57,7 +57,10 @@ class FADense(nn.Dense):
 
 
 class FAAffine(nn.Module):
-    """Affine Layer with feedback alignment."""
+    """Affine Layer with optional straight-through gradients.
+
+    FIXME: Fails for batched inputs
+    """
 
     features: int
     f_align: bool = True
@@ -65,8 +68,8 @@ class FAAffine(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        """Make use of randomly initialized Feedback Matrix B when f_align is True."""
-        a = self.param("a", nn.initializers.normal(), (self.features,))
+        """Straight-through gradient approximation when f_align is True."""
+        a = self.param("a", nn.initializers.ones, (self.features,))
         b = self.param("b", nn.initializers.zeros, (self.features,))
 
         def s(x):
@@ -81,12 +84,12 @@ class FAAffine(nn.Module):
 
         # f_bwd :: (c, CT b) -> CT a
         def bwd(res, y_bar):
-            """Backward pass that may use feedback alignment."""
+            """Backward pass that may use straight-through gradients."""
             _x, _a = res
             grads = {"params": {"a": s(_x) * y_bar, "b": y_bar}}
             x_bar = jnp.zeros_like(_x)
             x_bar = x_bar.at[..., self.offset : self.features + self.offset].set(
-                y_bar if not self.f_align else y_bar * _a
+                y_bar if self.f_align else y_bar * _a
             )
             return (grads, x_bar, jnp.zeros_like(a), jnp.zeros_like(b))
 
@@ -142,10 +145,20 @@ class MLPCell(nn.RNNCellBase):
     """Wrapper to use Single-Layer-Perceptron as RNN cell."""
 
     num_units: int
+    activation_fn: Callable = jax.nn.silu
+    f_align: bool = False
+    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
+    norm: str | None = None  # 'layer' or 'batch'
 
     def setup(self):
         """Initialize MLP cell."""
-        self.mlp = MLP(layers=[self.num_units])
+        self.mlp = MLP(
+            layers=[self.num_units],
+            activation_fn=self.activation_fn,
+            f_align=self.f_align,
+            norm=self.norm,
+            kernel_init=self.kernel_init,
+        )
 
     @nn.compact
     def __call__(self, carry, x, training: bool = True):
@@ -303,6 +316,7 @@ class DistributionLayer(nn.Module):
     distribution: str | Callable | None = "LogStddevNormal"
     layers: tuple[int, ...] = ()
     mapping: Literal["dense", "affine"] = "dense"
+    affine_offset: int = 0  # Only used for affine mapping
     eps_unimix: float = 0.0  # Uniform mixing for Categorical/Bernoulli
     loc_bounds: (
         float | tuple[float, float] | tuple[tuple[float, ...], tuple[float, ...]] | None
@@ -351,12 +365,17 @@ class DistributionLayer(nn.Module):
             num_params = int(np.prod(self.out_size))
 
         if self.mapping == "dense":
-            x = FADense(num_params, f_align=self.f_align, kernel_init=self.kernel_init)(x)
+            x = FADense(num_params, f_align=self.f_align, kernel_init=self.kernel_init)(
+                x
+            )
         elif self.mapping == "affine":
             assert x.shape[-1] >= num_params, (
-                f"Input dimension {x.shape[-1]} must be greater than or equal to output dimension {num_params} for affine mapping."
+                f"Input dimension {x.shape[-1]} must be greater than output dimension {num_params} for affine mapping."
             )
-            x = FAAffine(num_params, f_align=self.f_align)(x)
+            assert self.affine_offset + num_params <= x.shape[-1], (
+                f"Affine offset {self.affine_offset} and output dimension {num_params} exceed input dimension {x.shape[-1]}."
+            )
+            x = FAAffine(num_params, f_align=self.f_align, offset=self.affine_offset)(x)
         else:
             raise ValueError(f"Invalid mapping type: {self.mapping}.")
 
