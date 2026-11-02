@@ -68,6 +68,17 @@ class TestRNNEnsembleConfig(unittest.TestCase):
                 out_dist="Categorical",
             )
 
+    def test_model_name_change_drops_auto_ode_type(self):
+        """Rebuilding an lrc config as lru must not pass ode_type to the LRU.
+
+        Regression: a sweep overriding model_name kept ode_type="lrc" in
+        rnn_kwargs, so LRU init raised TypeError and CTRNN left tau undefined.
+        """
+        lrc = RNNEnsembleConfig(model_name="lrc", hidden_size=8)
+        lru = RNNEnsembleConfig.from_dict({**lrc.to_dict(), "model_name": "lru"})
+        self.assertNotIn("ode_type", lru.rnn_kwargs)
+        self.assertEqual(lrc.rnn_kwargs["ode_type"], "lrc")
+
     def test_s5_config_handling(self):
         """Test S5 config handling in rnn_kwargs."""
         self.skipTest("S5 implementation incomplete.")

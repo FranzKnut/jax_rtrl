@@ -147,10 +147,14 @@ class RNNEnsembleConfig(FrozenSerializable):
                 )
 
             # HACK: Set ODE type for given model_name
-            # FIXME: This leads to problems if model_name is changed after initialization
             match = self.model_name and re.search(r"(lrc|ltc|fltc)", self.model_name)
             if match:
                 self.rnn_kwargs["ode_type"] = match.group(1)
+            elif self.rnn_kwargs.get("ode_type") in ("lrc", "ltc", "fltc"):
+                # Stale from a config rebuilt with another model_name
+                kwargs = dict(self.rnn_kwargs)
+                del kwargs["ode_type"]
+                object.__setattr__(self, "rnn_kwargs", kwargs)
 
             # Remove wiring if not compatible
             if self.model_name not in [
