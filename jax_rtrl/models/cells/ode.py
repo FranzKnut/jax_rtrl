@@ -16,7 +16,7 @@ class ODECell(nn.RNNCellBase):
     dt: float = 1.0
     T: float = 1.0
     solver: Literal["euler", "odeint"] = "euler"
-    solver_steps: float = 1
+    solver_steps: int = 1
     wiring: str | None = None
     wiring_kwargs: dict = field(default_factory=dict)
 
@@ -42,6 +42,7 @@ class ODECell(nn.RNNCellBase):
     def solve(self, h, x, T=None, return_sequences=False):
         """Solve ODE over time T with step dt."""
         if T is None:
+            T = self.T
             dt = self.dt
         else:
             dt = T / self.solver_steps
@@ -60,7 +61,16 @@ class ODECell(nn.RNNCellBase):
             def ode_func(h, t, x):
                 return self._f(h, x)
 
-            h = odeint(ode_func, h, jnp.array([0.0, T]), x)[-1]
+            # odeint over a zero-length interval gives NaNs in the forward pass
+            # and in its adjoint, and a jnp.where on the output alone does not
+            # stop the NaN gradient. Integrate over a dummy positive horizon
+            # where T <= 0 and keep h unchanged there.
+            valid = T > 0
+            T_safe = jnp.where(valid, T, 1.0)
+            h_next = odeint(
+                ode_func, h, jnp.array([0.0, T_safe]), x, hmax=self.dt / self.solver_steps
+            )[-1]
+            h = jax.tree.map(lambda a, b: jnp.where(valid, b, a), h, h_next)
         else:
             raise ValueError(f"Unknown solver: {self.solver}")
 
