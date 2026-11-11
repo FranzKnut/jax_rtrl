@@ -51,6 +51,9 @@ def restore_config(path: str) -> dict:
     if os.path.exists(hparams_file_path):
         with open(hparams_file_path) as f:
             restored_hparams = json.load(f)
+        if isinstance(restored_hparams, str):
+            # Recover from twice-serialized json
+            restored_hparams = json.loads(restored_hparams)
     else:
         restored_hparams = {}
     return restored_hparams
